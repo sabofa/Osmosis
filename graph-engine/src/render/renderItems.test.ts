@@ -252,6 +252,126 @@ describe('toRenderItems', () => {
     })
   })
 
+  // The earcut bundled with three (3.0.1) leaves its first vertex out of the box it hashes the vertices into,
+  // so an outer ring that starts at the only vertex to reach an extreme of x or y (its leftmost tip) is
+  // triangulated wrongly once there are more than 80 vertices: ears are accepted that hold another vertex,
+  // and the fill overflows. A ring's start means nothing to the shape, so the renderer starts it elsewhere.
+  describe('a ring that starts at an extreme vertex', () => {
+    const shoelace = (ring: readonly Vec2[]) => {
+      let s = 0
+      for (let i = 0; i < ring.length; i++) {
+        const next = ring[(i + 1) % ring.length]
+        s += ring[i].x * next.y - next.x * ring[i].y
+      }
+      return s / 2
+    }
+    const ringOf = (points: readonly Vec2[]) => chainOf(points, points.map((_, i) => i), true)
+
+    // The tip (0, 0), then down the lower edge, round the bulging right side and back along the upper edge, with
+    // a notch reaching in to x = 2: the tip is the leftmost vertex and comes first, and the ear it makes holds
+    // the notch's vertex. 89 vertices, and a polygon, not a disc, so its area is the shoelace area.
+    function dart(): Vec2[] {
+      const arc = Array.from({ length: 100 }, (_, i) => {
+        const a = -Math.PI / 2 + (Math.PI * i) / 99
+        return { x: 10 + 3 * Math.cos(a), y: 5 * Math.sin(a) }
+      })
+      return [{ x: 0, y: 0 }, ...arc.filter((p) => p.y < -1.2), { x: 10, y: -1 }, { x: 2, y: 0 }, { x: 10, y: 1 }, ...arc.filter((p) => p.y > 1.2)]
+    }
+
+    it('fills a dart with no holes whose leftmost tip comes first, as a region and as a band', () => {
+      const points = dart()
+      expect(points.length).toBeGreaterThan(80)
+      const exact = Math.abs(shoelace(points))
+      const chain = ringOf(points)
+      const band: SceneObject = { kind: 'band', id: id('band.0'), outline: [chain] }
+      for (const object of [region([chain]), band]) {
+        const { signed, absolute } = areas(fillOf(object).triangles)
+        expect(Math.abs(absolute - exact) / exact).toBeLessThan(1e-9)
+        expect(Math.abs(signed - absolute) / absolute).toBeLessThan(1e-12)
+      }
+    })
+
+    it('fills a wobbly disc with several holes, whichever vertex of the outer ring comes first', () => {
+      let seed = 4242
+      const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+      for (let trial = 0; trial < 40; trial++) {
+        const n = 16 + Math.floor(random() * 80)
+        const wobble = 0.15 * random()
+        const outer = Array.from({ length: n }, (_, i) => {
+          const a = (2 * Math.PI * i) / n
+          const r = 10 * (1 + wobble * Math.sin(5 * a + trial))
+          return { x: r * Math.cos(a), y: r * Math.sin(a) }
+        })
+        // 2 to 12 disc holes of 8 to 47 vertices each, inside the outer ring and clear of one another
+        const holes: Vec2[][] = []
+        const discs: { x: number; y: number; r: number }[] = []
+        const wanted = 2 + Math.floor(random() * 11)
+        for (let tries = 0; discs.length < wanted && tries < 500; tries++) {
+          const c = { x: (random() * 2 - 1) * 7, y: (random() * 2 - 1) * 7, r: 0.3 + random() * 2 }
+          if (Math.hypot(c.x, c.y) + c.r > 10 * (1 - wobble) * 0.95) continue
+          if (discs.some((e) => Math.hypot(c.x - e.x, c.y - e.y) < c.r + e.r + 0.05)) continue
+          discs.push(c)
+          const m = 8 + Math.floor(random() * 40)
+          const turn = random() * 2 * Math.PI
+          const hole = Array.from({ length: m }, (_, i) => ({ x: c.x + c.r * Math.cos((2 * Math.PI * i) / m + turn), y: c.y + c.r * Math.sin((2 * Math.PI * i) / m + turn) }))
+          holes.push(random() < 0.5 ? hole : hole.reverse())
+        }
+        const exact = Math.abs(shoelace(outer)) - holes.reduce((sum, h) => sum + Math.abs(shoelace(h)), 0)
+        // from the leftmost vertex, the lowest, the highest and the rightmost, which are what the box is made of
+        const extreme = (better: (a: Vec2, b: Vec2) => boolean) => outer.reduce((best, p, i) => (better(p, outer[best]) ? i : best), 0)
+        const starts = [extreme((a, b) => a.x < b.x), extreme((a, b) => a.y < b.y), extreme((a, b) => a.y > b.y), extreme((a, b) => a.x > b.x)]
+        for (const start of starts) {
+          const ring = [...outer.slice(start), ...outer.slice(0, start)]
+          const { signed, absolute } = areas(fillOf(region([ringOf(ring), ...holes.map(ringOf)])).triangles)
+          expect(Math.abs(absolute - exact) / exact, `trial ${trial}, ${n} vertices, start ${start}`).toBeLessThan(1e-9)
+          expect(Math.abs(signed - absolute) / absolute).toBeLessThan(1e-12)
+        }
+      }
+    })
+
+    it('fills a ring of four or fewer vertices, each the only one to reach an extreme, whichever it starts at', () => {
+      // a diamond and a triangle: every vertex is the sole holder of an extreme of x or y, so there is no start
+      // that is not one (the ring's first edge is split instead); their areas are 2 and 5
+      const diamond = [{ x: 0, y: 1 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: -1, y: 0 }]
+      const triangle = [{ x: 0, y: 0 }, { x: 4, y: 1 }, { x: 2, y: 3 }]
+      for (const [ring, exact] of [[diamond, 2], [triangle, 5]] as const) {
+        for (let start = 0; start < ring.length; start++) {
+          const points = [...ring.slice(start), ...ring.slice(0, start)]
+          const { signed, absolute } = areas(fillOf(region([ringOf(points)])).triangles)
+          expect(absolute).toBeCloseTo(exact, 12)
+          expect(signed).toBeCloseTo(exact, 12)
+        }
+      }
+    })
+  })
+
+  describe('a ring of three vertices round a hole of many', () => {
+    it('fills a triangle with a 132-vertex hole whichever vertex comes first, though each is the only one at an extreme', () => {
+      // over 80 vertices in all, so earcut hashes, and the outer ring has no start away from its extremes
+      const shoelace = (ring: readonly Vec2[]) => ring.reduce((sum, p, i) => sum + (p.x * ring[(i + 1) % ring.length].y - ring[(i + 1) % ring.length].x * p.y), 0) / 2
+      const triangle = [{ x: -10, y: -8 }, { x: 11, y: -6 }, { x: 0, y: 12 }]
+      const hole = Array.from({ length: 132 }, (_, i) => ({ x: 0.3 + 2 * Math.cos((2 * Math.PI * i) / 132), y: -0.7 + 2 * Math.sin((2 * Math.PI * i) / 132) }))
+      const exact = Math.abs(shoelace(triangle)) - Math.abs(shoelace(hole))
+      for (let start = 0; start < 3; start++) {
+        const outer = [...triangle.slice(start), ...triangle.slice(0, start)]
+        const outline = [outer, hole].map((ring) => chainOf(ring, ring.map((_, i) => i), true))
+        const { signed, absolute } = areas(fillOf(region(outline)).triangles)
+        expect(Math.abs(absolute - exact) / exact, `start ${start}`).toBeLessThan(1e-9)
+        expect(Math.abs(signed - absolute) / absolute).toBeLessThan(1e-12)
+      }
+    })
+  })
+
+  describe('a hole that lies on its ring everywhere', () => {
+    it('is a hole of it when every vertex is on the ring, as a diamond on the midpoints of a square\'s edges', () => {
+      const square = chainOf([{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }], [0, 1, 2, 3], true)
+      const diamond = chainOf([{ x: 2, y: 0 }, { x: 4, y: 2 }, { x: 2, y: 4 }, { x: 0, y: 2 }], [0, 1, 2, 3], true)
+      const { signed, absolute } = areas(fillOf(region([square, diamond])).triangles)
+      expect(absolute).toBeCloseTo(8, 12)
+      expect(signed).toBeCloseTo(8, 12)
+    })
+  })
+
   describe('the legacy triangle region', () => {
     it('is still drawn as its triangles, with its colour', () => {
       const triangles = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]

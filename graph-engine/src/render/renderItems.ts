@@ -59,8 +59,11 @@ function locate(ring: Ring, x: number, y: number): -1 | 0 | 1 {
 }
 
 // Whether `outer` holds `inner`. The outline's rings do not cross (an outline is assembled from edges
-// that meet only at vertices), so one vertex of `inner` decides it; a vertex it shares with `outer` says
-// nothing, so the next is tried. A ring cannot hold one that is not smaller than it, nor one outside its box.
+// that meet only at vertices), so one point of `inner` decides it; a point it shares with `outer` says
+// nothing, so the next is tried: each vertex, and if every vertex lies on `outer` (a diamond on the middles
+// of a square's edges), the middle of each edge, which does not. A ring cannot hold one that is not smaller
+// than it, nor one outside its box. Two rings that coincide, or one that lies along the other everywhere,
+// cannot arise: the shared edges of an outline cancel before it is chained into rings.
 function holds(outer: Ring, inner: Ring): boolean {
   if (outer.area <= inner.area) return false
   if (inner.minX < outer.minX || inner.maxX > outer.maxX || inner.minY < outer.minY || inner.maxY > outer.maxY) return false
@@ -68,7 +71,64 @@ function holds(outer: Ring, inner: Ring): boolean {
     const where = locate(outer, p.x, p.y)
     if (where !== 0) return where === 1
   }
+  for (let i = 0; i < inner.points.length; i++) {
+    const a = inner.points[i]
+    const b = inner.points[(i + 1) % inner.points.length]
+    const where = locate(outer, (a.x + b.x) / 2, (a.y + b.y) / 2)
+    if (where !== 0) return where === 1
+  }
   return false
+}
+
+// A ring to start earcut with. The earcut bundled with three (3.0.1) leaves its first vertex out of the box
+// it hashes the ring's vertices into (its bounding-box loop starts at the second), so a ring that starts at a
+// vertex that alone reaches an extreme of x or y puts that vertex outside the box: its hash key is garbage,
+// and the triangulation accepts ears that hold other vertices and overflows the polygon. That only happens
+// past 80 vertices (below, it does not hash), but a start means nothing to the shape, so it is always moved:
+// to the first vertex that is not the only one at an extreme. A ring of four or fewer vertices can have every
+// vertex the only one at some extreme (a diamond, a triangle); it starts at the middle of its first edge.
+function startedAwayFromExtremes(points: readonly Vec2[]): readonly Vec2[] {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const p of points) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  let atMinX = 0
+  let atMaxX = 0
+  let atMinY = 0
+  let atMaxY = 0
+  for (const p of points) {
+    if (p.x === minX) atMinX++
+    if (p.x === maxX) atMaxX++
+    if (p.y === minY) atMinY++
+    if (p.y === maxY) atMaxY++
+  }
+  const only = (p: Vec2) => (p.x === minX && atMinX === 1) || (p.x === maxX && atMaxX === 1) || (p.y === minY && atMinY === 1) || (p.y === maxY && atMaxY === 1)
+  const start = points.findIndex((p) => !only(p))
+  if (start === 0) return points
+  if (start > 0) return [...points.slice(start), ...points.slice(0, start)]
+  const [a, b] = points
+  return [{ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, ...points.slice(1), a]
+}
+
+// A polygon with holes as triangles (groups of three points), by three's triangulation. The outer ring is
+// started away from its extremes (see startedAwayFromExtremes); holes are not, as earcut hashes only the
+// outer ring's box.
+function triangulate(outer: readonly Vec2[], holes: readonly (readonly Vec2[])[]): Vec2[] {
+  const contour = startedAwayFromExtremes(outer).map((p) => new THREE.Vector2(p.x, p.y))
+  const holeContours = holes.map((hole) => hole.map((p) => new THREE.Vector2(p.x, p.y)))
+  const faces = THREE.ShapeUtils.triangulateShape(contour, holeContours)
+  // the faces index the contour followed by each hole, after the call has tidied them
+  const vertices = [...contour]
+  for (const hole of holeContours) for (const v of hole) vertices.push(v)
+  const triangles: Vec2[] = []
+  for (const [a, b, c] of faces) triangles.push({ x: vertices[a].x, y: vertices[a].y }, { x: vertices[b].x, y: vertices[b].y }, { x: vertices[c].x, y: vertices[c].y })
+  return triangles
 }
 
 // For each ring, the rings that hold it, so its depth is how many there are. A region of many separate
@@ -134,14 +194,8 @@ function outlineTriangles(outline: readonly Chain[]): Vec2[] {
   }
   const triangles: Vec2[] = []
   for (const [outerIndex, holeIndices] of holesOf) {
-    const contour = rings[outerIndex].points.map((p) => new THREE.Vector2(p.x, p.y))
-    const holes = holeIndices.map((h) => rings[h].points.map((p) => new THREE.Vector2(p.x, p.y)))
-    const faces = THREE.ShapeUtils.triangulateShape(contour, holes)
-    // the faces index the contour followed by each hole, after the call has tidied them
-    const vertices = contour.concat(...holes)
-    for (const [a, b, c] of faces) {
-      triangles.push({ x: vertices[a].x, y: vertices[a].y }, { x: vertices[b].x, y: vertices[b].y }, { x: vertices[c].x, y: vertices[c].y })
-    }
+    // pushed one at a time: a spread of a long triangle list would overflow the call stack
+    for (const vertex of triangulate(rings[outerIndex].points, holeIndices.map((h) => rings[h].points))) triangles.push(vertex)
   }
   return triangles
 }
@@ -162,15 +216,9 @@ export function toRenderItems(objects: readonly SceneObject[], bounds: Bounds): 
       case 'band': {
         const triangles: Vec2[] = []
         for (const chain of obj.outline) {
-          const contour = chainPoints(chain).map((p) => new THREE.Vector2(p.x, p.y))
-          if (contour.length < 3) continue
-          for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(contour, [])) {
-            triangles.push(
-              { x: contour[a].x, y: contour[a].y },
-              { x: contour[b].x, y: contour[b].y },
-              { x: contour[c].x, y: contour[c].y }
-            )
-          }
+          const points = chainPoints(chain)
+          if (points.length < 3) continue
+          for (const vertex of triangulate(points, [])) triangles.push(vertex)
         }
         if (triangles.length > 0) geometry.push({ kind: 'region', triangles, color: obj.color })
         break
