@@ -244,7 +244,7 @@ export interface ClipStats {
   unpairedStops: number
   uncoveredRoots: number
   contradictions: number
-  // leaves the quadtree left too coarse to cut (the budget stopped it; wider than CONTOUR.maxBudgetLeafPx)
+  // leaves the quadtree left too coarse to cut (the budget stopped it; wider than the caller's maxBudgetLeafPx)
   refused: number
   // faces whose sign was read at a point inside them
   sampled: number

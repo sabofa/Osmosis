@@ -119,7 +119,11 @@ function startedAwayFromExtremes(points: readonly Vec2[]): readonly Vec2[] {
 // A polygon with holes as triangles (groups of three points), by three's triangulation. The outer ring is
 // started away from its extremes (see startedAwayFromExtremes); holes are not, as earcut hashes only the
 // outer ring's box.
-function triangulate(outer: readonly Vec2[], holes: readonly (readonly Vec2[])[]): Vec2[] {
+function triangulate(outerRing: readonly Vec2[], holes: readonly (readonly Vec2[])[]): Vec2[] {
+  // A ring that closes by repeating its first vertex would let that vertex count twice at its extreme, and
+  // the start guard would keep it as the start: drop the repeat, a ring closes by itself.
+  const last = outerRing[outerRing.length - 1]
+  const outer = outerRing.length > 1 && last.x === outerRing[0].x && last.y === outerRing[0].y ? outerRing.slice(0, -1) : outerRing
   const contour = startedAwayFromExtremes(outer).map((p) => new THREE.Vector2(p.x, p.y))
   const holeContours = holes.map((hole) => hole.map((p) => new THREE.Vector2(p.x, p.y)))
   const faces = THREE.ShapeUtils.triangulateShape(contour, holeContours)

@@ -477,6 +477,12 @@ describe('sampleRegion: the spend, one budget for the whole statement', () => {
     expect(r.blankInView).toBe(true)
   })
 
+  it('still draws a disc at a small budget, with no false fill: x^2 + y^2 < 4 at 2000 points and 600 intervals', () => {
+    const r = regionOf('x^2 + y^2 < 4', { budget: { points: 2000, intervals: 600 } })
+    expect(r.drawnInView).toBe(true)
+    expect(falseFill(r, 'x^2 + y^2 < 4', ROOT, 300, 0.05)).toBe(0)
+  })
+
   it('does not say a region that is empty is starved', () => {
     const r = regionOf('x^2 + y^2 < -1')
     expect(r.drawnInView).toBe(false)

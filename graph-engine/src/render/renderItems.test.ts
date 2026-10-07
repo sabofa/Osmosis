@@ -150,6 +150,18 @@ describe('toRenderItems', () => {
       }
     })
 
+    it('fills a ring that repeats its first vertex at the end to the same area as one that does not', () => {
+      // the disc starts at the only vertex at its greatest x, which the repeat would hide from the start guard
+      const plain = disc(0, 0, 2, { n: 200 })
+      const points = Array.from({ length: plain.xy.length / 2 }, (_, i) => ({ x: plain.xy[2 * i], y: plain.xy[2 * i + 1] }))
+      const repeated = chainOf([...points, points[0]], [...points.map((_, i) => i), 0], true)
+      const a = areas(fillOf(region([plain])).triangles)
+      const b = areas(fillOf(region([repeated])).triangles)
+      expect(Math.abs(a.absolute - 4 * Math.PI) / (4 * Math.PI)).toBeLessThan(1e-3)
+      expect(Math.abs(b.absolute - a.absolute) / a.absolute).toBeLessThan(1e-12)
+      expect(Math.abs(b.signed - b.absolute) / b.absolute).toBeLessThan(1e-12)
+    })
+
     it('fills a ring in a hole in a ring by even-odd depth, whatever order the rings come in', () => {
       const outer = disc(0, 0, 3)
       const hole = disc(0, 0, 2)
