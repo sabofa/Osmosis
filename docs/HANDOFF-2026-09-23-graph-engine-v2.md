@@ -1465,10 +1465,12 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    v1 `polygon:`/`circle:`/`angle:` specs render — bare figure instead of a
    plot with axes. Almost certainly better, but it is live content and the spec
    asks for a sweep. `@mode: graph` restores the old rendering.
-3. **`r = bisector of angle A-B-C` silently parses as a polar curve.** The
-   polar grammar claims any `r = <expr>`. Any construction bound to a name the
-   plotting grammar reserves is silently misread — no error, wrong figure.
-   Pre-existing; the grammar should disambiguate or reject.
+3. **FIXED — `r = bisector of angle A-B-C` was silently read as a polar curve.**
+   Ruling: reject, do not re-route. A construction bound to `r`, `x`, `y` or `z`
+   is refused with a message naming the reserved name, quoting the line and
+   suggesting a rename (`R = bisector of angle A-B-C`). The check is
+   `refuseReservedConstruction` in `parser/parseStatement.ts`; it asks
+   `parseConstructionBody`, so there is no second keyword list.
 4. **Scientific notation fails silently.** `y = 1e6 * x` lexes `1e6` as
    `1 * e6` with `e6` unbound, producing **no curve and no error**. Pre-existing,
    and it will bite quant work.
