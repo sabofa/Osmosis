@@ -85,9 +85,83 @@ function paintTuning(): Plugin {
   }
 }
 
+// The Style Lab's Save: POST /__styles/save?theme=<id> writes a built-in theme's style set to
+// graph-engine/src/style/theme/builtinStyles/<id>.json. Dev server only, the same origin and media-type
+// checks as /__paint/tuning (refuseTuningRequest), a path only styleSetPath allows (a known theme id, never
+// a traversal), and a body that parseStyleSet accepts, written back in canonical form.
+type StyleSetsModule = typeof import('./src/styles/styleSets')
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+
+function styleSetSave(): Plugin {
+  return {
+    name: 'osmosis-style-set-save',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/__styles/save', async (req, res) => {
+        const reply = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+          res.statusCode = status
+          res.setHeader('Content-Type', 'application/json')
+          for (const [k, v] of Object.entries(headers)) res.setHeader(k, v)
+          res.end(JSON.stringify(body))
+        }
+        let tuning: TuningModule
+        let sets: StyleSetsModule
+        try {
+          tuning = (await server.ssrLoadModule('/src/paintLabTuning.ts')) as TuningModule
+          sets = (await server.ssrLoadModule('/src/styles/styleSets.ts')) as StyleSetsModule
+        } catch (error) {
+          req.resume()
+          return reply(500, { ok: false, error: `The style-set handler failed to load: ${error instanceof Error ? error.message : String(error)}` })
+        }
+        const refusal = tuning.refuseTuningRequest(req.method, req.headers)
+        if (refusal) {
+          req.resume()
+          return reply(refusal.status, refusal.body, refusal.headers)
+        }
+        const theme = new URL(req.url ?? '', 'http://localhost').searchParams.get('theme') ?? ''
+        const path = sets.styleSetPath(theme)
+        if (!path) {
+          req.resume()
+          return reply(400, { ok: false, error: `"${theme}" is not a built-in theme (${sets.THEME_IDS.join(', ')}).` })
+        }
+        const chunks: Buffer[] = []
+        let size = 0
+        let refused = false
+        req.on('data', (chunk: Buffer) => {
+          size += chunk.length
+          if (size > TUNING_BODY_LIMIT) {
+            if (!refused) reply(413, { ok: false, error: 'That body is far too large to be a style set.' })
+            refused = true
+            return
+          }
+          chunks.push(chunk)
+        })
+        req.on('end', () => {
+          if (refused) return
+          try {
+            const parsed = sets.parseStyleSet(Buffer.concat(chunks).toString('utf8'))
+            if ('error' in parsed) return reply(400, { ok: false, error: parsed.error })
+            writeFileSync(REPO_ROOT + path, sets.serialiseStyleSet(parsed.styles), 'utf8')
+            reply(200, { ok: true, path })
+          } catch (error) {
+            reply(500, { ok: false, error: `The style-set handler failed: ${error instanceof Error ? error.message : String(error)}` })
+          }
+        })
+        req.on('error', () => {
+          if (!refused) reply(400, { ok: false, error: 'The request body could not be read.' })
+        })
+      })
+    },
+    // Saving rewrites a builtinStyles file the lab imports; do not hot-reload the page under the person who pressed Save.
+    hotUpdate({ file }) {
+      if (/\/graph-engine\/src\/style\/theme\/builtinStyles\/[a-z0-9-]+\.json$/.test(posix(file))) return []
+    },
+  }
+}
+
 export default defineConfig({
   root: here,
-  plugins: [react(), paintTuning()],
+  plugins: [react(), paintTuning(), styleSetSave()],
   server: {
     // Designated, not "whatever's free": the whole point is a stable address
     // to keep open in a tab across sessions, so a taken port should fail
