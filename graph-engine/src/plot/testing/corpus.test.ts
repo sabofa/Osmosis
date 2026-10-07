@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { EXAMPLES } from '../../examples'
 import { compileScalar } from '../../math/compile'
 import type { MathScope } from '../../math/scope'
+import { parseExprString } from '../../parser/parseExpr'
 import { parseSpec } from '../../parser/parseSpec'
 import type { Statement } from '../../parser/types'
 import { buildScene } from '../../scene/buildScene'
@@ -195,6 +196,48 @@ function distanceToDrawn(scene: Scene, v: CorpusView, world: Vec2): number {
 }
 
 const drewSomething = (scene: Scene) => scene.objects.some((o) => (o.kind === 'curve' && o.chains.length > 0) || o.kind === 'band')
+
+// ---- regions (P3) -------------------------------------------------------------------------------------------
+
+type RegionObject = Extract<SceneObject, { kind: 'region' }>
+const GRID = 24
+const AREA_ROWS = 600
+
+const regionsOf = (scene: Scene): RegionObject[] => scene.objects.filter((o): o is RegionObject => o.kind === 'region')
+const boundariesOf = (scene: Scene): CurveObject[] => scene.objects.filter((o): o is CurveObject => o.kind === 'curve' && o.id.object.startsWith('boundary.'))
+
+// The rings of every region, as vertex lists.
+const ringsOf = (scene: Scene): Vec2[][] => regionsOf(scene).flatMap((r) => r.outline.map((chain) => chainPoints(chain)))
+
+// Where the rings cross the horizontal line at y (sorted x of each crossing, half-open so a vertex counts once).
+function crossingsAt(rings: readonly Vec2[][], y: number): number[] {
+  const xs: number[] = []
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const a = ring[j]
+      const b = ring[i]
+      if (a.y > y !== b.y > y) xs.push(a.x + ((y - a.y) / (b.y - a.y)) * (b.x - a.x))
+    }
+  }
+  return xs.sort((p, q) => p - q)
+}
+
+// Even-odd containment in the union of all region outlines.
+function regionContains(scene: Scene, p: Vec2): boolean {
+  return crossingsAt(ringsOf(scene), p.y).filter((x) => x < p.x).length % 2 === 1
+}
+
+// The even-odd area of the outlines, clipped to the view's bounds: a scanline sum over AREA_ROWS rows.
+function regionArea(scene: Scene, b: CorpusView['bounds']): number {
+  const rings = ringsOf(scene)
+  const dy = (b.yMax - b.yMin) / AREA_ROWS
+  let area = 0
+  for (let r = 0; r < AREA_ROWS; r++) {
+    const xs = crossingsAt(rings, b.yMin + (r + 0.5) * dy)
+    for (let k = 0; k + 1 < xs.length; k += 2) area += Math.max(0, Math.min(xs[k + 1], b.xMax) - Math.max(xs[k], b.xMin)) * dy
+  }
+  return area
+}
 
 // ---- typed breaks and marks -------------------------------------------------------------------------------
 
@@ -445,6 +488,73 @@ describe('the torture corpus', () => {
           const scene = run.scenes()[0]
           for (const p of want.drawn ?? []) expect(distanceToDrawn(scene, c.views[0], p), `(${p.x}, ${p.y}) is drawn`).toBeLessThanOrEqual(DRAWN_PX)
           for (const p of want.undrawn ?? []) expect(distanceToDrawn(scene, c.views[0], p), `(${p.x}, ${p.y}) is not drawn`).toBeGreaterThan(DRAWN_PX)
+        }, TIMEOUT)
+      }
+
+      if (want.area || want.unfilled || want.dashed !== undefined || want.boundaries) {
+        it('fills the regions it should: area, empty boxes, and the boundaries drawn dashed or solid', () => {
+          const scene = run.scenes()[0]
+          const v = c.views[0]
+          if (want.area) {
+            const got = regionArea(scene, v.bounds)
+            expect(Math.abs(got - want.area.value) / want.area.value, `area ${got} for ${want.area.value}`).toBeLessThanOrEqual(want.area.rel)
+          }
+          for (const box of want.unfilled ?? []) {
+            for (let i = 0; i <= GRID; i++) {
+              for (let j = 0; j <= GRID; j++) {
+                const p = { x: box.xMin + ((box.xMax - box.xMin) * i) / GRID, y: box.yMin + ((box.yMax - box.yMin) * j) / GRID }
+                expect(regionContains(scene, p), `(${p.x}, ${p.y}) is filled`).toBe(false)
+              }
+            }
+          }
+          const boundaries = boundariesOf(scene)
+          if (want.dashed !== undefined) {
+            expect(boundaries.length, 'a boundary curve').toBeGreaterThan(0)
+            for (const b of boundaries) expect(b.dashed === true, `boundary ${b.id.object} dashed`).toBe(want.dashed)
+          }
+          if (want.boundaries) {
+            const dashed = boundaries.filter((b) => b.dashed === true).length
+            expect({ dashed, solid: boundaries.length - dashed }).toEqual(want.boundaries)
+          }
+        }, TIMEOUT)
+      }
+
+      if (want.noVerticalJoins) {
+        it('joins nothing across a pole: no near-vertical segment spans half the view', () => {
+          run.scenes().forEach((scene, i) => {
+            const px = pxPerUnit(c.views[i])
+            for (const o of scene.objects) {
+              if (o.kind !== 'curve') continue
+              for (const chain of o.chains) {
+                const pts = chainPoints(chain)
+                for (let k = 0; k + 1 < pts.length; k++) {
+                  const dy = Math.abs(pts[k + 1].y - pts[k].y) * px.y
+                  const dx = Math.abs(pts[k + 1].x - pts[k].x) * px.x
+                  expect(dy > c.views[i].heightPx / 2 && dx <= 1, `view ${i}: a segment at x ${pts[k].x} spans ${dy} px up with ${dx} px across`).toBe(false)
+                }
+              }
+            }
+          })
+        }, TIMEOUT)
+      }
+
+      if (want.curvesOn) {
+        it('has every curve vertex on the zero set of its expression, within a pixel', () => {
+          const scene = run.scenes()[0]
+          const px = pxPerUnit(c.views[0])
+          const h = compileScalar(parseExprString(want.curvesOn!), ['x', 'y'], run.scope)
+          const step = 1e-6
+          let worst = 0
+          for (const o of scene.objects) {
+            if (o.kind !== 'curve') continue
+            for (const p of o.chains.flatMap(chainPoints)) {
+              const gx = (h(p.x + step, p.y) - h(p.x - step, p.y)) / (2 * step)
+              const gy = (h(p.x, p.y + step) - h(p.x, p.y - step)) / (2 * step)
+              const d = (Math.abs(h(p.x, p.y)) / Math.hypot(gx, gy)) * Math.min(px.x, px.y)
+              worst = Math.max(worst, Number.isNaN(d) ? Number.POSITIVE_INFINITY : d)
+            }
+          }
+          expect(worst, `the worst vertex is ${worst} px off`).toBeLessThanOrEqual(CHORD_PX)
         }, TIMEOUT)
       }
 

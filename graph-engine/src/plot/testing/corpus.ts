@@ -76,6 +76,22 @@ export interface CorpusCase {
     drawn?: Vec2[]
     // none of these points is within a pixel of anything drawn
     undrawn?: Vec2[]
+    // ---- P3 (implicit curves and regions) ----
+    // the even-odd area of all the region outlines of the main view, clipped to the view's bounds (by a scanline sum, 600
+    // rows), within `rel` of `value`
+    area?: { value: number; rel: number }
+    // no region fill anywhere in these boxes of the main view: a grid of points is tested for even-odd containment
+    unfilled?: Bounds[]
+    // every boundary curve (an object whose id.object starts 'boundary.') of the main view has this `dashed`
+    dashed?: boolean
+    // the numbers of boundary curves of the main view that are dashed and that are solid
+    boundaries?: { dashed: number; solid: number }
+    // in every view no curve segment spans more than half the view's height while within 1 px of vertical: the defect
+    // of joining the two sides of a pole
+    noVerticalJoins?: true
+    // an expression H(x, y): every curve vertex of the main view is within 1 px of its zero set, by |H| / |grad H| with
+    // central differences
+    curvesOn?: string
   }
   // pinned: about 1.5x the measured count (the most over the case's views), rounded up
   ceiling: { points: number; intervals: number }
