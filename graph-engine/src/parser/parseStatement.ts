@@ -1,6 +1,8 @@
 import { isValidColor, normaliseColor } from './colors'
 import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
+import { freeVariables } from './evalExpr'
 import { parseConditionString, parseExprString } from './parseExpr'
+import { isClassicBuiltin } from '../space/grammar/shadowable'
 import { parseSpaceKeyword } from '../space/grammar/keyword'
 import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
@@ -1501,7 +1503,7 @@ function parseStatementCore(rawLine: string): StatementShape {
   // with anything else in the grammar (parametric tuples start with "(",
   // not an identifier).
   const functionDefMatch = /^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\s*=(.*)$/.exec(line)
-  if (functionDefMatch) {
+  if (functionDefMatch && !readsAsEquation(functionDefMatch[1], functionDefMatch[2], functionDefMatch[3])) {
     const [, name, param, body] = functionDefMatch
     return { kind: 'functionDef', name, param, body: parseExprString(body) }
   }
@@ -1593,7 +1595,9 @@ function parseStatementCore(rawLine: string): StatementShape {
   }
 
   // Bare point: "(x, y)" or "(x, y, z)" with nothing else on the line.
-  if (line.startsWith('(') && line.endsWith(')')) {
+  // The opening paren must close at the very end: "(x^2+y^2)^2 = 4(x^2-y^2)"
+  // starts and ends with a paren yet is an equation, not a point.
+  if (line.startsWith('(') && line.endsWith(')') && openingParenClosesAtEnd(line)) {
     const parts = parseTuple(line)
     return { kind: 'point', label: null, x: parts[0], y: parts[1], z: parts.length === 3 ? parts[2] : null }
   }
@@ -2156,6 +2160,36 @@ function refuseBareNotEqual(line: string): void {
       if (c === '=' || c === '<' || c === '>') relation = true
       else if (!given && relation && c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
     }
+  }
+}
+
+// True when the "(" at index 0 is closed by the line's final ")" (T7.7): the
+// whole line is one parenthesised group, as a bare point is.
+function openingParenClosesAtEnd(line: string): boolean {
+  let depth = 0
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '(') depth++
+    else if (line[i] === ')') {
+      depth--
+      if (depth === 0) return i === line.length - 1
+    }
+  }
+  return false
+}
+
+// "name(param) = body" with a classic built-in as the name is an equation, not
+// a definition (T7.7): "sin(x) = cos(y)" draws sin(x) - cos(y) = 0. It reads as
+// one when the parameter is a plot variable (x, y: "cos(x) = 0.5", like
+// "x^2 = 4") or the body names another variable. "sin(z) = z^2" keeps its
+// definition reading, which the kernel refuses by name. calc's shadowable
+// names (gamma, root, ...) and every user name stay definitions.
+function readsAsEquation(name: string, param: string, body: string): boolean {
+  if (!isClassicBuiltin(name)) return false
+  if (param === 'x' || param === 'y') return true
+  try {
+    return freeVariables(parseExprString(body), new Set([param])).size > 0
+  } catch {
+    return false
   }
 }
 
