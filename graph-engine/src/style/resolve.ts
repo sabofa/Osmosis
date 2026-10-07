@@ -2,7 +2,7 @@ import { collapseLayers, layerFromStyleLayer, resolveSettings, toStyle, type Res
 import { isPresetName, PRESET_NAMES, PRESETS, type PresetName } from './presets'
 import type { SettingSpec, SettingValue } from './settings/types'
 import { findSetting, noSuchSetting, parseTokenValue, readSettingValue, tokenAt } from './settings/values'
-import { GRAPH_TYPES } from './theme/types'
+import { GRAPH_TYPES, type GraphType } from './theme/types'
 import {
   readToken,
   TOKENS,
@@ -52,24 +52,33 @@ export interface StyleLayer {
 
 const GROUPS = ['line', 'fill', 'paper', 'lettering', 'colour'] as const
 
+// The two kinds of figure the stack resolves for: a flat one and a solid one.
+export type FigureGraphType = Extract<GraphType, 'figure2d' | 'figure3d'>
+
 // The figure styles of the layers, base first: the stack's style.* settings for a
 // figure (graph type figure2d). With the two layers of a rendered figure, [the host's
 // base style, the figure's own], that is the stack with the base as the document and
 // the figure as the figure, so the graph type's built-in defaults (style/typeDefaults.ts)
 // sit below both. Any other number of layers resolves the same way: the last is the
 // figure, and the ones before it, applied in order, are the document.
-export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[], theme?: ThemeStyles): Style {
-  return toStyle(resolveFigureSettings(layers, theme))
+export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[], theme?: ThemeStyles, graphType: FigureGraphType = 'figure2d'): Style {
+  return toStyle(resolveFigureSettings(layers, theme, graphType))
 }
 
 // Every setting of the stack for a figure, not only its figure styles: the same resolution
 // resolveStyle makes. A renderer reads the rest from here: the settings of the figure's
 // medium (media.<name>.<key>), which a "@style-set" or a theme may have set. `theme` is the
 // theme's style set (`themeStylesOf`), the stack's theme layers: left out, there are none.
-export function resolveFigureSettings(layers: readonly (StyleLayer | null | undefined)[], theme?: ThemeStyles): ResolvedSettings {
+// `graphType` is the kind of figure: 'figure3d' for a solid figure, whose theme-for-this-type and
+// graph-type layers are the 3D ones, and 'figure2d' (the default) for a flat one.
+export function resolveFigureSettings(
+  layers: readonly (StyleLayer | null | undefined)[],
+  theme?: ThemeStyles,
+  graphType: FigureGraphType = 'figure2d'
+): ResolvedSettings {
   const given = layers.filter((layer): layer is StyleLayer => !!layer).map(layerFromStyleLayer)
   const figure = given.pop()
-  return resolveSettings({ document: collapseLayers(given), figure, ...(theme !== undefined ? { theme } : {}) }, 'figure2d')
+  return resolveSettings({ document: collapseLayers(given), figure, ...(theme !== undefined ? { theme } : {}) }, graphType)
 }
 
 // Whether a resolved style is clean — the look the renderer draws through its

@@ -1017,4 +1017,41 @@ describe('a figure in a medium', () => {
       for (const stroke of strokesIn(svg, 'primary')) expect(contrastRatio(stroke.hex, paperOf(svg)), mode).toBeGreaterThanOrEqual(7)
     }
   })
+
+  // A theme's settings for a graph type reach a figure of that type. A figure with a solid, a cut, a plane, a dihedral,
+  // a net or a shortest path is a solid figure (figure3d); every other figure is flat (figure2d).
+  const example = (label: string) => EXAMPLES.find((e) => e.label === label)!.spec
+  const SOLIDS = ['Cube', 'Cross-section (cut)', 'Plane by equation', 'AIME: dihedral in a hexagonal prism', 'Cube and its net', 'AIME: a fly on a cone']
+  const FLATS = ['Triangle', 'Circle vocabulary', 'Square minus its circle']
+
+  it('reads a theme’s figure3d settings for a solid figure and its figure2d settings for a flat one, not the other way round', () => {
+    const head = '@style-line: pencil'
+    const loose = { set: { 'style.line.looseness': 0.9 } }
+    const themed = (styles: unknown, body: string) => draw(head, { theme: fromColours({ styles }), body })
+    const plain = (body: string) => draw(head, { theme: defaultTheme('light'), body })
+    for (const label of SOLIDS) {
+      const body = example(label)
+      // figure3d changes a solid; figure2d does not touch it; the setting for all types does, the same as figure3d.
+      expect(themed({ byType: { figure3d: loose } }, body), `${label}: figure3d`).not.toBe(plain(body))
+      expect(themed({ byType: { figure2d: loose } }, body), `${label}: figure2d`).toBe(plain(body))
+      expect(themed({ byType: { figure3d: loose } }, body), `${label}: figure3d against all`).toBe(themed({ all: loose }, body))
+    }
+    for (const label of FLATS) {
+      const body = example(label)
+      // The reverse for a flat figure.
+      expect(themed({ byType: { figure2d: loose } }, body), `${label}: figure2d`).not.toBe(plain(body))
+      expect(themed({ byType: { figure3d: loose } }, body), `${label}: figure3d`).toBe(plain(body))
+      expect(themed({ byType: { figure2d: loose } }, body), `${label}: figure2d against all`).toBe(themed({ all: loose }, body))
+    }
+  })
+
+  it('reads a theme’s media settings for the figure’s own type too', () => {
+    const solid = example('Cube').replace('segment: A-G', 'segment: A-G color: red')
+    const chroma = (type: 'figure2d' | 'figure3d', value: number, body: string) =>
+      draw('@style-medium: chalk', { theme: fromColours({ styles: { byType: { [type]: { set: { 'media.chalk.chroma': value } } } } }), body })
+    expect(chroma('figure3d', 0.7, solid)).not.toBe(chroma('figure3d', 0.5, solid))
+    expect(chroma('figure2d', 0.7, solid)).toBe(chroma('figure2d', 0.5, solid))
+    expect(chroma('figure2d', 0.7, RED)).not.toBe(chroma('figure2d', 0.5, RED))
+    expect(chroma('figure3d', 0.7, RED)).toBe(chroma('figure3d', 0.5, RED))
+  })
 })

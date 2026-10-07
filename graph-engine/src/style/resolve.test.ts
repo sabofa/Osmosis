@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
 import { PRESET_NAMES, PRESETS } from './presets'
-import { applyStyleDirective, checkLayer, directivesFor, isClean, resolveStyle, type StyleLayer } from './resolve'
+import { applyStyleDirective, checkLayer, directivesFor, isClean, resolveFigureSettings, resolveStyle, type StyleLayer } from './resolve'
 
 const layerOf = (lines: string[]): StyleLayer => {
   const layer: StyleLayer = {}
@@ -74,6 +74,16 @@ describe('resolving a style', () => {
     expect(style.lettering).toMatchObject({ face: 'hand', size: 1.2 })
     expect(style.colour).toEqual({ ink: '#1d2a4a', saturation: 0.6, medium: 'graphite' })
     expect(style.seed).toBe(3)
+  })
+
+  it('resolves for the graph type it is told: a flat figure by default, a solid one as figure3d', () => {
+    const theme = { byType: { figure3d: { set: { 'style.line.looseness': 0.9 } } } }
+    expect(resolveStyle([], theme).line.looseness).toBe(0)
+    expect(resolveStyle([], theme, 'figure2d').line.looseness).toBe(0)
+    expect(resolveStyle([], theme, 'figure3d').line.looseness).toBe(0.9)
+    // The figure's own setting still wins over the theme's, for either type.
+    expect(resolveStyle([{ line: { looseness: 0.2 } }], theme, 'figure3d').line.looseness).toBe(0.2)
+    expect(resolveFigureSettings([], theme, 'figure3d').get('style.line.looseness')).toBe(0.9)
   })
 
   it('reads the medium by every spelling, and a style in any medium but clean is not clean', () => {

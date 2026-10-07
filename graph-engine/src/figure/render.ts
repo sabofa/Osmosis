@@ -2116,10 +2116,13 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
 export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer, theme?: ThemeInput): FigureResult {
   const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
   const themeStyles = theme ? themeStylesOf(theme) : undefined
-  const style = resolveStyle([base.layer, config.style], themeStyles)
+  // A solid figure (a solid, a cut, a plane, a dihedral, a net or a shortest path: the statements that settle a
+  // 3D figure, as in buildItems) resolves its graph type as figure3d; any other figure is figure2d.
+  const graphType = statements.some((s) => isSolidFigureStatement(s.kind)) ? 'figure3d' : 'figure2d'
+  const style = resolveStyle([base.layer, config.style], themeStyles, graphType)
   const clean = isClean(style)
   const given = clean ? undefined : mediumTheme(palette, theme)
-  const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style], themeStyles)
+  const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style], themeStyles, graphType)
   const drawn = clean ? palette : paperPalette(style, palette, given, settings)
   const pen = choosePen(style, drawn, given, settings)
   const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)

@@ -2,7 +2,7 @@ import type { Palette } from '../render/palette'
 import { saturate, toOklch } from '../style/color'
 import { mediumSettingsOf, type ThemeStyles } from '../style/layers'
 import { MEDIA, type MediumColour, type MediumSettings } from '../style/media'
-import { resolveFigureSettings, type StyleLayer } from '../style/resolve'
+import { resolveFigureSettings, type FigureGraphType, type StyleLayer } from '../style/resolve'
 import { defaultTheme } from '../style/theme/adapter'
 import { normaliseHex } from '../style/theme/contrast'
 import { BOARD_NAMES, type BoardName, type Hex, type MediumName, type RoleKey, type ThemeInput } from '../style/theme/types'
@@ -187,6 +187,11 @@ export function figureMedium(style: Style, palette: Palette, theme?: ThemeInput,
 // The settings of the style's medium (media.<name>.<key>) as the layers resolve them: the same
 // stack resolveStyle reads (a theme's style set included), so a "@style-set: media.chalk.chroma 0.5"
 // in a figure, a document or a theme reaches the pen.
-export function figureMediumSettings(style: Style, layers: readonly (StyleLayer | null | undefined)[], themeStyles?: ThemeStyles): MediumSettings {
-  return mediumSettingsOf(resolveFigureSettings(layers, themeStyles), style.colour.medium)
+export function figureMediumSettings(
+  style: Style,
+  layers: readonly (StyleLayer | null | undefined)[],
+  themeStyles?: ThemeStyles,
+  graphType?: FigureGraphType
+): MediumSettings {
+  return mediumSettingsOf(resolveFigureSettings(layers, themeStyles, graphType), style.colour.medium)
 }
