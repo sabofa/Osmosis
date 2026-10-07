@@ -1,7 +1,9 @@
 // The shared paper generator (spec 2026-10-02-painted-figures-design.md §5):
 // seeded, tileable paper tiles built as STRUCTURE (OKLab offsets plus height),
-// recoloured by `colourisePaper`. M1 ships primed cotton duck ('canvas') and
-// fine primed linen.
+// recoloured by `colourisePaper`. M1 shipped primed cotton duck ('canvas') and fine primed linen; the
+// grain papers (fine, rough, kraft, notebook, graph, dotted) and the three boards (blackboard,
+// greenboard, whiteboard) are structures of the same kind (structures/), and the figures' backgrounds
+// (papers/generated.ts) are made of them.
 //
 // Generating a 1024^2 tile costs a few hundred milliseconds, so it is cached by
 // (type, texture, seed, size). The expensive part is the structure, which does
@@ -13,6 +15,15 @@
 import { buildCanvas } from './canvas'
 import { colourisePaper } from './colourise'
 import { buildLinen } from './linen'
+import { buildBlackboard } from './structures/blackboard'
+import { buildDotted } from './structures/dotted'
+import { buildGraphPaper } from './structures/graphPaper'
+import { buildGreenboard } from './structures/greenboard'
+import { buildKraft } from './structures/kraft'
+import { buildNotebook } from './structures/notebook'
+import { buildPaperFine } from './structures/paperFine'
+import { buildPaperRough } from './structures/paperRough'
+import { buildWhiteboard } from './structures/whiteboard'
 import { softLimit } from './structure'
 import type { Structure } from './structure'
 import type { GeneratedPaperType, GeneratePaper, PaperTile } from './types'
@@ -32,7 +43,19 @@ const MAX_TILES = 3
 const BUILDERS: Record<GeneratedPaperType, (size: number, seed: string) => Structure> = {
   canvas: buildCanvas,
   linen: buildLinen,
+  paperFine: buildPaperFine,
+  paperRough: buildPaperRough,
+  kraft: buildKraft,
+  notebook: buildNotebook,
+  graphPaper: buildGraphPaper,
+  dotted: buildDotted,
+  blackboard: buildBlackboard,
+  greenboard: buildGreenboard,
+  whiteboard: buildWhiteboard,
 }
+
+// Every type the generator builds.
+export const GENERATED_PAPER_TYPES = Object.keys(BUILDERS) as GeneratedPaperType[]
 
 const structures = new Map<string, Structure>()
 const tiles = new Map<string, PaperTile>()

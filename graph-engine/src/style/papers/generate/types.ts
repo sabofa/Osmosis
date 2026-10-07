@@ -5,7 +5,18 @@
 // style/ is owned by the geometry agent, who reviews this module before it
 // reaches milestone-a/main.
 
-export type GeneratedPaperType = 'canvas' | 'linen'
+export type GeneratedPaperType =
+  | 'canvas'
+  | 'linen'
+  | 'paperFine'
+  | 'paperRough'
+  | 'kraft'
+  | 'notebook'
+  | 'graphPaper'
+  | 'dotted'
+  | 'blackboard'
+  | 'greenboard'
+  | 'whiteboard'
 
 export interface PaperTile {
   type: GeneratedPaperType
@@ -20,7 +31,7 @@ export interface PaperSettings {
   // 0 flat .. 1 the type's default relief .. 2 strong.
   texture: number
   seed: string
-  size?: number // default 1024
+  size?: number // default 1024 (a figure's paper uses 512: style.paper.tile)
 }
 
 export type GeneratePaper = (type: GeneratedPaperType, settings: PaperSettings) => PaperTile

@@ -28,6 +28,18 @@ const LZ = Math.sin(ELEVATION)
 const SHADING: Record<GeneratedPaperType, { gain: number; ao: number }> = {
   linen: { gain: 0.3, ao: 0.03 },
   canvas: { gain: 0.32, ao: 0.1 },
+  // The grain papers: the tooth catches the light, a little on writing paper and its ruled kin, more on
+  // rough paper and kraft.
+  paperFine: { gain: 0.35, ao: 0.04 },
+  paperRough: { gain: 0.5, ao: 0.08 },
+  kraft: { gain: 0.45, ao: 0.08 },
+  notebook: { gain: 0.3, ao: 0.03 },
+  graphPaper: { gain: 0.32, ao: 0.03 },
+  dotted: { gain: 0.3, ao: 0.03 },
+  // Slate has a fine tooth the light finds; a whiteboard is smooth, and a glossy sheet is not lit by slope.
+  blackboard: { gain: 0.35, ao: 0.05 },
+  greenboard: { gain: 0.35, ao: 0.05 },
+  whiteboard: { gain: 0.05, ao: 0 },
 }
 
 // Linear light (0..1) to an sRGB channel (0..255), by table with linear interpolation.
