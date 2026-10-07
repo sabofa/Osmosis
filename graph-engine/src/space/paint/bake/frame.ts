@@ -24,15 +24,24 @@
 //
 // EDGE STROKES (SIZING_ALONG, SIZING_ACROSS). The model draws an edge stroke at a fixed size in px, and a fixed spacing in px, at any zoom: a crisp stroke or a drag
 // as long as its stretch, a pull or a bridge of about 22 or 26 px every ~34 or ~42 px, all of a constant width. The bake has BAKE_EDGE_REFINE times as many
-// strokes on the lattice of a stretch, each with a spacing rank (bake/edgeStrokes.ts), so the frame keeps what makes the model's spacing on the screen:
-// z = px per world unit at the stroke's anchor × the reference world per px (the zoom, and the depth of a perspective view) × the foreshortening of the
-// direction along the stretch there (r: the surface tilted from the view packs its px, and the model spaces its strokes by px on the screen), and a stroke is kept
-// when its spacing rank is under z / BAKE_EDGE_REFINE (more of them as the view zooms in, fewer as it zooms out, the model's spacing at the authored zoom and
-// every zoom above it up to BAKE_EDGE_REFINE: beyond it the cells cannot be finer, and the strokes lengthen by z / BAKE_EDGE_REFINE, which keeps a crisp edge
-// one line). It is drawn as the sub-arc of basePx[0] px (the model's length) about its anchor, where the world length of a px is what the view's scale is there;
-// a surface tilted from the view foreshortens the arc, and a stroke the tilt shortens by a tenth or more is taken a longer arc of the baked path (up to
-// ARC_TILT_MAX times), so that the length on the screen is the model's. The width is constant, as the model's, with the pressure's taper along the arc. The
-// decision reads the stroke's own baked numbers and the scale at its anchor, so a stroke that stays in view stays drawn, and the same, as the camera orbits.
+// strokes on the lattice of a stretch, each with a spacing rank (bake/edgeStrokes.ts), so the frame keeps what makes the model's spacing on the screen.
+// THE PULLS AND BRIDGES (across the stretch, spaced along it): z = px per world unit at the stroke's anchor × the reference world per px (the zoom, and the depth of a
+// perspective view) × the foreshortening of the direction along the stretch there (r: the surface tilted from the view packs its px, and the model spaces its strokes by px
+// on the screen), and a stroke is kept when its spacing rank is under z / BAKE_EDGE_REFINE (more of them as the view zooms in, fewer as it zooms out, the model's spacing
+// at the authored zoom and every zoom above it up to BAKE_EDGE_REFINE: beyond it the cells cannot be finer, and the strokes lengthen by z / BAKE_EDGE_REFINE). It is drawn
+// as the sub-arc of basePx[0] px (the model's length) about its anchor, where the world length of a px is what the view's scale is there; a surface tilted from the view
+// foreshortens the arc, and a stroke the tilt shortens by a tenth or more is taken a longer arc of the baked path (up to ARC_TILT_MAX times), so that the length on the
+// screen is the model's.
+// THE CRISP STROKES AND DRAGS (along the stretch, one stroke the stretch's length in the model) are not spaced by that rule: their cells would be thinned out (none left
+// where z is under 1: the stretch's own stroke gone) and, between the powers of two, would not tile (a hole between two strokes). Their cells tile the stretch at the
+// powers of two: the zoom z is read ONCE for the stretch, at the middle of its path (all its cells have the same path, so they all read the same number and decide alike),
+// zl is the power of two at or under it (1 to BAKE_EDGE_REFINE), the cells kept are those whose spacing rank is under zl / BAKE_EDGE_REFINE (the stretch's middle at
+// least, whatever the zoom; 1, 3, 5 or 9 of them, each 1 / zl of the stretch apart, its two ends among them), and each is drawn basePx[0] × z / zl px long: the stretch's
+// share on the screen, 1 to 2 times the model's length (less where the view is zoomed out or the stretch tilted: z under 1). A stroke is never shorter than its cell's share
+// of the path (selTile), whatever the tilt does along the stretch: the strokes of the cells that are drawn meet. Beyond the refinement the cells cannot be finer, and the
+// strokes lengthen by z / BAKE_EDGE_REFINE, as the pulls'.
+// The width is constant, as the model's, with the pressure's taper along the arc. The decision reads the stroke's own baked numbers (an along stroke's, the stretch's, which
+// are the same for its cells) and the scale there, so a stroke that stays in view stays drawn, and the same, as the camera orbits.
 //
 // THE PATHS. The baked path's BAKE_PATH_POINTS points are at equal world arc length (bake/walk.ts resampleWalk, to the snap's sagitta), so a fraction
 // t of its length is taken at the point t × (BAKE_PATH_POINTS - 1) of them: no arc lengths are summed per frame. (A test holds the deviation.)
@@ -61,7 +70,7 @@ import { bigMax, drawChanceFor, drawChanceOf, drawFadeAt, loadCellLevel, makeFra
 import { fnvInts } from './draft'
 import { addSilhouettes, casterOf, indexOf } from './silhouettes'
 import { StrokeList } from './strokeList'
-import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, isEdgeSizing, SIZING_ACROSS, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
+import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NONE, isEdgeSizing, SIZING_ALONG, SIZING_SURFACE, type BakedPainting, type FrameFromBake } from './types'
 
 const P = PATH_POINTS
 const BP = BAKE_PATH_POINTS
@@ -204,6 +213,8 @@ export class FrameScratch {
   selAlpha = new Float32Array(0)
   selBig = new Float32Array(0)
   selPpu = new Float32Array(0)
+  // The half length of a stroke along its stretch's cell, as a fraction of the path (the stretch's cells tile it, a frame never draws one shorter), 0 for any other.
+  selTile = new Float32Array(0)
   selDepth = new Float32Array(0)
   selLayer = new Uint8Array(0)
   key = new Int32Array(0)
@@ -237,6 +248,7 @@ export class FrameScratch {
     this.selAlpha = grow(this.selAlpha)
     this.selBig = grow(this.selBig)
     this.selPpu = grow(this.selPpu)
+    this.selTile = grow(this.selTile)
     this.selDepth = grow(this.selDepth)
     this.selLayer = grow(this.selLayer)
     this.key = grow(this.key)
@@ -456,7 +468,7 @@ export function frameFromBakeWith(
   const t1 = performance.now()
 
   // ---- pass A: select ----
-  const sel = scr.sel, selAlpha = scr.selAlpha, selBig = scr.selBig, selPpu = scr.selPpu, selDepth = scr.selDepth, selLayer = scr.selLayer
+  const sel = scr.sel, selAlpha = scr.selAlpha, selBig = scr.selBig, selPpu = scr.selPpu, selTile = scr.selTile, selDepth = scr.selDepth, selLayer = scr.selLayer
   const kindA = prep.kind, anchorPos = prep.anchorPos, anchorNrm = prep.anchorNrm
   const cull = anchorsMayBeOffscreen(fc, prep.bound)
   let offscreen = 0
@@ -488,16 +500,35 @@ export function frameFromBakeWith(
     let alpha = alphaA[i]
     let big = 1
     let ppu = 0
+    let tile = 0
     let layer = layerA[i]
     if (kind === K_EDGE) {
       if (rankA[i] >= edgeDensity) continue
-      // the spacing: the stroke is kept when its rank is under the zoom over the refinement (the model's spacing on the screen), and lengthened past it
+      // the spacing: the zoom z is px per world unit × the reference world per px × the tilt of the stretch from the view (the direction the strokes are spaced in,
+      // projected, over what the scale would make of it); a stroke across the stretch is kept when its spacing rank is under z over the refinement (the model's spacing on
+      // the screen), and lengthened past it
       const cw = ortho ? m15 : m3 * ax + m7 * ay + m11 * az + m15
       ppu = ortho ? ppuOrtho : ppuK / Math.max(1e-9, cw)
-      // (the zoom here, over the tilt of the stretch from the view: the direction the strokes are spaced in, projected, over what the scale would make of it)
-      const z = ppu * refPerPx * alongScale(wp, anchorA[i], i, sizingA[i] === SIZING_ACROSS, ax, ay, az, nx, ny, nz, cw, ortho, ppu)
-      if (spacingA[i] * BAKE_EDGE_REFINE >= z) continue
-      if (z > BAKE_EDGE_REFINE) big = z / BAKE_EDGE_REFINE
+      if (sizingA[i] === SIZING_ALONG) {
+        // a stroke ALONG its stretch (a crisp stroke, a drag; its path is the stretch): z is read ONCE for the stretch, at the middle of its path, so that all its cells
+        // (the same path) decide alike. zl is the power of two of cells that tile the stretch at that zoom (1 to BAKE_EDGE_REFINE; the stretch's middle is always one: its own
+        // stroke is never dropped), and a cell is drawn z / zl × basePx[0] px long, its 1 / zl of the stretch on the screen (and never shorter than that in the world: selTile)
+        const q = BP3 * i + 3 * (BP / 2 - 1)
+        const mx = (wp[q] + wp[q + 3]) / 2, my = (wp[q + 1] + wp[q + 4]) / 2, mz = (wp[q + 2] + wp[q + 5]) / 2
+        const cwM = ortho ? m15 : m3 * mx + m7 * my + m11 * mz + m15
+        const ppuM = ortho ? ppuOrtho : ppuK / Math.max(1e-9, cwM)
+        const zM = ppuM * refPerPx * alongScale(wp, 0.5, i, false, mx, my, mz, 0, 0, 0, cwM, ortho, ppuM)
+        if (!(zM > 0)) continue
+        let zl = 1
+        while (zl < BAKE_EDGE_REFINE && 2 * zl <= zM) zl *= 2
+        if (spacingA[i] * BAKE_EDGE_REFINE >= zl) continue
+        big = zM / zl
+        tile = 0.5 / zl
+      } else {
+        const z = ppu * refPerPx * alongScale(wp, anchorA[i], i, true, ax, ay, az, nx, ny, nz, cw, ortho, ppu)
+        if (spacingA[i] * BAKE_EDGE_REFINE >= z) continue
+        if (z > BAKE_EDGE_REFINE) big = z / BAKE_EDGE_REFINE
+      }
     } else if (kind === K_LINE) {
       if (haveVeils) {
         const q = BP3 * i + 3 * (BP / 2 - 1)
@@ -550,6 +581,7 @@ export function frameFromBakeWith(
     selAlpha[k] = alpha
     selBig[k] = big
     selPpu[k] = ppu
+    selTile[k] = tile
     selDepth[k] = depth
     selLayer[k] = layer
     if (depth < dMin) dMin = depth
@@ -675,6 +707,19 @@ export function frameFromBakeWith(
         const grow = Math.min(want / have, ARC_TILT_MAX)
         lo = Math.max(0, anchor - half * grow)
         hi = Math.min(1, anchor + half * grow)
+        if (!samplePath(baked, i, lo, hi, path, po, worldPath, wo)) continue
+      }
+    }
+    const tile = selTile[j]
+    if (tile > 0) {
+      // a stroke along its stretch is never shorter than its tile: the stretch's cells are `tile` × 2 of the path apart, so the strokes of the cells that are drawn meet
+      // end to end whatever the surface's tilt does along the stretch (the length on the screen above is read at the stroke's own place: where the stretch is less tilted
+      // there than the middle it falls short of the cell's share of it)
+      const tlo = Math.max(0, anchor - tile)
+      const thi = Math.min(1, anchor + tile)
+      if (lo > tlo + 1e-6 || hi < thi - 1e-6) {
+        lo = Math.min(lo, tlo)
+        hi = Math.max(hi, thi)
         if (!samplePath(baked, i, lo, hi, path, po, worldPath, wo)) continue
       }
     }

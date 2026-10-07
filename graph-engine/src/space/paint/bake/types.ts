@@ -51,7 +51,9 @@ export const SIZING_FIXED = 1
 // spacing on the screen at that zoom (frame.ts): more of them are drawn as the view zooms in, at the same on-screen length, width and spacing.
 // A stroke ALONG its stretch (a crisp stroke, a drag: the path is the stretch) and one ACROSS it (a pull, a bridge: the path is walked across the run) are
 // spaced along the stretch, so the foreshortening that thins them reads the direction along the stretch: the path's own for the first, at right angles to it
-// (in the surface) for the second.
+// (in the surface) for the second. They are not thinned alike: the model has ONE stroke along a stretch, so the cells of a stretch's along strokes (BAKE_EDGE_REFINE + 1
+// of them, from its start to its end, all of the stretch's one path) tile it at the powers of two, 1, 3, 5 or 9 of them, the zoom read once for the stretch and the
+// stretch's middle always drawn: a stretch's own stroke is never dropped, and the strokes meet (frame.ts).
 export const SIZING_ALONG = 2
 export const SIZING_ACROSS = 3
 export const isEdgeSizing = (sizing: number): boolean => sizing >= SIZING_ALONG
@@ -117,11 +119,12 @@ export interface BakedPainting {
   // (frame.ts); an edge stroke when its rank, the one draw of its whole stretch, is under `roles.edge.density` (so the slider thins whole
   // stretches, as the model's does); a data-mark line has 0 and is always drawn.
   rank: Float32Array
-  // An edge stroke's place in the refinement of its stretch (SIZING_ARC): a draw in [0, 1) that encodes the spacing level of the stroke, a
+  // An edge stroke's place in the refinement of its stretch (SIZING_ALONG, SIZING_ACROSS): a draw in [0, 1) that encodes the spacing level of the stroke, a
   // bit-reversal order along the stretch (the stroke at the stretch's middle has the least, then the ones 8 cells off, then 4, 2, 1: any threshold
   // t keeps strokes about 1/t cells apart). A frame draws the stroke when its spacing is under (px per reference px) / BAKE_EDGE_REFINE, which gives
-  // the model's spacing of pulls and bridges (and the model's stretches' length of a crisp stroke and a drag) on the screen at any zoom, deterministically,
-  // so a stroke that stays in view stays drawn as the camera orbits. 0 for every stroke that is not an edge stroke.
+  // the model's spacing of pulls and bridges on the screen at any zoom, deterministically, so a stroke that stays in view stays drawn as the camera orbits;
+  // for a stroke along its stretch (a crisp stroke, a drag) the px per reference px is that of the whole stretch, rounded down to a power of two (the cells then
+  // tile the stretch). 0 for every stroke that is not an edge stroke.
   spacing: Float32Array
   side: Int8Array // +1, -1, or 0 (closed mesh, edge on a closed mesh, data mark)
   sizing: Uint8Array // SIZING_*
@@ -138,9 +141,10 @@ export interface BakedPainting {
   anchor: Float32Array // arc-length fraction 0..1 of the particle along the path
   // The stroke's size at zoom 1, CSS px: [length, width] (role size × the
   // light/shadow factor, before zoom growth); a SIZING_FIXED stroke's path is
-  // its whole baked path and `width` its constant width; a SIZING_ARC stroke's
+  // its whole baked path and `width` its constant width; a SIZING_ALONG or SIZING_ACROSS stroke's
   // `length` is the model's on-screen length (the sub-arc it is drawn as, at
-  // any zoom) and `width` its constant width.
+  // any zoom; a stroke along its stretch is drawn z / zl times it, see frame.ts) and `width` its
+  // constant width.
   basePx: Float32Array
   // Final colour (curve, hold, mix) per brush-load level: 3·BAKE_MIX_LEVELS per
   // stroke, linear-light sRGB; level l at offset 3·(BAKE_MIX_LEVELS·i + l).

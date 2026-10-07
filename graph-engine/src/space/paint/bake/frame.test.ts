@@ -13,7 +13,7 @@ import { DEFAULT_PAINT_PARAMS } from '../params'
 import { LAYER_ORDER, PATH_POINTS, ROLES, type GBuffer, type PaintView, type StrokeBatch } from '../types'
 import { P, LIGHT, framing, fixture, sparse, bytes, sphereColours, sphereScene, saddleColours, saddleScene, veilScene, TERRACOTTA, CANVAS, type Fixture } from './bakeFixture'
 import { DEPTH_BUCKETS, frameFromBake, frameFromBakeWith, FrameScratch } from './frame'
-import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, isEdgeSizing, SIZING_ACROSS, SIZING_SURFACE, type BakedPainting } from './types'
+import { BAKE_EDGE_REFINE, BAKE_MIX_LEVELS, BAKE_PATH_POINTS, HIDDEN_DASHED, HIDDEN_NA, HIDDEN_NONE, isEdgeSizing, SIZING_ACROSS, SIZING_ALONG, SIZING_SURFACE, type BakedPainting } from './types'
 
 vi.setConfig({ testTimeout: 180_000 })
 
@@ -92,14 +92,15 @@ interface Ref {
   big: number
 }
 
-// The point at arc-length fraction `a` of baked stroke i's path (summing the chords, not taking the points as equally spaced) and its normal there.
-function anchorOf(baked: BakedPainting, i: number): { p: number[]; n: number[] } {
+// The point at arc-length fraction `at` (the stroke's anchor unless given) of baked stroke i's path (summing the chords, not taking the points as equally spaced) and its
+// normal there.
+function anchorOf(baked: BakedPainting, i: number, at = baked.anchor[i]): { p: number[]; n: number[] } {
   const o = 3 * BAKE_PATH_POINTS * i
   const cum = [0]
   for (let q = 1; q < BAKE_PATH_POINTS; q++) {
     cum.push(cum[q - 1] + Math.hypot(baked.worldPath[o + 3 * q] - baked.worldPath[o + 3 * q - 3], baked.worldPath[o + 3 * q + 1] - baked.worldPath[o + 3 * q - 2], baked.worldPath[o + 3 * q + 2] - baked.worldPath[o + 3 * q - 1]))
   }
-  const s = baked.anchor[i] * cum[BAKE_PATH_POINTS - 1]
+  const s = at * cum[BAKE_PATH_POINTS - 1]
   let q = 1
   while (q < BAKE_PATH_POINTS - 1 && cum[q] < s) q++
   const f = cum[q] > cum[q - 1] ? Math.min(1, Math.max(0, (s - cum[q - 1]) / (cum[q] - cum[q - 1]))) : 0
@@ -112,9 +113,9 @@ function anchorOf(baked: BakedPainting, i: number): { p: number[]; n: number[] }
 // The foreshortening of the direction an edge stroke is spaced in at its anchor, by finite differences of the projection (the frame reads the projection's
 // derivative): the length on the screen of a small step along the direction (the path's own for a stroke along its stretch, the normal × the path's for one across
 // it) over the scale's, in 0.15..1.
-function alongRef(fc: ReturnType<typeof makeFrameCtx>, baked: BakedPainting, i: number, p: number[], n: number[]): number {
+function alongRef(fc: ReturnType<typeof makeFrameCtx>, baked: BakedPainting, i: number, p: number[], n: number[], at = baked.anchor[i]): number {
   const o = 3 * BAKE_PATH_POINTS * i
-  const q = Math.min(BAKE_PATH_POINTS - 2, Math.floor(baked.anchor[i] * (BAKE_PATH_POINTS - 1)))
+  const q = Math.min(BAKE_PATH_POINTS - 2, Math.floor(at * (BAKE_PATH_POINTS - 1)))
   let d = [0, 1, 2].map((c) => baked.worldPath[o + 3 * (q + 1) + c] - baked.worldPath[o + 3 * q + c])
   if (baked.sizing[i] === SIZING_ACROSS) d = [n[1] * d[2] - n[2] * d[1], n[2] * d[0] - n[0] * d[2], n[0] * d[1] - n[1] * d[0]]
   const l = Math.hypot(d[0], d[1], d[2])
@@ -151,13 +152,24 @@ function reference(fx: Fixture, view: PaintView): Map<number, Ref> {
     const dot = n[0] * t[0] + n[1] * t[1] + n[2] * t[2]
     if (baked.side[i] !== 0 ? dot <= 0 : dot < -0.05) continue
     // (an edge stroke: the stretch's density draw, then its spacing rank against the zoom over the refinement, the zoom being the scale at its anchor over the
-    // reference's, with the tilt of the stretch from the view; past the refinement it is lengthened by the zoom over it)
+    // reference's, with the tilt of the stretch from the view; past the refinement it is lengthened by the zoom over it. A stroke along its stretch reads the zoom
+    // once for the stretch, at the middle of its path, and keeps the cells of the power of two of them at or under it: its rank under that over the refinement, and
+    // it is drawn z over that times its px long)
     let edgeBig = 1
     if (role === 'edge') {
       if (baked.rank[i] >= params.roles.edge.density) continue
-      const z = pxPerUnit(fc, p[0], p[1], p[2]) * baked.referenceWorldPerPx * alongRef(fc, baked, i, p, n)
-      if (baked.spacing[i] * BAKE_EDGE_REFINE >= z) continue
-      if (z > BAKE_EDGE_REFINE) edgeBig = z / BAKE_EDGE_REFINE
+      if (baked.sizing[i] === SIZING_ALONG) {
+        const m = anchorOf(baked, i, 0.5)
+        const z = pxPerUnit(fc, m.p[0], m.p[1], m.p[2]) * baked.referenceWorldPerPx * alongRef(fc, baked, i, m.p, m.n, 0.5)
+        let zl = 1
+        while (zl < BAKE_EDGE_REFINE && 2 * zl <= z) zl *= 2
+        if (baked.spacing[i] * BAKE_EDGE_REFINE >= zl) continue
+        edgeBig = z / zl
+      } else {
+        const z = pxPerUnit(fc, p[0], p[1], p[2]) * baked.referenceWorldPerPx * alongRef(fc, baked, i, p, n)
+        if (baked.spacing[i] * BAKE_EDGE_REFINE >= z) continue
+        if (z > BAKE_EDGE_REFINE) edgeBig = z / BAKE_EDGE_REFINE
+      }
     }
     if (role === 'line') {
       out.set(i, { alpha: baked.alpha[i], big: 1 })

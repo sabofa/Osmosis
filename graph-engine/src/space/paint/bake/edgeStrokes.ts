@@ -19,11 +19,13 @@
 // width] in px):
 //   the length   a path long enough for BAKE_ZOOM_MIN (a pull is walked ARC_REACH times the model's length; an along stroke's is the whole stretch, which
 //                is what the model's stroke is), and a frame draws the sub-arc about the stroke's anchor of the px the model's stroke has, at the zoom and
-//                the tilt of the view (frame.ts);
+//                the tilt of the view (frame.ts; an along stroke's cell is its share of the stretch on the screen, which is the model's stretch times the zoom over a
+//                power of two);
 //   the spacing  BAKE_EDGE_REFINE times as many strokes as the model has, on a lattice of cells (a pull every 34 / BAKE_EDGE_REFINE px, a bridge every
 //                42 / BAKE_EDGE_REFINE, an along stroke every 1 / BAKE_EDGE_REFINE of its stretch), each with a SPACING RANK that encodes the level of its
 //                cell (a bit-reversal order from the stretch's middle), and a frame keeps those whose rank passes the thinning that gives the model's
-//                spacing at its zoom: at the authored zoom the cells BAKE_EDGE_REFINE apart, at twice it every fourth, and so on.
+//                spacing at its zoom: at the authored zoom the cells BAKE_EDGE_REFINE apart, at twice it every fourth, and so on (the cells along a stretch are kept
+//                at the powers of two alone, 1, 3, 5 or 9 of them, so that they tile it, and the stretch's middle is always kept).
 // The strokes the model has at the authored zoom (the cells BAKE_EDGE_REFINE apart: the stretch's middle and the ones a model's spacing off it) are
 // MEMBERS of the brush-load chain; the others RIDE the load of the member before them (draft.ts ColourRecipes.follow), so the loads along an edge are the
 // model's however fine the cells are, and a stroke a zoomed-in view adds takes the colour of the load it lies in.
