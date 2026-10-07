@@ -18,33 +18,40 @@ function build(spec: string) {
   return { parsed, scene: buildScene(parsed.statements, bounds, parsed.config) }
 }
 
-// Point-in-triangle test (barycentric sign method) used below to check the
-// *actual* filled geometry of a chained region, not just that a region
-// object was emitted — see the task's warning about tests that would pass
-// even if the fill were wrong.
-function sign(p1: { x: number; y: number }, p2: { x: number; y: number }, p3: { x: number; y: number }): number {
-  return (p1.x - p3.x) * (p2.y - p3.y) - (p2.x - p3.x) * (p1.y - p3.y)
+// Even-odd point-in-outline on a region's rings: the fill rule the renderer
+// uses, so this checks the geometry that is actually filled, not just that a
+// region object was emitted.
+type Region = Extract<SceneObject, { kind: 'region' }>
+
+function regionsOf(scene: { objects: SceneObject[] }): Region[] {
+  return scene.objects.filter((o): o is Region => o.kind === 'region')
 }
 
-function pointInTriangle(
-  p: { x: number; y: number },
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-  c: { x: number; y: number }
-): boolean {
-  const d1 = sign(p, a, b)
-  const d2 = sign(p, b, c)
-  const d3 = sign(p, c, a)
-  const hasNeg = d1 < 0 || d2 < 0 || d3 < 0
-  const hasPos = d1 > 0 || d2 > 0 || d3 > 0
-  return !(hasNeg && hasPos)
-}
-
-function coveredByFill(triangles: { x: number; y: number }[], point: { x: number; y: number }): boolean {
-  for (let i = 0; i < triangles.length; i += 3) {
-    if (pointInTriangle(point, triangles[i], triangles[i + 1], triangles[i + 2])) return true
+function filled(regions: Region[], p: Vec2): boolean {
+  let inside = false
+  for (const region of regions) {
+    for (const ring of region.outline) {
+      const pts = chainPoints(ring)
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[i]
+        const b = pts[j]
+        if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside
+      }
+    }
   }
-  return false
+  return inside
+}
+
+// The boundary curves a region statement emits, and every vertex of them.
+function boundaries(scene: { objects: SceneObject[] }) {
+  return scene.objects.filter((o): o is Extract<SceneObject, { kind: 'curve' }> => o.kind === 'curve' && o.id.object.startsWith('boundary.'))
+}
+
+// Probes on a grid over the view, to check that every filled one satisfies a predicate.
+function filledProbes(regions: Region[]): Vec2[] {
+  const out: Vec2[] = []
+  for (let x = -9.95; x < 10; x += 0.5) for (let y = -5.95; y < 6; y += 0.5) if (filled(regions, { x, y })) out.push({ x, y })
+  return out
 }
 
 describe('buildScene', () => {
@@ -234,62 +241,52 @@ describe('chained inequality regions', () => {
   it('fills exactly the intersection band for "7 < x < 12" — a point inside is covered, one outside is not', () => {
     const { scene } = build('7 < x < 12')
     expect(scene.errors).toEqual([])
-    const region = scene.objects.find((o) => o.kind === 'triangles')
-    if (region?.kind !== 'triangles') throw new Error('unreachable')
-    expect(region.triangles.length).toBeGreaterThan(0)
+    const regions = regionsOf(scene)
+    expect(regions.length).toBeGreaterThan(0)
     // This would fail if the chain silently fell back to a single bound
     // (e.g. only "x < 12"), or to a union instead of an intersection,
     // because (3, 0) would then be wrongly covered too.
-    expect(coveredByFill(region.triangles, { x: 9, y: 0 })).toBe(true)
-    expect(coveredByFill(region.triangles, { x: 3, y: 0 })).toBe(false)
-    expect(coveredByFill(region.triangles, { x: 0, y: 0 })).toBe(false)
+    expect(filled(regions, { x: 9, y: 0 })).toBe(true)
+    expect(filled(regions, { x: 3, y: 0 })).toBe(false)
+    expect(filled(regions, { x: 0, y: 0 })).toBe(false)
   })
 
   it('fills an annulus for "1 <= x^2 + y^2 <= 4" — inside the ring is covered, the center and far outside are not', () => {
     const { scene } = build('1 <= x^2 + y^2 <= 4')
-    const region = scene.objects.find((o) => o.kind === 'triangles')
-    if (region?.kind !== 'triangles') throw new Error('unreachable')
-    // Off-axis probe points, deliberately not on x=0/y=0: the inner circle
-    // (radius 1) passes exactly through grid corners on the axes at this
-    // spec's bounds/resolution, which makes marching squares emit
-    // legitimate zero-area boundary triangles collinear with the axes —
-    // a pre-existing artifact of the shared marching-squares tracer, not
-    // something this chained-region feature introduces. Keeping the probes
-    // off-axis avoids that artifact instead of masking it.
+    const regions = regionsOf(scene)
+    expect(regions.length).toBeGreaterThan(0)
+    // (v1 probed off-axis to dodge zero-area marching-squares triangles on the
+    // axes; the outline is rings now, so the axis probes are honest too.)
     // 1.5^2 + 0.5^2 = 2.5, inside the ring (1 <= r^2 <= 4).
-    expect(coveredByFill(region.triangles, { x: 1.5, y: 0.5 })).toBe(true)
-    // 0.3^2 + 0.2^2 = 0.13, inside the inner circle, excluded by the low bound.
-    expect(coveredByFill(region.triangles, { x: 0.3, y: 0.2 })).toBe(false)
+    expect(filled(regions, { x: 1.5, y: 0.5 })).toBe(true)
+    expect(filled(regions, { x: 1.5, y: 0 })).toBe(true)
+    // 0.3^2 + 0.2^2 = 0.13, inside the inner circle, excluded by the low bound; the centre too.
+    expect(filled(regions, { x: 0.3, y: 0.2 })).toBe(false)
+    expect(filled(regions, { x: 0, y: 0 })).toBe(false)
     // 5^2 + 3^2 = 34, well outside the ring, excluded by the high bound.
-    expect(coveredByFill(region.triangles, { x: 5, y: 3 })).toBe(false)
+    expect(filled(regions, { x: 5, y: 3 })).toBe(false)
   })
 
   it('draws a solid boundary for an inclusive chain and a dashed boundary for a strict chain', () => {
     const inclusive = build('-2 <= x <= 5').scene
-    const inclusiveSegments = inclusive.objects.filter((o) => o.kind === 'segments')
-    expect(inclusiveSegments.length).toBeGreaterThan(0)
+    const inclusiveBoundaries = boundaries(inclusive)
+    expect(inclusiveBoundaries.length).toBeGreaterThan(0)
     // This would fail if dashing were left at its old single-inequality
     // default (dashed = op === '<' || op === '>'), since "<=" chains would
     // then never come out solid.
-    for (const seg of inclusiveSegments) {
-      if (seg.kind !== 'segments') throw new Error('unreachable')
-      expect(seg.dashed).toBe(false)
-    }
+    for (const curve of inclusiveBoundaries) expect(curve.dashed ?? false).toBe(false)
 
     const strict = build('-2 < x < 5').scene
-    const strictSegments = strict.objects.filter((o) => o.kind === 'segments')
-    expect(strictSegments.length).toBeGreaterThan(0)
-    for (const seg of strictSegments) {
-      if (seg.kind !== 'segments') throw new Error('unreachable')
-      expect(seg.dashed).toBe(true)
-    }
+    const strictBoundaries = boundaries(strict)
+    expect(strictBoundaries.length).toBeGreaterThan(0)
+    for (const curve of strictBoundaries) expect(curve.dashed).toBe(true)
   })
 
   it('dashes each edge of a mixed-strictness chain according to its own operator, not one uniform style', () => {
     const { scene } = build('-2 <= x < 5')
-    const segmentObjs = scene.objects.filter((o): o is Extract<typeof scene.objects[number], { kind: 'segments' }> => o.kind === 'segments')
-    const dashedGroups = segmentObjs.filter((o) => o.dashed === true)
-    const solidGroups = segmentObjs.filter((o) => o.dashed === false)
+    const curves = boundaries(scene)
+    const dashedGroups = curves.filter((o) => o.dashed === true)
+    const solidGroups = curves.filter((o) => !o.dashed)
     // This would fail under the "dashed if either bound is strict" fallback,
     // which would dash both edges instead of splitting them.
     expect(dashedGroups.length).toBeGreaterThan(0)
@@ -298,10 +295,8 @@ describe('chained inequality regions', () => {
     // The strict "< 5" edge should sit near x = 5; the inclusive "-2 <="
     // edge should sit near x = -2 — confirms the split tracks the right
     // edge, not just that some split happened.
-    const dashedXs = dashedGroups.flatMap((o) => o.pairs.flatMap((p) => [p[0].x, p[1].x]))
-    const solidXs = solidGroups.flatMap((o) => o.pairs.flatMap((p) => [p[0].x, p[1].x]))
-    for (const x of dashedXs) expect(x).toBeCloseTo(5, 0)
-    for (const x of solidXs) expect(x).toBeCloseTo(-2, 0)
+    for (const v of dashedGroups.flatMap(vertices)) expect(v.x).toBeCloseTo(5, 0)
+    for (const v of solidGroups.flatMap(vertices)) expect(v.x).toBeCloseTo(-2, 0)
   })
 })
 
@@ -696,10 +691,6 @@ function marksOf(scene: SceneOfResult) {
   return scene.objects.filter((o): o is Extract<SceneObject, { kind: 'mark' }> => o.kind === 'mark')
 }
 
-function regionTriangles(scene: SceneOfResult) {
-  return scene.objects.flatMap((o) => (o.kind === 'triangles' ? o.triangles : []))
-}
-
 function segmentPairs(scene: SceneOfResult) {
   return scene.objects.flatMap((o) => (o.kind === 'segments' ? o.pairs : []))
 }
@@ -866,34 +857,44 @@ describe('the 2D engine on the kernel (calc P1)', () => {
 
   it('an if clause on a region keeps the shading inside it', () => {
     const scene = sceneOf('x^2 + y^2 < 9 if y > 0')
-    const tris = regionTriangles(scene)
-    expect(tris.length).toBeGreaterThan(0)
-    for (let i = 0; i < tris.length; i += 3) expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThan(0)
+    const probes = filledProbes(regionsOf(scene))
+    expect(probes.length).toBeGreaterThan(0)
+    for (const p of probes) expect(p.y).toBeGreaterThan(-0.3)
+    expect(filled(regionsOf(scene), { x: 0, y: 1 })).toBe(true)
+    expect(filled(regionsOf(scene), { x: 0, y: -1 })).toBe(false)
   })
 
   it('an if clause on an implicit curve keeps the strokes inside it', () => {
     const scene = sceneOf('x^2 + y^2 = 9 if y > 0')
-    const pairs = segmentPairs(scene)
-    expect(pairs.length).toBeGreaterThan(10)
-    for (const [from, to] of pairs) expect((from.y + to.y) / 2).toBeGreaterThan(0)
+    const points = curvePoints(scene)
+    expect(points.length).toBeGreaterThan(10)
+    // The quadtree's cut at y = 0 lands within a cell of the line.
+    for (const v of points) expect(v.y).toBeGreaterThan(-0.1)
   })
 
   it('an if clause on a chained region keeps the shading and its edge inside it', () => {
     const scene = sceneOf('-2 < x < 4 if y >= 0 and x != 3')
     expect(scene.errors).toEqual([])
-    const tris = regionTriangles(scene)
-    expect(tris.length).toBeGreaterThan(0)
-    for (let i = 0; i < tris.length; i += 3) expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThanOrEqual(0)
-    for (const [from, to] of segmentPairs(scene)) expect((from.y + to.y) / 2).toBeGreaterThanOrEqual(0)
+    const regions = regionsOf(scene)
+    const probes = filledProbes(regions)
+    expect(probes.length).toBeGreaterThan(0)
+    for (const p of probes) expect(p.y).toBeGreaterThan(-0.3)
+    expect(filled(regions, { x: 1, y: 2 })).toBe(true)
+    expect(filled(regions, { x: 1, y: -2 })).toBe(false)
+    for (const curve of boundaries(scene)) for (const v of vertices(curve)) expect(v.y).toBeGreaterThan(-0.1)
   })
 
   it('a region with two conditions joined by and keeps only the corner they share', () => {
-    const tris = regionTriangles(sceneOf('x^2 + y^2 < 9 if y > 0 and x > -1'))
-    expect(tris.length).toBeGreaterThan(0)
-    for (let i = 0; i < tris.length; i += 3) {
-      expect((tris[i].y + tris[i + 1].y + tris[i + 2].y) / 3).toBeGreaterThan(0)
-      expect((tris[i].x + tris[i + 1].x + tris[i + 2].x) / 3).toBeGreaterThan(-1)
+    const regions = regionsOf(sceneOf('x^2 + y^2 < 9 if y > 0 and x > -1'))
+    const probes = filledProbes(regions)
+    expect(probes.length).toBeGreaterThan(0)
+    for (const p of probes) {
+      expect(p.y).toBeGreaterThan(-0.3)
+      expect(p.x).toBeGreaterThan(-1.3)
     }
+    expect(filled(regions, { x: 1, y: 1 })).toBe(true)
+    expect(filled(regions, { x: -2, y: 1 })).toBe(false)
+    expect(filled(regions, { x: 1, y: -1 })).toBe(false)
   })
 
   it('an if clause that names a missing variable on a region is a compile error on its line', () => {
