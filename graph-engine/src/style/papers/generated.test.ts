@@ -28,6 +28,49 @@ const svg = (type: GeneratedPaperType, i: PaperInput) => {
 const light = resolveTheme({ mode: 'light' })
 const dark = resolveTheme({ mode: 'dark' })
 
+// An SVG pattern clips to its tile, so a line whose stroke reaches the tile's edge shows half its width: it must be
+// drawn again a tile over. Every line near an edge needs its shifted copy.
+function ruleLines(type: GeneratedPaperType, waver: 'slight' | 'rough') {
+  const i = input(light)
+  const out = generatedPaper(type, i, waver)
+  const pattern = out.defs.find((d) => !d.includes('data-paper-key') && d.includes('<polyline'))!
+  const lines = [...pattern.matchAll(/<polyline points="([^"]+)"[^>]*stroke-width="([\d.]+)"/g)].map((m) => ({
+    width: Number(m[2]),
+    pts: m[1].split(' ').map((p) => p.split(',').map(Number)),
+  }))
+  return { lines, tile: i.settings.grid * 10 }
+}
+
+describe('rulings at the tile edge', () => {
+  for (const [type, waver] of [['graphPaper', 'slight'], ['graphPaper', 'rough'], ['notebook', 'slight']] as const) {
+    it(`${type} (${waver}): a line within half a stroke of the edge has its wrapped copy`, () => {
+      const { lines, tile } = ruleLines(type, waver)
+      expect(lines.length).toBeGreaterThan(10)
+      let near = 0
+      for (const line of lines) {
+        // Across the line: y for a horizontal one (x runs the tile), x for a vertical one.
+        const horizontal = line.pts[line.pts.length - 1][0] - line.pts[0][0] > tile / 2
+        const [along, across] = horizontal ? [0, 1] : [1, 0]
+        const values = line.pts.map((p) => p[across])
+        const half = line.width / 2
+        const low = Math.min(...values) < half
+        const high = Math.max(...values) > tile - half
+        if (!low && !high) continue
+        near++
+        const shift = low ? tile : -tile
+        const copy = lines.some(
+          (other) =>
+            other !== line &&
+            other.pts.length === line.pts.length &&
+            other.pts.every((p, n) => Math.abs(p[along] - line.pts[n][along]) < 1e-6 && Math.abs(p[across] - (line.pts[n][across] + shift)) < 0.02)
+        )
+        expect(copy, `${type} line near ${values[0]}`).toBe(true)
+      }
+      if (type === 'graphPaper') expect(near).toBeGreaterThanOrEqual(2)
+    })
+  }
+})
+
 describe('generated papers', () => {
   it('is deterministic, and its key is the self-describing one', () => {
     for (const type of [...BOARDS, ...OTHERS]) {
@@ -86,6 +129,28 @@ describe('generated papers', () => {
       if (dusty) expect(svg(type, input(light, 4))).not.toBe(svg(type, input(light, 3)))
     }
     for (const type of OTHERS) expect(svg(type, input(light))).not.toContain('data-paper="tray"')
+  })
+
+  it('keys a tint in lower-case #rrggbb whatever way it is written', () => {
+    const keyOf = (type: GeneratedPaperType, tint: string) => paperKeysIn(svg(type, input(light, 3, tint)))[0]
+    expect(keyOf('canvas', '#EEDDCC')).toBe(keyOf('canvas', '#eeddcc'))
+    expect(keyOf('canvas', '#EDC')).toBe(keyOf('canvas', '#eeddcc'))
+    expect(keyOf('kraft', '#EDC')).toBe(keyOf('kraft', '#eeddcc'))
+    expect(parsePaperKey(keyOf('canvas', '#EDC'))!.baseHex).toBe('#eeddcc')
+  })
+
+  it('dusts a tray finely: a gradient, many small specks denser at the bottom, a few faint smears', () => {
+    const out = svg('blackboard', input(light))
+    const tray = out.slice(out.indexOf('data-paper="tray"'))
+    const radii = [...tray.matchAll(/<circle[^>]*\br="([\d.]+)"/g)].map((m) => Number(m[1]))
+    expect(radii.length).toBeGreaterThan(150)
+    expect(radii.length).toBeLessThan(400)
+    expect(Math.max(...radii)).toBeLessThanOrEqual(2.1)
+    expect(tray).not.toContain('<ellipse')
+    expect((tray.match(/<line\b/g) ?? []).length).toBeGreaterThanOrEqual(3)
+    const ys = [...tray.matchAll(/<circle[^>]*\bcy="(-?[\d.]+)"/g)].map((m) => Number(m[1]))
+    const bottom = VIEW.y + VIEW.height
+    expect(ys.filter((y) => y > bottom - (VIEW.height * 0.16) / 3).length).toBeGreaterThan(ys.length / 2)
   })
 
   it('draws rulings in the theme line colours', () => {

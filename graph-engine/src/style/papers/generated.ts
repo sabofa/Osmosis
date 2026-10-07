@@ -2,6 +2,7 @@ import { tag } from '../markup'
 import { fromOklch } from '../color'
 import { randomFor } from '../random'
 import { mixOklab } from '../theme/derive'
+import { normaliseHex } from '../theme/contrast'
 import type { ThemeInput } from '../theme/types'
 import type { GeneratedPaperType } from './generate/types'
 import { GENERATED_PAPER_TYPES } from './generate'
@@ -42,36 +43,83 @@ export function paperBaseColour(type: GeneratedPaperType, theme: ThemeInput, tin
   return tint.toLowerCase()
 }
 
-// The dust a chalk tray lets fall: a soft gradient up from the bottom edge and a seeded scatter of blotches.
+// The dust a chalk tray lets fall: a soft gradient that thickens toward the bottom edge, many tiny specks (denser
+// near the bottom, thinning upward, and gathered in clumps where the chalk was knocked), and a few faint, long,
+// thin sideways smears where a sleeve went through it. Uneven by design: no row, no regular spacing.
 function trayDust(type: GeneratedPaperType, input: PaperInput, base: string): PaperOutput {
   const { view, id } = input
   const random = randomFor(`paper-tray:${type}`, input.seed)
   const dust = mixOklab(base, '#ffffff', 0.55)
   const box = cover(view)
-  const top = view.y + view.height * 0.86
+  const reachUp = view.height * 0.16
+  const top = view.y + view.height - reachUp
   const bottom = view.y + view.height
   const gradient = id('tray')
   const defs = [
     tag('linearGradient', { id: gradient, x1: 0, y1: 0, x2: 0, y2: 1 }, [
       tag('stop', { offset: 0, 'stop-color': dust, 'stop-opacity': 0 }),
-      tag('stop', { offset: 1, 'stop-color': dust, 'stop-opacity': 0.22 }),
+      tag('stop', { offset: 0.55, 'stop-color': dust, 'stop-opacity': 0.05 }),
+      tag('stop', { offset: 1, 'stop-color': dust, 'stop-opacity': 0.3 }),
     ]),
   ]
-  const blotches: string[] = []
-  for (let i = 0; i < 46; i++) {
-    blotches.push(
-      tag('ellipse', {
-        cx: view.x + random.range(-0.1, 1.1) * view.width,
-        cy: top + random.range(0.2, 1.05) * (bottom - top),
-        rx: random.range(0.01, 0.05) * view.width,
-        ry: random.range(0.004, 0.018) * view.height,
+  const band = tag('rect', { x: box.x, y: top, width: box.width, height: bottom - top, fill: `url(#${gradient})` })
+  // Where the chalk lies thickest: a few clumps along the tray, each its own width and weight.
+  const clumps = Array.from({ length: 7 }, () => ({
+    x: view.x + random.range(-0.05, 1.05) * view.width,
+    spread: random.range(0.02, 0.09) * view.width,
+    weight: random.range(0.5, 2),
+  }))
+  const total = clumps.reduce((sum, clump) => sum + clump.weight, 0)
+  const specks: string[] = []
+  for (let i = 0; i < 280; i++) {
+    let x: number
+    if (random.next() < 0.35) x = view.x + random.range(-0.05, 1.05) * view.width
+    else {
+      let pick = random.next() * total
+      let clump = clumps[0]
+      for (const candidate of clumps) {
+        pick -= candidate.weight
+        if (pick <= 0) {
+          clump = candidate
+          break
+        }
+      }
+      x = clump.x + random.gauss() * clump.spread
+    }
+    // Most specks lie close to the bottom edge; a few drift well up.
+    const rise = Math.pow(random.next(), 2.6) * reachUp
+    const thin = 1 - rise / reachUp
+    specks.push(
+      tag('circle', {
+        cx: x,
+        cy: bottom - rise + random.range(-0.4, 0.4),
+        r: Math.pow(random.next(), 2) * 1.8 + 0.25,
         fill: dust,
-        opacity: random.range(0.04, 0.16),
+        opacity: random.range(0.12, 0.75) * (0.35 + 0.65 * thin),
       })
     )
   }
-  const band = tag('rect', { x: box.x, y: top, width: box.width, height: bottom - top, fill: `url(#${gradient})` })
-  return { defs, background: [tag('g', { 'data-paper': 'tray' }, [band, ...blotches])] }
+  // The smears: long, thin, low, each a little off level.
+  const smears: string[] = []
+  for (let i = 0; i < 5; i++) {
+    const length = random.range(0.08, 0.3) * view.width
+    const x = view.x + random.range(-0.05, 1) * view.width
+    const y = bottom - Math.pow(random.next(), 1.6) * reachUp * 0.8
+    const tilt = random.range(-0.012, 0.012) * length
+    smears.push(
+      tag('line', {
+        x1: x,
+        y1: y,
+        x2: x + length,
+        y2: y + tilt,
+        stroke: dust,
+        'stroke-width': random.range(0.5, 1.8),
+        'stroke-linecap': 'round',
+        opacity: random.range(0.05, 0.12),
+      })
+    )
+  }
+  return { defs, background: [tag('g', { 'data-paper': 'tray' }, [band, ...smears, ...specks])] }
 }
 
 export function generatedPaper(type: GeneratedPaperType, input: PaperInput, waver: Waver = 'slight'): PaperOutput {
@@ -79,7 +127,8 @@ export function generatedPaper(type: GeneratedPaperType, input: PaperInput, wave
   const texture = input.settings.texture
   // A board is the theme's board, unless the author named a tint of their own: that wins (as paperColour has it).
   const own = BOARDS.includes(type) && input.settings.tint !== 'theme'
-  const base = own ? input.tint.toLowerCase() : paperBaseColour(type, input.theme, input.tint)
+  const tint = normaliseHex(input.tint) ?? input.tint.toLowerCase()
+  const base = own ? tint : paperBaseColour(type, input.theme, tint)
   const key = paperKey(type, input.seed, size, texture, base)
   const pattern = input.id('tile')
   const defs = [

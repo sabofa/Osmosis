@@ -20,19 +20,28 @@ export type Waver = 'slight' | 'rough'
 const WAVER: Record<Waver, readonly [number, number]> = { slight: [0.12, 0.3], rough: [0.25, 1.1] }
 
 // A line across a pattern tile of `length` at `at`, wavering by up to `waver` units, its ends pinned to `at`
-// so the next tile carries on from it. Written as a polyline.
-function wavering(random: Random, length: number, at: number, vertical: boolean, stroke: string, width: number, waver: number): string {
+// so the next tile carries on from it. Written as a polyline. An SVG pattern clips to its tile, so a line whose
+// stroke reaches the tile's edge would show only the half inside it: such a line is drawn again a whole tile
+// over (the same line, shifted), and the two halves that show are the stroke's two sides, joined across the wrap.
+function wavering(random: Random, length: number, at: number, vertical: boolean, stroke: string, width: number, waver: number): string[] {
   const noise = smoothNoise(random, 5)
   const offset = random.range(-0.25, 0.25) * waver
-  const points: string[] = []
+  const drawn = width * random.range(0.75, 1.25)
+  const reach = drawn / 2 + Math.abs(offset) + waver
+  const ats = [at]
+  if (at - reach < 0) ats.push(at + length)
+  if (at + reach > length) ats.push(at - length)
   const steps = Math.max(8, Math.ceil(length / 12))
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps
-    const d = at + (offset + waver * noise(t)) * Math.sin(Math.PI * t)
-    const s = t * length
-    points.push(vertical ? `${num(d)},${num(s)}` : `${num(s)},${num(d)}`)
-  }
-  return tag('polyline', { points: points.join(' '), fill: 'none', stroke, 'stroke-width': width * random.range(0.75, 1.25), 'stroke-linecap': 'round' })
+  return ats.map((base) => {
+    const points: string[] = []
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps
+      const d = base + (offset + waver * noise(t)) * Math.sin(Math.PI * t)
+      const s = t * length
+      points.push(vertical ? `${num(d)},${num(s)}` : `${num(s)},${num(d)}`)
+    }
+    return tag('polyline', { points: points.join(' '), fill: 'none', stroke, 'stroke-width': drawn, 'stroke-linecap': 'round' })
+  })
 }
 
 // The pattern tile spans this many squares each way: a rule's waver repeats only that often, so a notebook's
@@ -53,8 +62,8 @@ export function rulingsOf(kind: Rulings, waverKind: Waver, input: PaperInput): P
       const major = k % 5 === 0
       const stroke = major ? strong : line
       const width = major ? 1 : 0.55
-      lines.push(wavering(random, tile, k * g, true, stroke, width, waver))
-      lines.push(wavering(random, tile, k * g, false, stroke, width, waver))
+      lines.push(...wavering(random, tile, k * g, true, stroke, width, waver))
+      lines.push(...wavering(random, tile, k * g, false, stroke, width, waver))
     }
     const pattern = tag('pattern', { id: id('rules'), patternUnits: 'userSpaceOnUse', x: 0, y: 0, width: tile, height: tile }, lines)
     return { defs: [pattern], background: [sheet(view, `url(#${id('rules')})`, { 'data-paper': 'rules' })] }
@@ -85,7 +94,7 @@ export function rulingsOf(kind: Rulings, waverKind: Waver, input: PaperInput): P
   // A notebook: a rule in every square, each its own; and a red margin down the left, a little in from the figure's
   // edge (a notebook's margin sits just inside the writing), drawn the height of the cover.
   const rules: string[] = []
-  for (let k = 0; k < SQUARES; k++) rules.push(wavering(random, tile, (k + 1) * g - 0.5, false, line, 0.8, waver))
+  for (let k = 0; k < SQUARES; k++) rules.push(...wavering(random, tile, (k + 1) * g - 0.5, false, line, 0.8, waver))
   const pattern = tag('pattern', { id: id('rules'), patternUnits: 'userSpaceOnUse', x: 0, y: 0, width: tile, height: tile }, rules)
   const box = cover(view)
   const x = view.x + 0.06 * view.width

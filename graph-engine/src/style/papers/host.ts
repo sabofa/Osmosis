@@ -57,13 +57,24 @@ export async function fillPaperTiles(root: ParentNode): Promise<void> {
   const images = Array.from(root.querySelectorAll<SVGImageElement>('image[data-paper-key]'))
   const keys = new Set(images.map((image) => image.getAttribute('data-paper-key')!))
   for (const key of keys) {
-    if (!blobUrls.has(key)) blobUrls.set(key, blobUrlFor(key))
+    if (blobUrls.has(key)) continue
+    // A tile that fails is forgotten, so a later fill may try it again; it never reaches the other keys.
+    const pending = blobUrlFor(key)
+    blobUrls.set(key, pending)
+    pending.catch(() => {
+      if (blobUrls.get(key) === pending) blobUrls.delete(key)
+    })
   }
   for (const image of images) {
     const key = image.getAttribute('data-paper-key')!
     const href = image.getAttribute('href')
     if (href) continue
-    const url = await blobUrls.get(key)
+    let url: string | null = null
+    try {
+      url = (await blobUrls.get(key)) ?? null
+    } catch {
+      url = null // a bad key leaves its own images empty and nothing else
+    }
     if (url) image.setAttribute('href', url)
   }
 }

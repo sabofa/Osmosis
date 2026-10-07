@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { inlinePaperTiles, setHrefs, tilePixels } from './host'
 import { paperKey } from './generated'
 
@@ -17,6 +17,12 @@ describe('tilePixels', () => {
   })
   it('returns null on a bad key', () => {
     expect(tilePixels('nonsense')).toBeNull()
+  })
+  it('changes with the texture, the seed or the base colour in the key', () => {
+    const same = Array.from(tilePixels(KEY)!.rgba)
+    for (const other of [paperKey('canvas', 3, 256, 0.5, '#e8dcc0'), paperKey('canvas', 4, 256, 1, '#e8dcc0'), paperKey('canvas', 3, 256, 1, '#203050')]) {
+      expect(Array.from(tilePixels(other)!.rgba)).not.toEqual(same)
+    }
   })
   it('differs between keys', () => {
     expect(Array.from(tilePixels(KEY)!.rgba)).not.toEqual(Array.from(tilePixels(KEY2)!.rgba))
@@ -61,5 +67,49 @@ describe('inlinePaperTiles', () => {
   it('generates each tile once for repeated keys', async () => {
     const out = await inlinePaperTiles(svgOf(KEY) + svgOf(KEY))
     expect(out.match(/data:image\/png;base64,/g)!.length).toBe(2)
+  })
+})
+
+describe('fillPaperTiles', () => {
+  it('skips a tile that fails, fills the others, and forgets the failure', async () => {
+    const { fillPaperTiles } = await import('./host')
+    const bad = paperKey('canvas', 9, 64, 1, '#e8dcc0')
+    const good = paperKey('linen', 9, 64, 1, '#e8dcc0')
+    const images = [bad, good].map((key) => ({
+      key,
+      href: '' as string,
+      getAttribute(name: string) {
+        return name === 'data-paper-key' ? this.key : this.href
+      },
+      setAttribute(_: string, value: string) {
+        this.href = value
+      },
+    }))
+    const root = { querySelectorAll: () => images } as unknown as ParentNode
+    let calls = 0
+    vi.stubGlobal('ImageData', class {
+      constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    })
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() {
+        return { putImageData() {} }
+      }
+      convertToBlob() {
+        calls++
+        return calls === 1 ? Promise.reject(new Error('no canvas')) : Promise.resolve(new Blob(['x']))
+      }
+    })
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:ok')
+    try {
+      await fillPaperTiles(root)
+      expect(images[0].href).toBe('')
+      expect(images[1].href).toBe('blob:ok')
+      await fillPaperTiles(root) // the bad key is tried afresh, not served from the cache
+      expect(calls).toBe(3)
+      expect(images[0].href).toBe('blob:ok')
+    } finally {
+      create.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })
