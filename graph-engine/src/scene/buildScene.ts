@@ -7,6 +7,7 @@ import type { FunctionTable } from '../parser/evalExpr'
 import type { Expr, Statement } from '../parser/types'
 import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
 import { buildPlotScope } from '../plot/scope'
+import { FULL } from '../plot/sample/tuning'
 import { sampleImplicit } from '../plot/implicit/implicit'
 import { comparisonsOf } from '../plot/implicit/region'
 import { sampleRegion } from '../plot/implicit/regions'
@@ -313,9 +314,13 @@ function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, sc
   const tickLen = Math.min(dx, dy) * 0.7
   const body = compileScalar(statement.body, ['x', 'y'], scope)
   const pairs: [Vec2, Vec2][] = []
-  for (let j = 0; j <= FIELD_DIVISIONS; j++) {
+  // The grid keeps the view's own lattice and runs on past it by the overscan
+  // (P2's 25 % of the span on each side, rounded up to whole ticks), so the
+  // field pans with the rest and a column at x = 0 stays a column.
+  const extra = Math.ceil(FULL.overscan * FIELD_DIVISIONS)
+  for (let j = -extra; j <= FIELD_DIVISIONS + extra; j++) {
     const y = bounds.yMin + j * dy
-    for (let i = 0; i <= FIELD_DIVISIONS; i++) {
+    for (let i = -extra; i <= FIELD_DIVISIONS + extra; i++) {
       const x = bounds.xMin + i * dx
       const slope = body(x, y)
       // An undefined slope (NaN) has no direction to draw; an infinite one is

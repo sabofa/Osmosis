@@ -916,6 +916,17 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     expect(vertical.length).toBeGreaterThan(10)
   })
 
+  it('a field samples the overscan, so its ticks reach beyond the view on every side', () => {
+    const scene = sceneOf('field: dy/dx = x + y')
+    const mids = segmentPairs(scene).map(([from, to]) => ({ x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }))
+    const spanX = 20
+    const spanY = 12
+    expect(Math.min(...mids.map((m) => m.x))).toBeLessThan(-10 - 0.2 * spanX)
+    expect(Math.max(...mids.map((m) => m.x))).toBeGreaterThan(10 + 0.2 * spanX)
+    expect(Math.min(...mids.map((m) => m.y))).toBeLessThan(-6 - 0.2 * spanY)
+    expect(Math.max(...mids.map((m) => m.y))).toBeGreaterThan(6 + 0.2 * spanY)
+  })
+
   it('a construction that fails is reported on its own line', () => {
     const scene = sceneOf('A = (0, 0)\nB = (4, 0)\nM = midpoint A-Z\nN = midpoint A-B')
     expect(scene.errors).toEqual([expect.objectContaining({ line: 3, message: expect.stringMatching(/"Z"/) })])
