@@ -194,11 +194,27 @@ describe('every entry says what it means', () => {
     for (const spec of GUIDE) expect(spec.meaning, spec.path).not.toMatch(/\bdefaults?\s*(?:is|are|of|at|=|:)?\s*\(?-?\d/i)
   })
 
-  // Nothing draws a medium or a board yet. The task that wires one removes its paths from this check.
-  const NOT_DRAWN_YET = GUIDE.filter((spec) => spec.path.startsWith('media.') || spec.path.startsWith('board.')).map((spec) => spec.path)
+  // What no renderer draws yet: a medium's grain (the soft edge, speckle, streaks and dry skips of the
+  // paper's tooth showing through a stroke) and the board settings (the boards come from constants in the
+  // theme adapter). The colour settings of a medium are read by the figure pen (figure/styledPen.ts). The
+  // task that wires one of these removes its path from this list.
+  const NOT_DRAWN_YET = [
+    'media.ink.edge',
+    'media.graphite.grain',
+    'media.marker.streaks',
+    'media.whiteboard.dry',
+    'board.tilt',
+    'board.blackboard.chromaCap',
+    'board.greenboard.chromaCap',
+    'board.whiteboard.chromaCap',
+  ]
 
-  it('says "Not drawn yet:" in the first sentence of every medium and board setting, and of no other', () => {
-    expect(NOT_DRAWN_YET).toHaveLength(13)
+  it('says "Not drawn yet:" in the first sentence of the grain of every medium and every board setting, and of no other', () => {
+    expect(NOT_DRAWN_YET).toHaveLength(8)
+    // Every other medium or board setting is a colour setting the pen reads, or is listed above.
+    const media = GUIDE.filter((spec) => spec.path.startsWith('media.') || spec.path.startsWith('board.')).map((spec) => spec.path)
+    expect(media).toHaveLength(13)
+    for (const path of NOT_DRAWN_YET) expect(media, path).toContain(path)
     for (const spec of GUIDE) {
       const says = firstSentence(spec.meaning).startsWith('Not drawn yet:')
       expect(says, spec.path).toBe(NOT_DRAWN_YET.includes(spec.path))

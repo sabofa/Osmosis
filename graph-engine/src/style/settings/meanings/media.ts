@@ -4,23 +4,25 @@
 // chroma cap) is what each medium's colour() does with a theme colour; the grain
 // settings are the numbers each medium hands the stroke engine in its GrainSpec.
 //
-// NOTHING DRAWS A MEDIUM YET. No renderer reads a medium's colour or its grain: the
-// figure pens, the graph and the space engine still draw as they did. So every
-// meaning here opens with "Not drawn yet:" and says what the setting WILL do. The
-// task that wires the media into the pens (the colour medium, Task 5) removes the
-// prefix from the meanings it makes true, and the list in registry.test.ts with it.
+// The COLOUR of a medium is drawn: the figure pens (figure/styledPen.ts) colour every role
+// from it, so the settings that move a colour (ink's chroma and contrast, graphite's hint,
+// coloured pencil's and chalk's chroma) say what they do. The GRAIN of a medium (the paper's
+// tooth showing through a stroke: a soft edge, speckle, streaks, running dry) is not read by
+// any renderer yet, so those four still open with "Not drawn yet:" and say what the setting
+// WILL do, and the list in registry.test.ts holds them. The graph and the space engine do not
+// read a medium yet either.
 
 import type { Meanings } from '../types'
 
 export const MEDIA_MEANINGS: Meanings = {
   'media.ink.chroma': {
     meaning:
-      "Not drawn yet: how much of the theme colour's strength an ink will keep, as a multiplier. 0 turns every ink to a neutral black-grey; 1 keeps the theme colour's own chroma; above 1 is a more vivid ink than the theme gave, as far as the colours can go. The ink is then darkened or lightened until it keeps its contrast with the paper, so strong colour never costs legibility.",
+      "How much of the theme colour's strength an ink keeps, as a multiplier. 0 turns every ink to a neutral black-grey; 1 keeps the theme colour's own chroma; above 1 is a more vivid ink than the theme gave, as far as the colours can go. The ink is then darkened or lightened until it keeps its contrast with the paper, so strong colour never costs legibility.",
     interactions: ['media.ink.contrast'],
   },
   'media.ink.contrast': {
     meaning:
-      'Not drawn yet: the contrast an ink will keep with the paper, measured on a stroke as drawn. Higher pushes the ink toward the deepest black on a light paper (the brightest on a dark one): denser, more dramatic ink; the lowest values allow a mid-dark, lighter ink. A colour that already meets the bar is left where it is.',
+      'The contrast an ink keeps with the paper, measured on a stroke as drawn. Higher pushes the ink toward the deepest black on a light paper (the brightest on a dark one): denser, more dramatic ink; the lowest values allow a mid-dark, lighter ink. A colour that already meets the bar is left where it is.',
     interactions: ['media.ink.chroma'],
   },
   'media.ink.edge': {
@@ -31,7 +33,7 @@ export const MEDIA_MEANINGS: Meanings = {
 
   'media.graphite.hint': {
     meaning:
-      'Not drawn yet: how much colour a graphite grey will be allowed to carry, as a cap on chroma. 0 is a dead neutral grey; a little leaves a red role a warm grey and a blue one a cool grey; at the top of the range the grey starts to read as tinted rather than grey. Graphite is never saturated, whatever the theme colour. The grey is then fitted so a stroke keeps legible contrast with the paper.',
+      'How much colour a graphite grey is allowed to carry, as a cap on chroma. 0 is a dead neutral grey; a little leaves a red role a warm grey and a blue one a cool grey; at the top of the range the grey starts to read as tinted rather than grey. Graphite is never saturated, whatever the theme colour. The grey is then fitted so a stroke keeps legible contrast with the paper.',
     interactions: [],
   },
   'media.graphite.grain': {
@@ -42,7 +44,7 @@ export const MEDIA_MEANINGS: Meanings = {
 
   'media.colouredPencil.chroma': {
     meaning:
-      "Not drawn yet: how much of the theme colour's strength a coloured pencil will keep, as a multiplier: a waxy, slightly desaturated version of the theme colour. 0 is a grey pencil, 1 the theme colour's own strength, above 1 more vivid. The pencil is also held a little lighter than ink (a twentieth of lightness toward the paper), so it reads paler, then fitted so a stroke stays legible against the paper.",
+      "How much of the theme colour's strength a coloured pencil keeps, as a multiplier: a waxy, slightly desaturated version of the theme colour. 0 is a grey pencil, 1 the theme colour's own strength, above 1 more vivid. The pencil is also held a little lighter than ink (a twentieth of lightness toward the paper), so it reads paler, then fitted so a stroke stays legible against the paper.",
     interactions: [],
   },
 
@@ -54,7 +56,7 @@ export const MEDIA_MEANINGS: Meanings = {
 
   'media.chalk.chroma': {
     meaning:
-      "Not drawn yet: how much of the theme colour's strength chalk will keep, as a multiplier within a narrow range. Chalk is always a light, dusty version of its colour, so a red comes out a pastel chalk red. Lower is a paler, greyer chalk; higher is a more vivid pastel, within the narrow range chalk allows.",
+      "How much of the theme colour's strength chalk keeps, as a multiplier within a narrow range. Chalk is always a light, dusty version of its colour, so a red comes out a pastel chalk red. Lower is a paler, greyer chalk; higher is a more vivid pastel, within the narrow range chalk allows.",
     interactions: [],
   },
 

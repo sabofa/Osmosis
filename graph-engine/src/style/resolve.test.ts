@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { PRESETS } from './presets'
+import { PRESET_NAMES, PRESETS } from './presets'
 import { applyStyleDirective, checkLayer, directivesFor, isClean, resolveStyle, type StyleLayer } from './resolve'
 
 const layerOf = (lines: string[]): StyleLayer => {
@@ -65,14 +65,43 @@ describe('resolving a style', () => {
         'style-tint: f5f0e6',
         'style-ink: #1d2a4a',
         'style-lettering-size: 1.2',
+        'style-medium: graphite',
       ]),
     ])
     expect(style.line).toMatchObject({ type: 'brush', looseness: 0.4, width: 1.5 })
     expect(style.fill).toMatchObject({ type: 'crosshatch', angle: 30 })
     expect(style.paper).toMatchObject({ type: 'rough-graph', tint: '#f5f0e6' })
     expect(style.lettering).toMatchObject({ face: 'hand', size: 1.2 })
-    expect(style.colour).toEqual({ ink: '#1d2a4a', saturation: 0.6 })
+    expect(style.colour).toEqual({ ink: '#1d2a4a', saturation: 0.6, medium: 'graphite' })
     expect(style.seed).toBe(3)
+  })
+
+  it('reads the medium by every spelling, and a style in any medium but clean is not clean', () => {
+    for (const name of ['style-medium', 'style-colour-medium', 'style-color-medium']) {
+      expect(resolveStyle([layerOf([`${name}: chalk`])]).colour.medium, name).toBe('chalk')
+    }
+    expect(resolveStyle([]).colour.medium).toBe('clean')
+    expect(isClean(resolveStyle([layerOf(['style-medium: marker'])]))).toBe(false)
+    expect(isClean(resolveStyle([layerOf(['style-medium: clean'])]))).toBe(true)
+  })
+
+  it('reads every preset by its name, the old ones and the new, and the old paper names', () => {
+    for (const name of PRESET_NAMES) expect(resolveStyle([layerOf([`style: ${name}`])]), name).toEqual({ ...PRESETS[name], seed: 0 })
+    for (const paper of ['paper', 'rough-paper', 'canvas', 'graph', 'rough-graph', 'dotted', 'ruled', 'none', 'clean']) {
+      expect(resolveStyle([layerOf([`style-paper: ${paper}`])]).paper.type, paper).toBe(paper)
+    }
+    const parsed = parseSpec(['@style: blackboard', '@style-paper: graph', 'A = (0, 0)'].join('\n'))
+    expect(parsed.errors).toEqual([])
+    expect(resolveStyle([parsed.config.style]).colour.medium).toBe('chalk')
+    expect(resolveStyle([parsed.config.style]).paper.type).toBe('graph')
+  })
+
+  it('writes a medium back as a directive', () => {
+    const style = resolveStyle([{ preset: 'blackboard', colour: { medium: 'whiteboard' } }])
+    const lines = directivesFor(style)
+    expect(lines).toContain('@style-medium: whiteboard')
+    const again = resolveStyle([layerOf(lines.map((l) => l.slice(1)))])
+    expect(again).toEqual(style)
   })
 
   it('writes a style back as the directives that reproduce it', () => {
@@ -90,8 +119,15 @@ describe('resolving a style', () => {
 })
 
 describe('refusing a bad directive', () => {
-  it('names the valid presets', () => {
+  it('names the valid presets, the new looks too', () => {
     expect(() => applyStyleDirective({}, 'style', 'crayon')).toThrow(/clean, ink, pencil, marker/)
+    expect(() => applyStyleDirective({}, 'style', 'crayon')).toThrow(/colouredPencil, blackboard, greenboard, whiteboard/)
+    const { errors } = checkLayer({ preset: 'crayon' } as never)
+    expect(errors.join('\n')).toMatch(/blackboard/)
+  })
+
+  it('names the valid media', () => {
+    expect(() => applyStyleDirective({}, 'style-medium', 'oil')).toThrow(/clean, ink, graphite, colouredPencil, marker, chalk, whiteboard/)
   })
 
   it('names the valid settings', () => {

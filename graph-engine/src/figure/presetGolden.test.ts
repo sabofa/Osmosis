@@ -7,7 +7,9 @@ import { PRESET_GOLDEN_EXAMPLES, PRESET_GOLDEN_PRESETS, presetGoldenKey, renderP
 // draw turns this red. Unlike cleanGolden.json this one MAY move, on purpose: when a look is
 // meant to change, regenerate it (scripts/preset-golden.ts) in the same commit and say why.
 //
-// History: first pinned at ebd7fc3, before the presets took their colours from their medium.
+// History: first pinned at ebd7fc3 (light and dark were byte-equal then: the paper decided the
+// palette). Re-pinned on purpose when the presets took their colours from their medium, so they
+// follow the theme: the colours move, and a dark theme is no longer the light figure.
 
 const golden = GOLDEN as Record<string, string>
 

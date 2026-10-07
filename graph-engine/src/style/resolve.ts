@@ -1,4 +1,4 @@
-import { collapseLayers, layerFromStyleLayer, resolveSettings, toStyle, type SettingsLayer, type ThemeStyles } from './layers'
+import { collapseLayers, layerFromStyleLayer, resolveSettings, toStyle, type ResolvedSettings, type SettingsLayer, type ThemeStyles } from './layers'
 import { isPresetName, PRESET_NAMES, PRESETS, type PresetName } from './presets'
 import type { SettingSpec, SettingValue } from './settings/types'
 import { findSetting, noSuchSetting, parseTokenValue, readSettingValue, tokenAt } from './settings/values'
@@ -59,9 +59,16 @@ const GROUPS = ['line', 'fill', 'paper', 'lettering', 'colour'] as const
 // sit below both. Any other number of layers resolves the same way: the last is the
 // figure, and the ones before it, applied in order, are the document.
 export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[]): Style {
+  return toStyle(resolveFigureSettings(layers))
+}
+
+// Every setting of the stack for a figure, not only its figure styles: the same resolution
+// resolveStyle makes. A renderer reads the rest from here: the settings of the figure's
+// medium (media.<name>.<key>), which a "@style-set" or a theme may have set.
+export function resolveFigureSettings(layers: readonly (StyleLayer | null | undefined)[]): ResolvedSettings {
   const given = layers.filter((layer): layer is StyleLayer => !!layer).map(layerFromStyleLayer)
   const figure = given.pop()
-  return toStyle(resolveSettings({ document: collapseLayers(given), figure }, 'figure2d'))
+  return resolveSettings({ document: collapseLayers(given), figure }, 'figure2d')
 }
 
 // Whether a resolved style is clean — the look the renderer draws through its

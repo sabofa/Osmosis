@@ -85,8 +85,11 @@ import { shortestPath, type SurfacePath } from './shortestPath'
 import { ellipsePoint, type SvgAttrs } from './svg'
 import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
 import { styledPen } from './styledPen'
+import { figureMedium, figureMediumSettings } from './medium'
 import type { Piece } from '../style/path'
+import type { MediumSettings } from '../style/media'
 import { checkLayer, isClean, resolveStyle, type StyleLayer } from '../style/resolve'
+import type { ThemeInput } from '../style/theme/types'
 import type { Style } from '../style/tokens'
 
 // The figure renderer: statements in, one SVG document out.
@@ -2104,26 +2107,35 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
 // pen, always: that is what keeps every figure without a style byte for byte
 // what it was. A bad base style is reported, not thrown, and the figure draws
 // with what was valid in it.
-export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer): FigureResult {
+//
+// `theme` is the theme a style's MEDIUM colours from (style/theme/): every colour of a figure
+// that is not clean is its medium's. There is no "no theme": a figure drawn without one is
+// drawn in the default theme for the palette's mode. Clean ignores it.
+export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer, theme?: ThemeInput): FigureResult {
   const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
   const style = resolveStyle([base.layer, config.style])
   const clean = isClean(style)
-  const drawn = clean ? palette : paperPalette(style, palette)
-  const pen = choosePen(style, drawn)
+  const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style])
+  const drawn = clean ? palette : paperPalette(style, palette, theme, settings)
+  const pen = choosePen(style, drawn, theme, settings)
   const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
   pen.paper(viewBox)
   return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
 }
 
-// The palette a styled figure's colours resolve against: the one that suits
-// its PAPER. A preset lays its own paper — pencil's is off-white in a dark app
-// as in a light one — so ink, the theme's roles and an author's harmonised
+// The palette a styled figure's colours resolve against. In a MEDIUM (any but
+// clean) it is the medium's own colour for each role, on its surface (figure/medium.ts):
+// the theme's ink, point and region, and an author's harmonised "color:", are all
+// resolved against that. In the clean medium it is the one that suits its PAPER. A
+// look can lay its own paper, so ink, the theme's roles and an author's harmonised
 // "color:" are resolved for a light page on a light paper (a dark-theme
 // "black" would otherwise be drawn mid-grey on off-white), and for a dark page
 // on a dark one. A paper that follows the theme ("none", or a "theme" tint)
 // follows the host's palette, and so does any paper that already suits it —
 // which keeps a light-theme figure exactly as it was.
-function paperPalette(style: Style, palette: Palette): Palette {
+function paperPalette(style: Style, palette: Palette, theme?: ThemeInput, settings?: MediumSettings): Palette {
+  const medium = figureMedium(style, palette, theme, settings)
+  if (medium) return medium.palette()
   if (style.paper.type === 'none' || style.paper.tint === 'theme') return palette
   const light = (hex: string) => toOklch(hex).l >= 0.6
   const paperIsLight = light(style.paper.tint)
@@ -2133,8 +2145,8 @@ function paperPalette(style: Style, palette: Palette): Palette {
 
 // Clean resolves to the clean pen, with no exceptions; every other look is
 // drawn by the styled pen.
-function choosePen(style: Style, palette: Palette): FigurePen {
-  return isClean(style) ? cleanPen(palette) : styledPen(style, palette)
+function choosePen(style: Style, palette: Palette, theme?: ThemeInput, settings?: MediumSettings): FigurePen {
+  return isClean(style) ? cleanPen(palette) : styledPen(style, palette, theme, settings)
 }
 
 // The whole figure, drawn through `pen`: every element it draws is one pen

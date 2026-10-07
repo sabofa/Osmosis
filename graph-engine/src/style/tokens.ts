@@ -13,6 +13,7 @@
 // builds its controls from — one list, so the four can never disagree.
 
 import { colorByName } from './colorNames'
+import { MEDIUM_NAMES, type MediumName } from './theme/types'
 
 // A point in drawing coordinates. Structurally the same as the engine's Vec2,
 // declared here so this module imports nothing from the rest of the engine.
@@ -33,7 +34,9 @@ export type LineType = (typeof LINE_TYPES)[number]
 export const FILL_TYPES = ['flat', 'hatch', 'crosshatch', 'stipple', 'scribble', 'wash', 'none'] as const
 export type FillType = (typeof FILL_TYPES)[number]
 
-export const PAPER_TYPES = ['none', 'clean', 'paper', 'rough-paper', 'canvas', 'graph', 'rough-graph', 'dotted', 'ruled'] as const
+// The three boards are papers too: the surface a chalk or whiteboard look is drawn on. Until the
+// generated backgrounds arrive they are a flat sheet of the board's colour (papers/index.ts).
+export const PAPER_TYPES = ['none', 'clean', 'paper', 'rough-paper', 'canvas', 'graph', 'rough-graph', 'dotted', 'ruled', 'blackboard', 'greenboard', 'whiteboard'] as const
 export type PaperType = (typeof PAPER_TYPES)[number]
 
 export const LETTERING_FACES = ['math', 'textbook', 'hand'] as const
@@ -105,6 +108,10 @@ export interface ColourSettings {
   // 0 to 1.5: muted to vivid, through OKLCH chroma (color.ts). 1 is the
   // identity.
   saturation: number
+  // The colouring engine every colour of the figure goes through (style/media/): clean draws the
+  // exact theme colours, as a figure always has; every other medium fits each role's colour (a
+  // line, a label, a point, a fill, an author's own "color:") to its own range and to its surface.
+  medium: MediumName
 }
 
 export interface Look {
@@ -145,11 +152,11 @@ export type Token =
   | (TokenBase & { kind: 'number'; min: number; max: number; step: number; integer?: boolean })
   | (TokenBase & { kind: 'colour' })
 
-const choice = (group: StyleGroup, key: string, directive: string, choices: readonly string[], label: string): Token => ({
+const choice = (group: StyleGroup, key: string, directive: string, choices: readonly string[], label: string, aliases: readonly string[] = []): Token => ({
   group,
   key,
   directive,
-  aliases: [`${group}-${key}`],
+  aliases: [`${group}-${key}`, ...aliases],
   label,
   kind: 'choice',
   choices,
@@ -215,6 +222,7 @@ export const TOKENS: readonly Token[] = [
 
   colour('colour', 'ink', 'ink', 'Ink', ['color-ink']),
   number('colour', 'saturation', 'saturation', 0, 1.5, 0.01, 'Saturation', ['color-saturation']),
+  choice('colour', 'medium', 'medium', MEDIUM_NAMES, 'Medium', ['color-medium']),
 
   number('seed', 'seed', 'seed', 0, 9999, 1, 'Seed', [], true),
 ]

@@ -51,8 +51,8 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.line.opacity': {
     meaning:
-      "How opaque one stroke is, from faint to solid. Each pen multiplies it by its own factor first (a pencil pass about 0.8 to 0.95, marker 0.82, chalk 0.85), so 1 is the pen's natural strength and not full black. Strokes that overlap add up beneath it. It also lightens hatch and scribble lines, which are drawn in the same pen.",
-    interactions: ['style.line.passes', 'style.fill.opacity'],
+      "How opaque one stroke is, from faint to solid. Each pen multiplies it by its own factor first (a pencil pass about 0.8 to 0.95, marker 0.82, chalk 0.85), so 1 is the pen's natural strength and not full black. A medium lays its own opacity on top (ink full strength, chalk and marker a tenth under, graphite and coloured pencil more), so the same figure reads lighter in pencil than in clean. Strokes that overlap add up beneath it. It also lightens hatch and scribble lines, which are drawn in the same pen.",
+    interactions: ['style.line.passes', 'style.fill.opacity', 'style.colour.medium'],
   },
 
   'style.fill.type': {
@@ -83,13 +83,13 @@ export const STYLE_MEANINGS: Meanings = {
 
   'style.paper.type': {
     meaning:
-      "The sheet the figure is drawn on, laid under everything. none is transparent, for a page that has its own background. clean is flat colour. paper is good writing paper with a faint grain. rough-paper is cartridge paper, a coarse blotchy tooth with long pale fibres. canvas is woven cloth. graph is blue engineering grid paper with a heavier line every fifth. rough-graph is a grid ruled by hand on grainy paper. dotted is a dot grid. ruled is a notebook page with a red margin. Only some of them read the texture (paper, rough-paper, canvas, rough-graph) and the grid (graph, rough-graph, dotted, ruled).",
+      "The sheet the figure is drawn on, laid under everything. none is transparent, for a page that has its own background. clean is flat colour. paper is good writing paper with a faint grain. rough-paper is cartridge paper, a coarse blotchy tooth with long pale fibres. canvas is woven cloth. graph is blue engineering grid paper with a heavier line every fifth. rough-graph is a grid ruled by hand on grainy paper. dotted is a dot grid. ruled is a notebook page with a red margin. blackboard, greenboard and whiteboard are the boards chalk and the whiteboard marker are drawn on, a flat sheet of the board's colour from the theme, the same in the app's light and dark. Only some of them read the texture (paper, rough-paper, canvas, rough-graph) and the grid (graph, rough-graph, dotted, ruled); the boards read neither yet.",
     interactions: ['style.paper.tint', 'style.paper.texture', 'style.paper.grid'],
   },
   'style.paper.tint': {
     meaning:
-      "The colour of the paper: theme follows the viewer's own page colour, or a six digit hex colour such as #fbf8f0. Everything drawn is fitted to it, so a pale paper in a dark app puts the figure's ink, its theme roles and its named colours back to the colours that suit a light page (dark ink on pale paper), and the reverse for a dark paper. The style's saturation applies to the tint as well.",
-    interactions: ['style.paper.type', 'style.colour.saturation', 'style.colour.ink'],
+      "The colour of the paper: theme follows the theme, or a six digit hex colour such as #fbf8f0. Everything drawn is fitted to the paper it sits on, so a pale tint in a dark app puts the figure's ink, its theme roles and its named colours back to the colours that suit a pale page (dark ink on pale paper), and the reverse for a dark tint. With theme, a medium draws on its own surface: the theme's paper for ink, graphite, coloured pencil and marker, and a board for chalk and the whiteboard marker. The style's saturation applies to the tint as well.",
+    interactions: ['style.paper.type', 'style.colour.saturation', 'style.colour.ink', 'style.colour.medium'],
   },
   'style.paper.texture': {
     meaning:
@@ -120,13 +120,18 @@ export const STYLE_MEANINGS: Meanings = {
 
   'style.colour.ink': {
     meaning:
-      "The colour of lines and labels: theme uses the viewer's own ink colour, or a six digit hex colour such as #1f2a44 for a blue-black ink. It replaces the theme's ink wherever the figure draws with it, and leaves an author's own colours (color: red) alone, except for the saturation.",
-    interactions: ['style.colour.saturation', 'style.paper.tint'],
+      "The colour of lines and labels: theme uses the ink of the medium, or a six digit hex colour such as #1f2a44 for a blue-black ink. It replaces the theme's ink wherever the figure draws with it; in a medium it is the colour the medium starts from, and still fits (a blue-black ink comes out chalk-pale on a blackboard). An author's own colours (color: red) are left alone, except for the saturation and, in a medium, the medium's fit.",
+    interactions: ['style.colour.saturation', 'style.paper.tint', 'style.colour.medium'],
   },
   'style.colour.saturation': {
     meaning:
-      "Scales the colour strength of everything the figure draws, ink, fills, the paper tint and an author's own colours, holding each one's lightness and hue. 0 is greyscale at the same lightness, 1 changes nothing, above 1 is vivid (a colour pushed out of range loses chroma and does not clip, so hue stays honest).",
-    interactions: ['style.colour.ink', 'style.paper.tint'],
+      "Scales the colour strength of everything the figure draws, ink, fills, the paper tint and an author's own colours, holding each one's lightness and hue. 0 is greyscale at the same lightness, 1 changes nothing, above 1 is vivid (a colour pushed out of range loses chroma and does not clip, so hue stays honest). In a medium it works on the colours the medium has already fitted, so it is a second dial on the same strength.",
+    interactions: ['style.colour.ink', 'style.paper.tint', 'style.colour.medium'],
+  },
+  'style.colour.medium': {
+    meaning:
+      "The colouring engine every colour of the figure goes through: clean draws the theme's exact colours, as a figure always has; every other medium fits each colour to its own range and to its surface. ink is deep and dense, in high contrast with the paper. graphite is greys with only a hint of each colour's hue, never saturated. colouredPencil is the theme colour a little desaturated and held a little light, waxy. marker is saturated colour of middle lightness. chalk is pastel and light, always, on a dark board. whiteboard is dry-erase ink, saturated and mid to dark, on a white board. It colours everything the figure draws: lines, hidden and auxiliary lines, points, labels, measures, the givens table, fills and their shading, and an author's own colours (color: red comes out a pastel chalk red on a blackboard). Each medium also lays a stroke at its own opacity, a little under full strength.",
+    interactions: ['style.colour.ink', 'style.colour.saturation', 'style.paper.type', 'style.paper.tint', 'style.line.opacity', 'media.ink.chroma', 'media.ink.contrast', 'media.graphite.hint', 'media.colouredPencil.chroma', 'media.chalk.chroma'],
   },
 
   'style.seed': {

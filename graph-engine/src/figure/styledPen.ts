@@ -2,6 +2,7 @@ import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
 import { deepen, saturate } from '../style/color'
 import { LINES, type Primitive, type StrokeInput, type Texture } from '../style/lines'
+import type { MediumSettings } from '../style/media'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
 import { hashString, randomFor } from '../style/random'
 import { textureFilter } from '../style/textures'
@@ -9,7 +10,9 @@ import type { LineSettings, Style } from '../style/tokens'
 import { FILLS } from '../style/fills'
 import { FACES, tiltFor } from '../style/lettering'
 import { PAPERS } from '../style/papers'
+import type { RoleKey, ThemeInput } from '../style/theme/types'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
+import { figureMedium } from './medium'
 import { notationElements } from './notation'
 import { cleanFill, regionChains, strokeChains, type FigurePen, type FillRegion } from './pen'
 import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './svg'
@@ -22,6 +25,13 @@ import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './s
 // — strokes, outlines, dots — are written here as SVG, in the element's
 // colour (through the style's ink and saturation) and with its identity.
 // Textures are filters over whole layers, defined once in <defs>.
+//
+// COLOUR. A style whose medium is clean draws the colours it is given, as it always has. Any
+// other medium (style/media/) draws every role in its own colour: a call's role comes from what
+// is being drawn (a stroke in the auxiliary layer is an auxiliary line, one in the marks layer is
+// a measure, a dot is a point, a label is a label, the givens table is the givens, a region's
+// area is a fill and its hatching its shading), and a colour that is not the role's own is an
+// author's, which the medium fits like any other. Each is laid at the medium's opacity (figure/medium.ts).
 //
 // Geometry is generated once, in the figure's own drawing coordinates; pan
 // and zoom transform the finished SVG, so the wobble never reshuffles.
@@ -52,6 +62,12 @@ const numberOf = (value: SvgAttrs[string], fallback: number): number => {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
   return Number.isFinite(n) ? n : fallback
 }
+
+// The role of a stroke, by the layer it is drawn in: scaffolding (auxiliary lines and hidden edges,
+// which share the layer) is auxiliary, an annotation (an angle arc, a tick, a leader) is a
+// measure, and everything else is a line. A medium that has only these to go on cannot tell a
+// hidden edge from an auxiliary construction line; both are drawn in the auxiliary colour.
+const strokeRole = (layer: FigureLayer): RoleKey => (layer === 'auxiliary' ? 'auxiliary' : layer === 'marks' ? 'measure' : 'line')
 
 // The identity attributes of a call, carried onto every element it becomes.
 const identityOf = (attrs: SvgAttrs): SvgAttrs => ({ 'data-statement': attrs['data-statement'], 'data-object': attrs['data-object'] })
@@ -128,8 +144,11 @@ function dotsData(dots: readonly { at: Vec2; r: number }[]): string {
 // The pen
 // ---------------------------------------------------------------------------
 
-export function styledPen(style: Style, palette: Palette): FigurePen {
+// `theme` is the theme the medium colours from, when the style's medium is not clean (none: the
+// default theme for the palette's mode); `mediumSettings` are its settings (figure/medium.ts).
+export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInput, mediumSettings?: MediumSettings): FigurePen {
   const theme = figureTheme(palette)
+  const medium = figureMedium(style, palette, themeInput, mediumSettings)
   const layers = emptyFigureLayers()
   const line = LINES[style.line.type]
   const texture: Texture | null = line.texture(style.line)
@@ -212,10 +231,11 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     return dashPolyline(sampleChain(chain, 1.5), pattern.map((p) => p * scale)).map((points) => polylineChain(points))
   }
 
-  const strokeChainsWith = (chains: readonly Chain[], attrs: SvgAttrs, id: string, layer: FigureLayer) => {
-    const paint = colour(attrs.stroke) ?? ink
+  const strokeChainsWith = (chains: readonly Chain[], attrs: SvgAttrs, id: string, layer: FigureLayer, role: RoleKey = strokeRole(layer)) => {
+    const drawn = medium ? medium.paint(typeof attrs.stroke === 'string' ? attrs.stroke : theme.ink, role) : undefined
+    const paint = drawn ? drawn.hex : (colour(attrs.stroke) ?? ink)
     const width = numberOf(attrs['stroke-width'], 1) * style.line.width
-    const opacity = numberOf(attrs.opacity, 1)
+    const opacity = numberOf(attrs.opacity, 1) * (drawn ? drawn.opacity : 1)
     const pattern = typeof attrs['stroke-dasharray'] === 'string' ? attrs['stroke-dasharray'].split(/[\s,]+/).map(Number).filter(Number.isFinite) : []
     const identity = identityOf(attrs)
     const linecap = attrs['stroke-linecap']
@@ -247,14 +267,21 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     // to that same exact path, so nothing spills over an edge or into a hole.
     // The outline, when the region has one, is drawn in the line type.
     fill(region: FillRegion, attrs, id, layer) {
-      const paint = colour(attrs.fill) ?? ink
+      // In a medium the region's tint is its fill colour, the marks that shade it (hatching,
+      // scribbles, dots) its shading colour, and a wash's rim its region colour.
+      const asked = typeof attrs.fill === 'string' ? attrs.fill : theme.region
+      const tone = medium ? medium.paint(asked, 'fill') : undefined
+      const shading = medium ? medium.paint(asked, 'shading') : undefined
+      const rim = medium ? medium.paint(asked, 'region') : undefined
+      const paint = tone ? tone.hex : (colour(attrs.fill) ?? ink)
       // Shading in lines and dots is drawn a deeper shade of the region's
-      // colour, and a solid area at half the fill opacity: at the same
-      // opacity a filled area reads about twice as heavy as hatching.
-      const shade = deepen(paint, SHADE_DEPTH)
+      // colour (in a medium, its shading colour), and a solid area at half the
+      // fill opacity: at the same opacity a filled area reads about twice as
+      // heavy as hatching.
+      const shade = shading ? shading.hex : deepen(paint, SHADE_DEPTH)
       const identity = identityOf(attrs)
-      const opacity = style.fill.opacity
-      const areaOpacity = opacity * AREA_WEIGHT
+      const opacity = style.fill.opacity * (shading ? shading.opacity : 1)
+      const areaOpacity = style.fill.opacity * AREA_WEIGHT * (tone ? tone.opacity : 1)
       const evenOdd = attrs['fill-rule'] === 'evenodd'
       const outline = regionChains(region)
       const { marks } = FILLS[style.fill.type].draw({ outline, settings: style.fill, random: randomFor(`${id}/fill`, style.seed) })
@@ -294,9 +321,9 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
           case 'edge': {
             const edgeMarkup = cleanFill(region, {
               fill: 'none',
-              stroke: paint,
+              stroke: rim ? rim.hex : paint,
               'stroke-width': mark.width,
-              opacity: Math.min(1, mark.opacity * opacity),
+              opacity: Math.min(1, mark.opacity * style.fill.opacity * (rim ? rim.opacity : 1)),
               filter: textureUrl({ name: 'soften', strength: 0.5 }),
               ...identity,
             })
@@ -316,7 +343,8 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     },
 
     mark(at, radius, attrs, _id, layer) {
-      layers[layer].push(svgCircle(at, radius, { ...attrs, fill: colour(attrs.fill) }))
+      const point = medium && typeof attrs.fill === 'string' ? medium.paint(attrs.fill, 'point') : undefined
+      layers[layer].push(svgCircle(at, radius, { ...attrs, fill: point ? point.hex : colour(attrs.fill), ...(point && point.opacity < 1 ? { opacity: point.opacity } : {}) }))
     },
 
     // A label in the style's face and size, turned by its seeded tilt about
@@ -325,7 +353,13 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     // (Its size is already the style's: render.ts lays labels out at the
     // lettering size and asks for them at it.)
     text(at, text, attrs, id, layer) {
-      const element = svgText(at, text, { ...attrs, 'font-family': FACES[style.lettering.face], fill: colour(attrs.fill) })
+      const label = medium && typeof attrs.fill === 'string' ? medium.paint(attrs.fill, 'label') : undefined
+      const element = svgText(at, text, {
+        ...attrs,
+        'font-family': FACES[style.lettering.face],
+        fill: label ? label.hex : colour(attrs.fill),
+        ...(label && label.opacity < 1 ? { opacity: label.opacity } : {}),
+      })
       layers[layer].push(turned(element, at, id))
     },
 
@@ -335,19 +369,26 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     // (render.ts).
     notation(layout, origin, notationStyle, id, layer) {
       const inTable = /^givens\/|\/cell-\d+$/.test(id)
+      // In a medium, the table is the givens role and every other label a label.
+      const role: RoleKey = inTable ? 'givens' : 'label'
+      const text = medium ? medium.paint(notationStyle.fill, role) : undefined
+      const marks = medium && notationStyle.stroke !== undefined ? medium.paint(notationStyle.stroke, role) : undefined
       const elements = notationElements(layout, origin, {
         ...notationStyle,
         fontFamily: FACES[style.lettering.face],
-        fill: colour(notationStyle.fill) ?? notationStyle.fill,
-        stroke: notationStyle.stroke === undefined ? undefined : (colour(notationStyle.stroke) ?? notationStyle.stroke),
+        fill: text ? text.hex : (colour(notationStyle.fill) ?? notationStyle.fill),
+        stroke: notationStyle.stroke === undefined ? undefined : marks ? marks.hex : (colour(notationStyle.stroke) ?? notationStyle.stroke),
       })
-      if (inTable) layers[layer].push(...elements)
-      else layers[layer].push(turned(elements.join(''), { x: origin.x + layout.width / 2, y: origin.y }, id))
+      // The medium's opacity: one group around the whole label, outside its tilt.
+      const faint = (markup: string): string => (text && text.opacity < 1 ? `<g opacity="${fmt(text.opacity)}">${markup}</g>` : markup)
+      if (inTable) layers[layer].push(...(text && text.opacity < 1 ? [faint(elements.join(''))] : elements))
+      else layers[layer].push(faint(turned(elements.join(''), { x: origin.x + layout.width / 2, y: origin.y }, id)))
     },
 
     // The givens table's box: paper-coloured, its edge drawn in the line type.
     panel(box, attrs, id, layer) {
-      layers[layer].push(`<rect${attributes({ x: box.x, y: box.y, width: box.width, height: box.height, fill: colour(attrs.fill), stroke: 'none', 'data-object': attrs['data-object'] })}/>`)
+      const boxFill = medium && typeof attrs.fill === 'string' ? medium.paint(attrs.fill, 'givens').hex : colour(attrs.fill)
+      layers[layer].push(`<rect${attributes({ x: box.x, y: box.y, width: box.width, height: box.height, fill: boxFill, stroke: 'none', 'data-object': attrs['data-object'] })}/>`)
       const corners = [
         { x: box.x, y: box.y },
         { x: box.x + box.width, y: box.y },
@@ -355,7 +396,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
         { x: box.x, y: box.y + box.height },
       ]
       const sides = corners.map((corner, i) => polylineChain([corner, corners[(i + 1) % 4]]))
-      strokeChainsWith(sides, attrs, id, layer)
+      strokeChainsWith(sides, attrs, id, layer, 'givens')
     },
 
     // The style's paper (style/papers/), under everything, covering three
@@ -363,7 +404,8 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     paper(viewBox) {
       const laid = PAPERS[style.paper.type].draw({
         settings: style.paper,
-        tint: colour(tint) ?? tint,
+        // In a medium the paper is the medium's surface (the page's own colour, saturated).
+        tint: medium ? medium.paint(theme.background, 'fill').hex : (colour(tint) ?? tint),
         view: viewBox,
         id: (name) => `${ID}paper-${name}`,
         colour: (hex) => saturate(hex, style.colour.saturation),

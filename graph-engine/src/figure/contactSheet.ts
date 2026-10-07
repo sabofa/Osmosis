@@ -1,6 +1,7 @@
 import { EXAMPLES } from '../examples'
 import { parseSpec } from '../parser/parseSpec'
 import { LIGHT_PALETTE, type Palette } from '../render/palette'
+import { BOARD_NAMES } from '../style/theme/types'
 import { FILL_TYPES, LINE_TYPES, LETTERING_FACES, PAPER_TYPES } from '../style/tokens'
 import { PRESET_NAMES } from '../style/presets'
 import { renderFigure } from './render'
@@ -79,6 +80,9 @@ export function sheetCell(caption: string, spec: string, directives: readonly st
 
 const row = (label: string, columns: readonly string[], make: (column: string) => SheetCell) => ({ label, cells: columns.map(make) })
 
+// A board paper is drawn under the look that is drawn on it: ink on a blackboard would not read.
+const isBoard = (paper: string) => (BOARD_NAMES as readonly string[]).includes(paper)
+
 export function contactSheet(palette: Palette = LIGHT_PALETTE): SheetSection[] {
   const presets = [...PRESET_NAMES]
   return [
@@ -113,10 +117,14 @@ export function contactSheet(palette: Palette = LIGHT_PALETTE): SheetSection[] {
     },
     {
       title: 'Papers',
-      note: 'Each paper under the ink preset. Every paper covers three view boxes beyond the figure, so panning never finds an edge.',
+      note: 'Each paper under the ink preset, and each board under its own look (chalk or a marker is what is drawn on it). Every paper covers three view boxes beyond the figure, so panning never finds an edge.',
       columns: [...PAPER_TYPES],
       wrap: 3,
-      rows: [row('Triangle', PAPER_TYPES, (paper) => sheetCell(`paper · ${paper}`, exampleSpec('Triangle'), ['@style: ink', `@style-paper: ${paper}`], palette))],
+      rows: [
+        row('Triangle', PAPER_TYPES, (paper) =>
+          sheetCell(`paper · ${paper}`, exampleSpec('Triangle'), isBoard(paper) ? [`@style: ${paper}`] : ['@style: ink', `@style-paper: ${paper}`], palette)
+        ),
+      ],
     },
     {
       title: 'Lettering',

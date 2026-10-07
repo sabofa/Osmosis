@@ -45,7 +45,8 @@ describe('the contact sheet', () => {
     expect(titles).toEqual(['Presets', 'Line types', 'Fills', 'Papers', 'Lettering', 'Looseness', 'Imperfection'])
     expect(sections[1].columns).toHaveLength(6)
     expect(sections[2].columns).toHaveLength(7)
-    expect(sections[3].columns).toHaveLength(9)
+    // The nine papers, and the three boards.
+    expect(sections[3].columns).toHaveLength(12)
     expect(sections[4].columns).toHaveLength(3)
     // Roughness 0, 0.5 and 1, mirroring the Looseness section.
     expect(sections[6].columns).toEqual(['0', '0.5', '1'])

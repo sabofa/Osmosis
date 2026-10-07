@@ -6,8 +6,12 @@ import type { Look } from './tokens'
 // The numbers are a first guess, to be judged by eye in the style lab
 // (review/style-lab.html). They follow the design's table where it speaks;
 // the rest are this file's own calls, noted beside each.
+//
+// A look's COLOURS are its medium's (style/media/): the ink, pencil and marker follow the
+// theme (colour.ink and paper.tint are "theme"), and the medium fits each role's colour to the
+// theme's paper. A board look (blackboard, greenboard, whiteboard) brings its own surface.
 
-export const PRESET_NAMES = ['clean', 'ink', 'pencil', 'marker'] as const
+export const PRESET_NAMES = ['clean', 'ink', 'pencil', 'marker', 'colouredPencil', 'blackboard', 'greenboard', 'whiteboard'] as const
 export type PresetName = (typeof PRESET_NAMES)[number]
 
 export const PRESETS: Record<PresetName, Look> = {
@@ -26,7 +30,7 @@ export const PRESETS: Record<PresetName, Look> = {
     fill: { type: 'flat', angle: 45, spacing: 9, opacity: 0.44, roughness: 0 },
     paper: { type: 'clean', tint: 'theme', texture: 0, grid: 24 },
     lettering: { face: 'textbook', size: 1, tilt: 0 },
-    colour: { ink: 'theme', saturation: 1 },
+    colour: { ink: 'theme', saturation: 1, medium: 'clean' },
   },
 
   // A brush pen on good paper, in blue-black ink. The line is solid and
@@ -37,31 +41,76 @@ export const PRESETS: Record<PresetName, Look> = {
   ink: {
     line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 1, width: 1.7, variation: 0.75, taper: 0.8, grain: 0, opacity: 1 },
     fill: { type: 'hatch', angle: 45, spacing: 8, opacity: 0.65, roughness: 0.45 },
-    paper: { type: 'paper', tint: '#fbf8f0', texture: 0.45, grid: 24 },
+    paper: { type: 'paper', tint: 'theme', texture: 0.45, grid: 24 },
     lettering: { face: 'math', size: 1.05, tilt: 0 },
-    colour: { ink: '#1f2a44', saturation: 0.9 },
+    colour: { ink: 'theme', saturation: 0.9, medium: 'ink' },
   },
 
   // Graphite on rough paper, lettered by hand: two soft passes, a little
   // heavier than the base weight (each pass is thinner than the line and
-  // translucent, so two of them at 1.25 still read lighter than ink), in a
-  // near-black graphite muted to grey.
+  // translucent, so two of them at 1.25 still read lighter than ink), in the
+  // greys of graphite (a hint of each role's hue, never saturated).
   pencil: {
     line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
     fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.5 },
-    paper: { type: 'rough-paper', tint: '#f6f3ec', texture: 0.6, grid: 24 },
+    paper: { type: 'rough-paper', tint: 'theme', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
-    colour: { ink: '#232327', saturation: 0.4 },
+    colour: { ink: 'theme', saturation: 0.4, medium: 'graphite' },
   },
 
-  // A felt-tip on a ruled notebook page: blue marker, scribbled shading,
+  // A felt-tip on a ruled notebook page: saturated marker, scribbled shading,
   // hand lettering a size up (markers write big).
   marker: {
     line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 0.85 },
     fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
-    paper: { type: 'ruled', tint: '#fdfdf8', texture: 0.2, grid: 26 },
+    paper: { type: 'ruled', tint: 'theme', texture: 0.2, grid: 26 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
-    colour: { ink: '#1b3f8f', saturation: 1.1 },
+    colour: { ink: 'theme', saturation: 1.1, medium: 'marker' },
+  },
+
+  // Coloured pencil on good paper: the pencil line, a little lighter and less
+  // dusty than graphite (the wax fills the tooth), layered hatching in the
+  // role's own colour, lettered by hand. The colours are the theme's, slightly
+  // desaturated and held light (the colouredPencil medium).
+  colouredPencil: {
+    line: { type: 'pencil', looseness: 0.3, wobble: 0.3, passes: 2, width: 1.2, variation: 0.3, taper: 0.4, grain: 0.45, opacity: 0.9 },
+    fill: { type: 'hatch', angle: 50, spacing: 5.5, opacity: 0.9, roughness: 0.5 },
+    paper: { type: 'paper', tint: 'theme', texture: 0.5, grid: 24 },
+    lettering: { face: 'hand', size: 1.15, tilt: 0.5 },
+    colour: { ink: 'theme', saturation: 1, medium: 'colouredPencil' },
+  },
+
+  // Chalk on a blackboard: broken, dusty lines in pastel chalk, the side of
+  // the chalk for shading (a scribble), chalk lettering a size up. Everything
+  // drawn is chalk, an author's own colours too (the chalk medium), on the
+  // board whatever the app's light or dark.
+  blackboard: {
+    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 0.95 },
+    fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
+    paper: { type: 'blackboard', tint: 'theme', texture: 0.5, grid: 24 },
+    lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
+    colour: { ink: 'theme', saturation: 1, medium: 'chalk' },
+  },
+
+  // The blackboard's look on a green board (the same chalk: it keeps its
+  // contrast against both).
+  greenboard: {
+    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 0.95 },
+    fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
+    paper: { type: 'greenboard', tint: 'theme', texture: 0.5, grid: 24 },
+    lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
+    colour: { ink: 'theme', saturation: 1, medium: 'chalk' },
+  },
+
+  // A dry-erase marker on a whiteboard. Until the whiteboard brushes arrive (a
+  // chisel-tip outline and a back-and-forth fill-in), the marker line and the
+  // scribble stand in for them (the design's named placeholders).
+  whiteboard: {
+    line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.25, taper: 0, grain: 0.1, opacity: 0.95 },
+    fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
+    paper: { type: 'whiteboard', tint: 'theme', texture: 0.3, grid: 24 },
+    lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
+    colour: { ink: 'theme', saturation: 1, medium: 'whiteboard' },
   },
 }
 

@@ -1,8 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../parser/parseSpec'
-import { DARK_PALETTE, LIGHT_PALETTE } from '../render/palette'
+import { resolveColor } from '../parser/colors'
+import { DARK_PALETTE, LIGHT_PALETTE, type Palette } from '../render/palette'
 import { EXAMPLES } from '../examples'
+import { toOklch } from '../style/color'
+import { MEDIA } from '../style/media'
+import { defaultTheme, fromColours } from '../style/theme/adapter'
+import { contrastRatio, drawnContrast } from '../style/theme/contrast'
+import type { MediumName, ThemeInput } from '../style/theme/types'
+import { cssColor } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { renderFigure } from './render'
 
@@ -28,6 +35,10 @@ const render = (spec: string) => {
   expect(parsed.errors).toEqual([])
   return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
 }
+
+// The angle between two hues, in degrees (0 to 180), and the OKLCH hue of a colour name.
+const hueGap = (a: number, b: number) => Math.abs(((a - b + 540) % 360) - 180)
+const hueOfName = (name: string) => toOklch(cssColor(resolveColor(name))).h
 
 // Every drawn element inside one of the figure's layers, with its tag and
 // its identity attributes.
@@ -300,14 +311,16 @@ describe('a styled page', () => {
       const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
       expect(Math.max(r, g, b) - Math.min(r, g, b), hex).toBeLessThanOrEqual(1)
     }
-    // At 1 the author's colours stand exactly as the clean figure draws them.
+    // At 1 the author's colours are what the ink medium makes of them (it fits each to its own
+    // range and to the paper, and leaves its hue): not grey, and still red and blue.
     const vivid = render(spec.replace('@style-saturation: 0', '@style-saturation: 1')).svg
-    const clean = render(figure.join('\n')).svg
-    const polygon = /<line[^>]*stroke="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(clean)![1]
-    const region = /<path[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="1"/.exec(clean)![1]
     // Ink draws every line as a filled outline, so the polygon's colour is a fill.
-    expect(vivid).toMatch(new RegExp(`<polygon[^>]*fill="${polygon}"[^>]*data-statement="0"`))
-    expect(vivid).toContain(`fill="${region}"`)
+    const polygon = /<polygon[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(vivid)![1]
+    const region = /<path[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="1"/.exec(vivid)![1]
+    for (const [hex, named] of [[polygon, 'red'], [region, 'blue']] as const) {
+      expect(toOklch(hex).c, `${named} ${hex}`).toBeGreaterThan(0.03)
+      expect(hueGap(toOklch(hex).h, hueOfName(named)), `${named} ${hex}`).toBeLessThanOrEqual(25)
+    }
   })
 
   it('lays the paper under everything, generously', () => {
@@ -388,11 +401,20 @@ describe('a styled figure in its host', () => {
     return renderFigure(parsed.statements, parsed.config, palette).svg
   }
 
-  it('resolves colours against its own light paper in a dark theme', () => {
-    // The ink preset lays off-white paper in either theme, so it draws the
-    // same figure in either: a dark-theme black is not drawn mid-grey on it.
+  // The ink, pencil and marker follow the theme through their medium. They used to lay an off-white
+  // paper in either theme and draw the same figure in both; now a dark theme is a dark paper, with
+  // a medium's own light ink on it, and an author's "black" comes out in it too, legible on its paper.
+  it('follows the theme through its medium: a dark theme is a dark paper and a light ink', () => {
+    const paperOf = (svg: string) => /<g data-layer="paper"><rect[^>]*fill="(#[0-9a-f]{6})"/.exec(svg)![1]
+    const blackOf = (svg: string) => /<(?:polygon|path)[^>]*(?:fill|stroke)="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(svg)![1]
     for (const preset of ['ink', 'pencil', 'marker']) {
-      expect(figure(`@style: ${preset}`, DARK_PALETTE), preset).toBe(figure(`@style: ${preset}`, LIGHT_PALETTE))
+      const light = figure(`@style: ${preset}`, LIGHT_PALETTE)
+      const dark = figure(`@style: ${preset}`, DARK_PALETTE)
+      expect(dark, preset).not.toBe(light)
+      expect(toOklch(paperOf(light)).l, preset).toBeGreaterThan(0.8)
+      expect(toOklch(paperOf(dark)).l, preset).toBeLessThan(0.3)
+      expect(contrastRatio(blackOf(light), paperOf(light)), `${preset} in light`).toBeGreaterThanOrEqual(3)
+      expect(contrastRatio(blackOf(dark), paperOf(dark)), `${preset} in dark`).toBeGreaterThanOrEqual(3)
     }
   })
 
@@ -400,5 +422,252 @@ describe('a styled figure in its host', () => {
     for (const paper of ['@style-paper: none', '@style-tint: theme']) {
       expect(figure(`@style: ink\n${paper}`, DARK_PALETTE), paper).not.toBe(figure(`@style: ink\n${paper}`, LIGHT_PALETTE))
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The medium: every role a figure draws takes its colour from the style's medium
+// ---------------------------------------------------------------------------
+
+describe('a figure in a medium', () => {
+  // A construction that draws every role: a line, an auxiliary (dashed) line, a measure, a label, a
+  // point, a mark (the right angle), the givens table, a fill, and an author's own colours (a red
+  // segment, a blue polygon, a green fill).
+  const FIGURE = [
+    '@mode: figure',
+    '@angle: degrees',
+    '@givens: right',
+    'triangle ABC: angle A = 90, AB = 6, AC = 8',
+    'D = foot A to B-C',
+    'segment: A-D dashed',
+    'right-angle: B-A-C',
+    'segment: B-C color: red',
+    'polygon: P(11,0), Q(14,0), R(12,3) color: blue',
+    'fill: P-Q-R color: green',
+    'label: AB = 6',
+    'given: AB = 6',
+    'find: BC',
+  ].join('\n')
+  const LINE = ['@mode: figure', 'A = (0, 0)', 'B = (4, 0)', 'segment: A-B'].join('\n')
+  const RED = `${LINE} color: red`
+
+  const draw = (head: string, options: { palette?: Palette; theme?: ThemeInput; body?: string } = {}): string => {
+    const parsed = parseSpec(`${head}\n${options.body ?? FIGURE}`)
+    expect(parsed.errors).toEqual([])
+    const result = renderFigure(parsed.statements, parsed.config, options.palette ?? LIGHT_PALETTE, undefined, options.theme)
+    expect(result.errors).toEqual([])
+    return result.svg
+  }
+
+  // One layer's markup, the colours in it, and the colour of the paper under everything.
+  const layerOf = (svg: string, name: string): string => {
+    const start = svg.indexOf(`<g data-layer="${name}"`)
+    const next = svg.indexOf('<g data-layer="', start + 1)
+    return svg.slice(start, next < 0 ? undefined : next)
+  }
+  const coloursIn = (markup: string): string[] => [...new Set([...markup.matchAll(/(?:fill|stroke)="(#[0-9a-f]{6})"/g)].map((m) => m[1]))]
+  const paperOf = (svg: string) => /<g data-layer="paper"><rect[^>]*fill="(#[0-9a-f]{6})"/.exec(svg)![1]
+  const LAYERS = ['regions', 'auxiliary', 'primary', 'marks', 'points', 'labels'] as const
+  const palette = (mode: 'light' | 'dark') => (mode === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
+
+  // On a board, everything that is drawn is chalk: light, and legible against the board.
+  for (const board of ['blackboard', 'greenboard'] as const) {
+    for (const mode of ['light', 'dark'] as const) {
+      it(`draws every role on a ${board} in light chalk that reads against it, in ${mode}`, () => {
+        const theme = defaultTheme(mode)
+        const svg = draw(`@style: ${board}`, { palette: palette(mode), theme })
+        const surface = theme.boards[board]
+        expect(paperOf(svg)).toBe(surface)
+        for (const layer of LAYERS) {
+          const found = coloursIn(layerOf(svg, layer)).filter((hex) => hex !== surface)
+          expect(found.length, layer).toBeGreaterThan(0)
+          for (const hex of found) {
+            expect(toOklch(hex).l, `${layer} ${hex}`).toBeGreaterThanOrEqual(0.75)
+            expect(contrastRatio(hex, surface), `${layer} ${hex}`).toBeGreaterThanOrEqual(4.5)
+          }
+        }
+      })
+    }
+  }
+
+  it('draws every role on a whiteboard in a dark marker that reads against the board', () => {
+    const theme = defaultTheme('light')
+    const svg = draw('@style: whiteboard', { theme })
+    const surface = theme.boards.whiteboard
+    expect(paperOf(svg)).toBe(surface)
+    for (const layer of LAYERS) {
+      const found = coloursIn(layerOf(svg, layer)).filter((hex) => hex !== surface)
+      expect(found.length, layer).toBeGreaterThan(0)
+      for (const hex of found) {
+        expect(toOklch(hex).l, `${layer} ${hex}`).toBeLessThanOrEqual(0.6)
+        expect(contrastRatio(hex, surface), `${layer} ${hex}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  // The media's floors hold for the figure as drawn, in either mode: a stroke of each role at the
+  // medium's opacity keeps its contrast with its paper.
+  const FLOORS: [string, MediumName, number][] = [
+    ['ink', 'ink', 7],
+    ['pencil', 'graphite', 4.5],
+    ['colouredPencil', 'colouredPencil', 3],
+    ['marker', 'marker', 3],
+  ]
+  for (const [preset, medium, floor] of FLOORS) {
+    for (const mode of ['light', 'dark'] as const) {
+      it(`keeps the ${medium} medium's contrast with its paper, in ${mode}`, () => {
+        const theme = defaultTheme(mode)
+        const svg = draw(`@style: ${preset}`, { palette: palette(mode), theme })
+        const paper = paperOf(svg)
+        const opacity = MEDIA[medium].colour(theme, { key: 'line' }, {}).opacity
+        // Lines, points and labels: the layers a reader has to read. (Fills are a tint, laid thin.)
+        for (const layer of ['auxiliary', 'primary', 'marks', 'points', 'labels'] as const) {
+          for (const hex of coloursIn(layerOf(svg, layer)).filter((colour) => colour !== paper)) {
+            expect(drawnContrast(hex, paper, opacity), `${preset} ${layer} ${hex}`).toBeGreaterThanOrEqual(floor - 0.1)
+          }
+        }
+      })
+    }
+  }
+
+  // An author's own colour is a base colour like any other: the medium fits it.
+  it('draws an author’s own colour on a blackboard as a pastel chalk colour of the same hue', () => {
+    const svg = draw('@style: blackboard', { body: RED })
+    const board = paperOf(svg)
+    const found = coloursIn(layerOf(svg, 'primary')).filter((hex) => hex !== board)
+    expect(found).toHaveLength(1)
+    const { l, c, h } = toOklch(found[0])
+    expect(l).toBeGreaterThanOrEqual(0.8)
+    expect(c).toBeGreaterThan(0.03)
+    expect(hueGap(h, hueOfName('red'))).toBeLessThanOrEqual(25)
+  })
+
+  it('fits an author’s own colour to every medium, and keeps its hue', () => {
+    const red = hueOfName('red')
+    for (const [preset, test] of [
+      ['blackboard', (l: number) => l >= 0.8],
+      ['greenboard', (l: number) => l >= 0.8],
+      ['whiteboard', (l: number) => l <= 0.6],
+      ['ink', (l: number) => l <= 0.5],
+      ['marker', (l: number) => l >= 0.4 && l <= 0.7],
+    ] as const) {
+      const svg = draw(`@style: ${preset}`, { body: RED })
+      const board = paperOf(svg)
+      const [hex] = coloursIn(layerOf(svg, 'primary')).filter((colour) => colour !== board)
+      const { l, c, h } = toOklch(hex)
+      expect(test(l), `${preset} ${hex}`).toBe(true)
+      expect(c, `${preset} ${hex}`).toBeGreaterThan(0.03)
+      expect(hueGap(h, red), `${preset} ${hex}`).toBeLessThanOrEqual(25)
+    }
+  })
+
+  // A board is the same in light and in dark, and so is what is drawn on it, author's colours included.
+  const C = { surface: '#f7f3ea', paper: '#f7f3ea', ink: '#1b1b2f', muted: '#66667a', accent: '#2f6fb0' }
+  const D = { surface: '#14141c', paper: '#14141c', ink: '#e8e8f4', muted: '#9a9ab0', accent: '#6fa0e0' }
+  for (const preset of ['blackboard', 'greenboard', 'whiteboard']) {
+    it(`draws a ${preset} byte for byte the same in the light and the dark`, () => {
+      // With no theme, the palette's mode picks the default theme.
+      expect(draw(`@style: ${preset}`, { palette: DARK_PALETTE })).toBe(draw(`@style: ${preset}`, { palette: LIGHT_PALETTE }))
+      // With the default theme of each mode.
+      expect(draw(`@style: ${preset}`, { palette: DARK_PALETTE, theme: defaultTheme('dark') })).toBe(
+        draw(`@style: ${preset}`, { palette: LIGHT_PALETTE, theme: defaultTheme('light') })
+      )
+      // With a custom theme that says what its light mode is.
+      expect(draw(`@style: ${preset}`, { palette: DARK_PALETTE, theme: fromColours({ mode: 'dark', colours: D, lightColours: C }) })).toBe(
+        draw(`@style: ${preset}`, { palette: LIGHT_PALETTE, theme: fromColours({ mode: 'light', colours: C }) })
+      )
+    })
+  }
+
+  it('draws in the default theme of its mode when it is given no theme', () => {
+    for (const preset of ['ink', 'pencil', 'marker', 'colouredPencil', 'blackboard', 'greenboard', 'whiteboard']) {
+      for (const mode of ['light', 'dark'] as const) {
+        expect(draw(`@style: ${preset}`, { palette: palette(mode) }), `${preset} ${mode}`).toBe(draw(`@style: ${preset}`, { palette: palette(mode), theme: defaultTheme(mode) }))
+      }
+    }
+  })
+
+  it('draws a paper medium on the theme’s own paper, fitted to it', () => {
+    const cream = fromColours({ colours: { surface: '#f2e8cf', paper: '#f2e8cf', ink: '#2b2118' } })
+    const svg = draw('@style: colouredPencil', { theme: cream })
+    expect(paperOf(svg)).toBe('#f2e8cf')
+    const slate = fromColours({ mode: 'dark', colours: { surface: '#1d2a26', paper: '#1d2a26', ink: '#e6efe9' } })
+    const dark = draw('@style: colouredPencil', { theme: slate, palette: DARK_PALETTE })
+    expect(paperOf(dark)).toBe('#1d2a26')
+    for (const [markup, paper] of [[svg, '#f2e8cf'], [dark, '#1d2a26']]) {
+      for (const hex of coloursIn(layerOf(markup, 'primary')).filter((colour) => colour !== paper)) expect(contrastRatio(hex, paper), hex).toBeGreaterThanOrEqual(3)
+    }
+    expect(toOklch(coloursIn(layerOf(dark, 'primary'))[0]).l).toBeGreaterThan(toOklch(coloursIn(layerOf(svg, 'primary'))[0]).l)
+  })
+
+  // Paper and medium agree: ink drawn on a board, or on a paper tinted dark, is fitted to it, not to the theme's paper.
+  it('fits a paper medium to the board or the tint it is drawn on', () => {
+    const board = draw('@style: colouredPencil\n@style-paper: blackboard', { body: LINE })
+    expect(paperOf(board)).toBe(defaultTheme('light').boards.blackboard)
+    for (const hex of coloursIn(layerOf(board, 'primary')).filter((colour) => colour !== paperOf(board))) expect(contrastRatio(hex, paperOf(board)), hex).toBeGreaterThanOrEqual(3)
+    // Ink too: its saturation moves the board a hair, and it still reads on it at ink's own bar.
+    const ink = draw('@style: ink\n@style-paper: blackboard', { body: LINE })
+    for (const hex of coloursIn(layerOf(ink, 'primary')).filter((colour) => colour !== paperOf(ink))) expect(contrastRatio(hex, paperOf(ink)), hex).toBeGreaterThanOrEqual(7)
+    const tinted = draw('@style: colouredPencil\n@style-tint: 1d1d2b', { body: LINE })
+    expect(paperOf(tinted)).toBe('#1d1d2b')
+    for (const hex of coloursIn(layerOf(tinted, 'primary')).filter((colour) => colour !== paperOf(tinted))) expect(contrastRatio(hex, paperOf(tinted)), hex).toBeGreaterThanOrEqual(3)
+  })
+
+  // A medium lays a stroke at its own opacity (clean's is full, so it writes none).
+  it('lays what it draws at the medium’s opacity', () => {
+    for (const [preset, medium] of [['blackboard', 'chalk'], ['pencil', 'graphite'], ['whiteboard', 'whiteboard']] as const) {
+      const opacity = MEDIA[medium].colour(defaultTheme('light'), { key: 'point' }, {}).opacity
+      expect(opacity, medium).toBeLessThan(1)
+      const svg = draw(`@style: ${preset}`)
+      expect(layerOf(svg, 'points'), preset).toMatch(new RegExp(`<circle[^>]*opacity="${opacity}"`))
+      expect(layerOf(svg, 'labels'), preset).toMatch(new RegExp(`<text[^>]*opacity="${opacity}"|<g opacity="${opacity}">`))
+    }
+    expect(layerOf(draw('@style: ink'), 'points')).not.toContain('opacity=')
+  })
+
+  // A medium's settings are settings of the stack: "@style-set" reaches the pen.
+  it('reads the medium’s settings from the stack', () => {
+    const colourOf = (head: string, body: string) => {
+      const svg = draw(head, { body })
+      return toOklch(coloursIn(layerOf(svg, 'primary')).filter((hex) => hex !== paperOf(svg))[0])
+    }
+    expect(colourOf('@style: blackboard\n@style-set: media.chalk.chroma 0.7', RED).c).toBeGreaterThan(colourOf('@style: blackboard\n@style-set: media.chalk.chroma 0.5', RED).c)
+    expect(colourOf('@style: colouredPencil\n@style-set: media.colouredPencil.chroma 1.2', RED).c).toBeGreaterThan(colourOf('@style: colouredPencil\n@style-set: media.colouredPencil.chroma 0.4', RED).c)
+    expect(colourOf('@style: pencil\n@style-set: media.graphite.hint 0.05', RED).c).toBeGreaterThan(colourOf('@style: pencil\n@style-set: media.graphite.hint 0', RED).c)
+    // An ink the style names as mid grey is pulled toward the paper's opposite until it keeps the contrast asked for.
+    expect(colourOf('@style: ink\n@style-ink: 808080\n@style-set: media.ink.contrast 15', LINE).l).toBeLessThan(colourOf('@style: ink\n@style-ink: 808080\n@style-set: media.ink.contrast 4.5', LINE).l)
+    expect(colourOf('@style: ink\n@style-set: media.ink.chroma 1.5', RED).c).toBeGreaterThan(colourOf('@style: ink\n@style-set: media.ink.chroma 0.3', RED).c)
+  })
+
+  it('starts a medium from the ink the style names, and still fits it', () => {
+    const svg = draw('@style: blackboard\n@style-ink: 2f5fd0', { body: LINE })
+    const [hex] = coloursIn(layerOf(svg, 'primary')).filter((colour) => colour !== paperOf(svg))
+    const { l, c, h } = toOklch(hex)
+    // Chalk's lightness range starts at 0.80; the 8-bit colour lands a hair either side of it.
+    expect(l).toBeGreaterThanOrEqual(0.79)
+    expect(c).toBeGreaterThan(0.03)
+    expect(hueGap(h, toOklch('#2f5fd0').h)).toBeLessThanOrEqual(25)
+  })
+
+  it('takes the style’s saturation on top of the medium’s colour', () => {
+    const grey = draw('@style: blackboard\n@style-saturation: 0', { body: RED })
+    for (const hex of coloursIn(layerOf(grey, 'primary')).filter((colour) => colour !== paperOf(grey))) expect(toOklch(hex).c, hex).toBeLessThan(0.01)
+  })
+
+  it('is deterministic, and keeps every element’s statement and object', () => {
+    for (const preset of ['colouredPencil', 'blackboard', 'greenboard', 'whiteboard']) {
+      const spec = `@style: ${preset}`
+      expect(draw(spec)).toBe(draw(spec))
+      const identities = (svg: string) => [...new Set(elements(svg, GEOMETRY).map((e) => `${e.statement}/${e.object}`))].sort()
+      expect(identities(draw(spec)), preset).toEqual(identities(draw('@style: clean')))
+    }
+  })
+
+  // A look in the clean medium is drawn in the host's own colours, as it always was: clean with one
+  // other setting changed keeps the palette's ink exactly.
+  it('leaves the clean medium to the host’s palette', () => {
+    const svg = draw('@style-line: pencil', { body: LINE })
+    expect(svg).toContain(`stroke="${cssColor(LIGHT_PALETTE.axis)}"`)
+    expect(draw('@style-line: pencil', { body: LINE, palette: DARK_PALETTE })).toContain(`stroke="${cssColor(DARK_PALETTE.axis)}"`)
   })
 })
