@@ -72,7 +72,7 @@ describe('each paper structure', () => {
       it('is a tone, not a pattern: the lightness varies a little, the colour hardly at all', () => {
         const L = channel(tileOf(type), 0)
         expect(L.sd).toBeGreaterThan(0.002)
-        expect(L.sd).toBeLessThan(0.03)
+        expect(L.sd).toBeLessThan(0.04)
         expect(Math.abs(L.min)).toBeLessThan(0.4)
         expect(Math.abs(L.max)).toBeLessThan(0.4)
         expect(channel(tileOf(type), 1).sd).toBeLessThan(0.01)

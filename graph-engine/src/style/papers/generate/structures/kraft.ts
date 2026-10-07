@@ -7,27 +7,27 @@ import { buildGrain } from './grain'
 import type { GrainSpec } from './grain'
 
 const SPEC: GrainSpec = {
-  tooth: { cells: 200, octaves: 2, amount: 0.008 },
-  cloud: { cells: 3, octaves: 3, amount: 0.014 },
+  tooth: { cells: 200, octaves: 2, amount: 0.012 },
+  cloud: { cells: 3, octaves: 3, amount: 0.02 },
   fibres: {
-    count: 1500,
-    len: [25, 150],
-    curl: 0.1,
-    wid: [0.6, 1.4],
-    alpha: [0.1, 0.22],
+    count: 3200,
+    len: [30, 190],
+    curl: 0.16,
+    wid: [0.7, 1.7],
+    alpha: [0.22, 0.45],
     colours: [
-      { delta: [0.07, 0.002, 0.016], weight: 2 },
-      { delta: [-0.11, 0.006, 0.022], weight: 2 },
+      { delta: [0.09, 0.003, 0.02], weight: 2 },
+      { delta: [-0.15, 0.008, 0.028], weight: 2 },
     ],
   },
   flecks: {
-    count: 90,
-    radius: [0.7, 2],
+    count: 150,
+    radius: [0.8, 2.6],
     stretch: [0.35, 1],
     alpha: [0.55, 1],
     delta: [
-      [-0.2, 0.008, 0.02],
-      [-0.3, 0.012, 0.03],
+      [-0.26, 0.01, 0.025],
+      [-0.38, 0.015, 0.035],
     ],
   },
   heightSd: 0.06,

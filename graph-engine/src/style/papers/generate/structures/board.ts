@@ -36,7 +36,7 @@ export function buildBoard(type: GeneratedPaperType, size: number, seed: string)
     cx: scaleCells(2, size),
     cy: scaleCells(6, size),
     octaves: 3,
-    warp: { amp: 55 * s, cx: scaleCells(2, size) },
+    warp: { amp: 90 * s, cx: scaleCells(2, size) },
     grid: 128,
   })
   const wipeFull = upsamplePeriodic(wipe.data, wipe.w, wipe.h, size, size)
@@ -44,7 +44,7 @@ export function buildBoard(type: GeneratedPaperType, size: number, seed: string)
   const streakFull = upsamplePeriodic(streaks.data, streaks.w, streaks.h, size, size)
   for (let i = 0; i < wipeFull.length; i++) {
     const patch = smoothstep(0.15, 1.5, wipeFull[i])
-    const streak = 0.78 + 0.22 * Math.max(-1, Math.min(1, streakFull[i]))
+    const streak = 0.7 + 0.3 * Math.max(-1, Math.min(1, streakFull[i]))
     off[3 * i] += HAZE_TOP * patch * streak
   }
 
