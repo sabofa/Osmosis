@@ -10,6 +10,7 @@ import type { LineSettings, Style } from '../style/tokens'
 import { FILLS } from '../style/fills'
 import { FACES, tiltFor } from '../style/lettering'
 import { PAPERS } from '../style/papers'
+import { defaultTheme } from '../style/theme/adapter'
 import { drawnContrast } from '../style/theme/contrast'
 import type { RoleKey, ThemeInput } from '../style/theme/types'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
@@ -500,6 +501,8 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
         id: (name) => `${ID}paper-${name}`,
         colour: (hex) => saturate(hex, style.colour.saturation),
         random: randomFor('paper', style.seed),
+        theme: themeInput ?? defaultTheme(onDark ? 'dark' : 'light'),
+        seed: style.seed,
       })
       paperDefs = laid.defs
       paperMarkup = laid.background.length > 0 ? `<g data-layer="paper">${laid.background.join('')}</g>` : ''

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { randomFor } from '../random'
 import { PAPER_TYPES, type PaperSettings, type PaperType } from '../tokens'
+import { defaultTheme } from '../theme/adapter'
 import { PAPERS } from './index'
 
 // The nine papers: each lays its background under everything, covering far
@@ -16,6 +17,8 @@ const lay = (type: PaperType, overrides: Partial<PaperSettings> = {}) =>
     id: (name) => `P-${name}`,
     colour: (hex) => hex,
     random: randomFor('paper', 0),
+    theme: defaultTheme('light'),
+    seed: 0,
   })
 
 const number = (markup: string, attribute: string) => Number(new RegExp(`\\b${attribute}="([^"]+)"`).exec(markup)?.[1])

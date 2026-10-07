@@ -1,6 +1,7 @@
 import type { Box } from '../markup'
 import type { Random } from '../random'
 import type { PaperSettings } from '../tokens'
+import type { ThemeInput } from '../theme/types'
 
 // The contract every paper keeps.
 //
@@ -24,6 +25,9 @@ export interface PaperInput {
   // saturation.
   colour: (hex: string) => string
   random: Random
+  // The theme the paper's colours come from (a board's colour, the rulings' lines), and the style's seed.
+  theme: ThemeInput
+  seed: number
 }
 
 export interface PaperOutput {
