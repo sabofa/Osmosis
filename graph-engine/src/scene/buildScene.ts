@@ -7,7 +7,10 @@ import type { FunctionTable } from '../parser/evalExpr'
 import type { Expr, Statement } from '../parser/types'
 import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
 import { buildPlotScope } from '../plot/scope'
-import { traceImplicitCurve, traceImplicitRegion } from '../render/marchingSquares'
+import { sampleImplicit } from '../plot/implicit/implicit'
+import { comparisonsOf } from '../plot/implicit/region'
+import { sampleRegion } from '../plot/implicit/regions'
+import type { Sampled, StatementOptions } from '../plot/implicit/types'
 import { chainOf } from './chains'
 import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
 import { buildConstructions } from './geometry/buildConstructions'
@@ -265,116 +268,41 @@ function buildFeaturePoints(
   }))
 }
 
-// The "if" clause of an implicit curve or a region, compiled over x and y. The
-// scene is filtered by it after tracing — a segment is kept by its midpoint, a
-// triangle by its centroid — which is the interim rule P3 replaces with exact
-// clipping to the condition.
-type KeepAt = (x: number, y: number) => boolean
-
-function keepWhere(where: Expr | undefined, scope: MathScope): KeepAt | null {
-  if (!where) return null
-  const test = compileScalar(where, ['x', 'y'], scope)
-  return (x, y) => test(x, y) === 1
+// An implicit curve or a region through the quadtree (plot/implicit), and what the scene says of the
+// result, as sampleStatement says it for the curves: "undefined everywhere in view" when it was tested and
+// defined nowhere; "not drawn" when something in view is blank (the budget's, else not certified); "drawn
+// coarsely" when capped or leaves were left out and something drew, at FULL only (a coarse pass would flash
+// it on every drag frame). A view the sampler cannot work in says nothing here.
+function sayImplicit(sampled: Sampled, what: 'curve' | 'region', line: number, ctx: CurveContext): SceneObject[] {
+  ctx.stats.points += sampled.stats.points
+  ctx.stats.intervals += sampled.stats.intervals
+  if (sampled.tested && !sampled.defined) throw new Error(`this ${what} is undefined everywhere in view`)
+  if (sampled.blankInView) {
+    if (sampled.capped) ctx.errors.push({ line, message: NOT_DRAWN_NOTE })
+    else ctx.errors.push({ line, message: NOT_CERTIFIED_NOTE })
+  } else if ((sampled.capped || sampled.leftOut > 0) && ctx.quality === 'full' && sampled.drawnInView && !sampled.badView) {
+    ctx.errors.push({ line, message: BUDGET_NOTE })
+  }
+  return sampled.objects
 }
 
-function traceImplicit(statement: Statement & { kind: 'implicit' }, bounds: Bounds, resolution: number, scope: MathScope): SceneObject[] {
-  const left = compileScalar(statement.left, ['x', 'y'], scope)
-  const right = compileScalar(statement.right, ['x', 'y'], scope)
-  const keepAt = keepWhere(statement.where, scope)
-  const f = (x: number, y: number) => left(x, y) - right(x, y)
-  const raw = traceImplicitCurve(f, bounds, resolution)
-  const pairs: [Vec2, Vec2][] = []
-  for (const [from, to] of raw) {
-    if (!keepAt || keepAt((from.x + to.x) / 2, (from.y + to.y) / 2)) pairs.push([from, to])
-  }
-  if (pairs.length === 0) return []
-  return [{ kind: 'segments', pairs, color: statement.color }]
+function sampleImplicitStatement(statement: Statement & { kind: 'implicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const sampled = sampleImplicit(statement.left, statement.right, statement.where ?? null, ctx.view, ctx.scope, optionsOf(statement.color, statementIndex, ctx))
+  return sayImplicit(sampled, 'curve', line, ctx)
 }
 
-// Fills the inequality and draws its boundary in one marching-squares pass
-// (see render/marchingSquares.ts's traceImplicitRegion) — the fill's edge is
-// built from the exact same per-cell corner/crossing math as the boundary
-// line, so they can't visibly disagree the way an independently-resolved
-// coarse mask could.
-function buildRegion(statement: Statement & { kind: 'region' }, bounds: Bounds, resolution: number, scope: MathScope): SceneObject[] {
-  const left = compileScalar(statement.left, ['x', 'y'], scope)
-  const right = compileScalar(statement.right, ['x', 'y'], scope)
-  const keepAt = keepWhere(statement.where, scope)
-  const flip = statement.op === '<' || statement.op === '<='
-  const f = (x: number, y: number) => {
-    const d = left(x, y) - right(x, y)
-    // traceImplicitRegion fills where f > 0; for ">"/">=" that's already
-    // "left > right" (d > 0), for "<"/"<=" flip the sign so "inside" still
-    // means "the inequality holds".
-    return flip ? -d : d
-  }
-  const traced = traceImplicitRegion(f, bounds, resolution)
-  const { triangles, boundarySegments } = filterTraced(traced.triangles, traced.boundarySegments, keepAt)
-  const dashed = statement.op === '<' || statement.op === '>'
-  const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'triangles', triangles, color: statement.color })
-  if (boundarySegments.length > 0) {
-    const pairs: [Vec2, Vec2][] = boundarySegments.map(([from, to]) => [from, to])
-    objects.push({ kind: 'segments', pairs, dashed, color: statement.color })
-  }
-  return objects
+function optionsOf(color: string | null, statement: number, ctx: CurveContext): StatementOptions {
+  return { statement, color, quality: ctx.quality, budget: ctx.budget }
 }
 
-// Applies an "if" clause to a traced region: a triangle stays when the clause
-// holds at its centroid, a boundary edge when it holds at its midpoint.
-function filterTraced(triangles: Vec2[], boundarySegments: Vec2[][], keepAt: KeepAt | null): { triangles: Vec2[]; boundarySegments: Vec2[][] } {
-  if (!keepAt) return { triangles, boundarySegments }
-  const keptTriangles: Vec2[] = []
-  for (let i = 0; i + 2 < triangles.length; i += 3) {
-    const a = triangles[i]
-    const b = triangles[i + 1]
-    const c = triangles[i + 2]
-    if (keepAt((a.x + b.x + c.x) / 3, (a.y + b.y + c.y) / 3)) keptTriangles.push(a, b, c)
-  }
-  const keptSegments = boundarySegments.filter(([from, to]) => keepAt((from.x + to.x) / 2, (from.y + to.y) / 2))
-  return { triangles: keptTriangles, boundarySegments: keptSegments }
+function sampleRegionStatement(condition: Expr, color: string | null, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const sampled = sampleRegion(condition, comparisonsOf(condition), ctx.view, ctx.scope, optionsOf(color, statementIndex, ctx))
+  return sayImplicit(sampled, 'region', line, ctx)
 }
 
-// A chained comparison ("lo op1 mid op2 hi", already normalised in
-// parseStatement.ts so lowOp/highOp are always "<" or "<=") is the
-// intersection of "mid > lo" and "mid < hi". Both hold exactly where
-// min(mid - lo, hi - mid) > 0, so feeding that single function to
-// traceImplicitRegion gets the fill and the boundary in one marching-squares
-// pass, same as the plain single-inequality case above.
-function buildRegionChain(statement: Statement & { kind: 'regionChain' }, bounds: Bounds, resolution: number, scope: MathScope): SceneObject[] {
-  const lowFn = compileScalar(statement.low, ['x', 'y'], scope)
-  const midFn = compileScalar(statement.mid, ['x', 'y'], scope)
-  const highFn = compileScalar(statement.high, ['x', 'y'], scope)
-  const keepAt = keepWhere(statement.where, scope)
-  const f = (x: number, y: number) => Math.min(midFn(x, y) - lowFn(x, y), highFn(x, y) - midFn(x, y))
-  const traced = traceImplicitRegion(f, bounds, resolution)
-  const { triangles, boundarySegments } = filterTraced(traced.triangles, traced.boundarySegments, keepAt)
-  const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'triangles', triangles, color: statement.color })
-
-  if (boundarySegments.length > 0) {
-    // Strictness can differ per side (e.g. "-2 <= x < 5"), so each traced
-    // edge is classified on its own: evaluate which constraint is tighter
-    // (smaller of mid-lo / hi-mid) at the segment's midpoint — that's the
-    // constraint whose boundary this edge actually lies on — and dash it
-    // according to that constraint's own operator rather than one uniform
-    // style for the whole boundary.
-    const dashedPairs: [Vec2, Vec2][] = []
-    const solidPairs: [Vec2, Vec2][] = []
-    for (const [from, to] of boundarySegments) {
-      const mx = (from.x + to.x) / 2
-      const my = (from.y + to.y) / 2
-      const mid = midFn(mx, my)
-      const lowGap = mid - lowFn(mx, my)
-      const highGap = highFn(mx, my) - mid
-      const lowActive = lowGap <= highGap
-      const strict = lowActive ? statement.lowOp === '<' : statement.highOp === '<'
-      ;(strict ? dashedPairs : solidPairs).push([from, to])
-    }
-    if (dashedPairs.length > 0) objects.push({ kind: 'segments', pairs: dashedPairs, dashed: true, color: statement.color })
-    if (solidPairs.length > 0) objects.push({ kind: 'segments', pairs: solidPairs, dashed: false, color: statement.color })
-  }
-  return objects
+// "left op right [if where]" is the one condition, "low lowOp mid highOp high" the two joined with `and`.
+function withWhere(condition: Expr, where: Expr | undefined): Expr {
+  return where ? and(condition, where) : condition
 }
 
 // One short tick per grid point, angled by the local slope — a direction
@@ -564,6 +492,7 @@ export function buildScene(
   const scope = plotScope.scope
   errors.push(...plotScope.errors)
   const namedPoints = collectNamedPoints(statements, scope)
+  void resolution // no statement reads the marching-squares resolution now; the parameter goes with the later subtasks
   const curves: CurveContext = { view: viewOf(bounds, options), scope, config, quality: options?.quality ?? 'full', budget: options?.budget, stats, errors }
 
   // Geometry constructions resolve in one pass up front, in source order (see
@@ -603,11 +532,12 @@ export function buildScene(
       } else if (statement.kind === 'parametric') {
         objects.push(...sampleParametric(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'implicit') {
-        objects.push(...traceImplicit(statement, bounds, resolution, scope))
+        objects.push(...sampleImplicitStatement(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'region') {
-        objects.push(...buildRegion(statement, bounds, resolution, scope))
+        objects.push(...sampleRegionStatement(withWhere(compare(statement.op, statement.left, statement.right), statement.where), statement.color, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'regionChain') {
-        objects.push(...buildRegionChain(statement, bounds, resolution, scope))
+        const chain = and(compare(statement.lowOp, statement.low, statement.mid), compare(statement.highOp, statement.mid, statement.high))
+        objects.push(...sampleRegionStatement(withWhere(chain, statement.where), statement.color, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'field') {
         objects.push(...buildField(statement, bounds, scope))
       } else if (statement.kind === 'tangent') {

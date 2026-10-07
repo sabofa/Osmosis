@@ -1611,3 +1611,90 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
     })
   })
 })
+
+describe('implicit curves and regions through the quadtree', () => {
+  const BUDGET = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
+  const UNDEFINED_CURVE = 'this curve is undefined everywhere in view'
+  type Region = Extract<SceneObject, { kind: 'region' }>
+  type Curve = Extract<SceneObject, { kind: 'curve' }>
+
+  const regionOf = (scene: ReturnType<typeof build>['scene']): Region => {
+    const r = scene.objects.find((o): o is Region => o.kind === 'region')
+    if (!r) throw new Error('no region object')
+    return r
+  }
+  // the even-odd area of nested rings (a ring's direction means nothing): rings sorted by area, alternately added and
+  // subtracted, which is exact for the nested-ring cases under test
+  const evenOddArea = (region: Region): number => {
+    const areas = region.outline
+      .map((chain) => {
+        const pts = chainPoints(chain)
+        let a = 0
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i]
+          const q = pts[(i + 1) % pts.length]
+          a += p.x * q.y - q.x * p.y
+        }
+        return Math.abs(a) / 2
+      })
+      .sort((a, b) => b - a)
+    return areas.reduce((sum, a, i) => sum + (i % 2 === 0 ? a : -a), 0)
+  }
+
+  it('an annulus is a region of area 3 pi, with dashed boundary curves', () => {
+    const { scene } = build('1 < x^2+y^2 < 4')
+    expect(scene.errors).toEqual([])
+    const area = evenOddArea(regionOf(scene))
+    expect(Math.abs(area - 3 * Math.PI) / (3 * Math.PI)).toBeLessThan(0.005)
+    const boundary = scene.objects.filter((o): o is Curve => o.kind === 'curve' && o.id.object.startsWith('boundary.'))
+    expect(boundary.length).toBeGreaterThan(0)
+    for (const c of boundary) expect(c.dashed).toBe(true)
+  })
+
+  it('a region with a where clause is clipped to it', () => {
+    const { scene } = build('x^2 + y^2 < 1 if x > 0')
+    expect(scene.errors).toEqual([])
+    const area = evenOddArea(regionOf(scene))
+    expect(Math.abs(area - Math.PI / 2) / (Math.PI / 2)).toBeLessThan(0.01)
+  })
+
+  it('an implicit curve with a where clause is a curve that stops at the clause', () => {
+    const { scene } = build('x^2 + y^2 = 4 if y > 0')
+    expect(scene.errors).toEqual([])
+    const curves = scene.objects.filter((o): o is Curve => o.kind === 'curve')
+    expect(curves.length).toBeGreaterThan(0)
+    const pts = curves.flatMap(vertices)
+    for (const p of pts) expect(p.y).toBeGreaterThanOrEqual(-1e-6)
+    expect(pts.some((p) => Math.abs(p.x - 2) < 0.05 && Math.abs(p.y) < 0.05)).toBe(true)
+    expect(pts.some((p) => Math.abs(p.x + 2) < 0.05 && Math.abs(p.y) < 0.05)).toBe(true)
+  })
+
+  it('a circle draws with no errors and counts its work', () => {
+    const { scene } = build('x^2 + y^2 = 4')
+    expect(scene.errors).toEqual([])
+    expect(scene.stats?.points ?? 0).toBeGreaterThan(0)
+  })
+
+  describe('notes', () => {
+    const sceneWith = (spec: string, options: Parameters<typeof buildScene>[5]) => {
+      const parsed = parseSpec(spec)
+      return buildScene(parsed.statements, bounds, parsed.config, 140, parsed.statementLines, options)
+    }
+    // holds the first levels of the quadtree of a disc and not the rest, and still draws in view
+    const TINY = { points: 1600, intervals: 1600 }
+
+    it('a region forced to its cap says "drawn coarsely" at FULL', () => {
+      const scene = sceneWith('x^2 + y^2 < 25', { quality: 'full', budget: TINY })
+      expect(scene.errors).toEqual([{ line: 1, message: BUDGET }])
+    })
+    it('and says nothing at COARSE', () => {
+      const scene = sceneWith('x^2 + y^2 < 25', { quality: 'coarse', budget: TINY })
+      expect(scene.errors).toEqual([])
+    })
+    it('an implicit curve undefined everywhere in view is an error', () => {
+      const parsed = parseSpec('sqrt(-1-x^2) = y')
+      const scene = buildScene(parsed.statements, bounds, parsed.config)
+      expect(scene.errors.map((e) => e.message)).toEqual([UNDEFINED_CURVE])
+    })
+  })
+})
