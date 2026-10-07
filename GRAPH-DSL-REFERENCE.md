@@ -320,31 +320,56 @@ r = theta for theta in [0, 4*pi]
 Implicit curve — anything that isn't `y = ...`, `x = ...`, `z = ...`, or a
 labeled point falls here. Covers conics, circles-by-equation, etc. An optional
 `if <condition>` keeps only the part of the curve where the condition holds;
-unlike an explicit statement's, it may test both `x` and `y`.
+unlike an explicit statement's, it may test both `x` and `y`. The clip is
+exact: `x^2 + y^2 = 4 if y > 0` is the upper half circle, ending at (+-2, 0).
+
+The curve is drawn from an interval quadtree of the view, and each crossing is
+certified and bisected to the pixel. Crossings and self-intersections are true
+X's (the lemniscate `(x^2+y^2)^2 = 4(x^2-y^2)`, `sin(x) - cos(y) = 0`), points
+where a curve only touches are kept, and the curve is never joined across a
+pole or an undefined area (`y - tan(x) = 0` has no vertical lines). A curve
+that is undefined everywhere in view says so on its line (`this curve is
+undefined everywhere in view`); one that needs more evaluations than the
+drawing budget allows is drawn from what the sampler had and says
+`drawn coarsely: this curve needs more detail than its drawing budget allows`
+(or `not drawn: ...` when nothing drew). During a pan or zoom the picture may
+be coarse; it settles to full quality when the gesture stops.
 ```
 x^2/9 + y^2/4 = 1
 x^2 + y^2 = 9 if y > 0
+sin(x) - cos(y) = 0
 ```
+`sin(x) = cos(y)` is refused (it reads as a definition named after a built-in):
+write `sin(x) - cos(y) = 0`.
 
 ```
 <expr(x,y)> <|<=|>|>= <expr(x,y)> [if <condition>]
 <expr> <|<= <expr(x,y)> <|<= <expr> [if <condition>]
 ```
-Shaded inequality region, or a chained region (`-2 < x < 4`) between two
-bounds. An optional `if <condition>` restricts the shading (and its edge) to
-where the condition holds, with the same grammar as above over both `x` and `y`:
-`and`, `or`, `not`, `!=` and chains all work. The `if` belongs to the whole
-statement, so `y > 0 if 0 <= x <= 3` shades `y > 0` for `x` between 0 and 3.
+Shaded inequality region, or a chained region (`1 < x^2+y^2 < 4`, `-2 <= x < 5`)
+between two bounds. An optional `if <condition>` restricts the shading (and its
+edge) to where the condition holds, with the same grammar as above over both
+`x` and `y`: `and`, `or`, `not`, `!=` and chains all work. The `if` belongs to
+the whole statement, so `y > 0 if 0 <= x <= 3` shades `y > 0` for `x` between 0
+and 3.
 ```
 y > x^2 - 1
 x^2 + y^2 <= 4
+1 < x^2+y^2 < 4
 x^2 + y^2 < 9 if y > 0 and x > -1
 y > 0 if 0 <= x <= 3
+x + y <= 4 if x >= 0 and y >= 0 and y <= 2x + 1
 ```
-The restriction is applied after the region is traced: each piece of shading
-is kept when the condition holds at its centre, and each stretch of edge when
-it holds at its midpoint, so the cut edge follows the plotting grid rather
-than being exact. Exact clipping to the condition comes later.
+The boundary is drawn as the operator says: strict (`<`, `>`) dashed, non-strict
+(`<=`, `>=`) solid, and per side of a chain (`-2 <= x < 5` is solid on the left,
+dashed on the right). Holes are holes (the annulus `1 < x^2+y^2 < 4` leaves its
+centre unshaded). Where the expression is undefined nothing is shaded: `y < ln(x)`
+has nothing at `x <= 0`. The `if` clips the region and its edge exactly. Two
+inequalities cannot be joined with a statement-level `and`; put the second in an
+`if` clause. A region reports the same notes as a curve (`this region is
+undefined everywhere in view`, `drawn coarsely: this region needs more detail
+than its drawing budget allows`, `not drawn: ...`), and is coarse during a pan
+or zoom until it settles.
 
 ```
 field: dy/dx = <expr(x,y)>
