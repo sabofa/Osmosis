@@ -293,34 +293,64 @@ Ben, orbiting a sphere: the half that turns into view was bare (the warped under
 - **Mid-drag frames** are analysed at the model's coarse drag stride (`analysisStride`, about 28k pixels), with the particle density as it is. Measured against the still frame of the same view, the median stroke's colour differs by 0.001 to 0.004 (linear light) and its path by under 0.1 px.
 - **`light.worldFixed`** (default 1): `light.azimuth` and `light.elevation` place the key light in the WORLD (z up, the azimuth about z from +x, the elevation above the xy-plane: (0, 90) is straight down). At 0 the light is relative to the view as before. The lab builds `PaintView.lightDir` from it; the shadow map, the G-buffer and the model follow. The canvas's relief light stays on the screen. The default azimuth and elevation, -35 and 39, are the mockup's light (56 left, 27 up) at a typical authored camera, so a figure at its authored view is lit as it was.
 
-## 14. The baked painting (Ben, 2026-10-02 evening)
+## 14. The baked painting (Ben, 2026-10-02 evening; as built 2026-10-04)
 
 Ben: "when I move around it's still very slow to update … since it's all seeded maybe it can precompile the full file or painting, then when I move around it's instant."
 
-With the key light fixed in the world (`light.worldFixed` = 1, the default), a stroke's value, colour, role, brush-load mix and path along the surface are all independent of the camera. So **the whole painting is baked once, in world space**, and orbiting only selects, projects and draws it. The contract is `space/paint/bake/types.ts`.
+With the key light fixed in the world (`light.worldFixed` = 1, the default), a stroke's value, colour, role, brush-load mix and path along the surface are all independent of the camera. So **the painting is baked once, in world space**, and orbiting only selects, sizes, projects and draws it. The contract is `space/paint/bake/types.ts`. The plan, with every ruling, is `docs/superpowers/plans/2026-10-03-paint-bake.md`; the ledger beside it holds the review record.
 
-**Bake** (in the worker, per scene, params and world light):
-- every particle at the maximum density gets its stroke;
-- role and colour come from the value plan (§3.3, §12) and the curve and spatial mix (§3.4–§3.5), all evaluated from the WORLD light and the particle's own normal;
-- the path is walked along the surface tangent in world units, and widths are in world units;
-- the underpainting is baked per mesh vertex.
+**The bake** runs in a worker of its own, separate from the model's worker. It is cancelled for real (the worker is terminated and respawned) when the figure, the colours, or a param that makes it useless changes. With `&worker=0` it runs on the page's thread. It works per scene, params, world light and **authored framing** (the lab's authored view at zoom 1: eye, view direction, projection, and the world size of a CSS px).
+
+- **The surfaces.** Each mesh is refined (conforming longest-edge bisection), more finely where the families meet. Each refined vertex carries the value plan for each SIDE: an open sheet is painted from both sides, a closed opaque mesh from its outside only (orientation found once per mesh), and a closed veil from both. Shadows come from a CPU caster (BVH rays toward the light) and occlusion from world rays.
+- **The strokes.**
+  - **Surface strokes.** Every particle, and both sides of an open sheet, gets a stroke for each role it qualifies for. Role and colour come from the value plan (§3.3, §12) and the curve and spatial mix (§3.4–§3.5), all evaluated from the WORLD light and the side's own normal. The colour is stored at four brush-load cell levels, which the frame picks by zoom. The path is walked on the surface in world units, long enough for the most zoomed-out view the bake serves (`BAKE_ZOOM_MIN` 0.5). Its length factor is bucketed and keyed, so moving a density or zoom slider re-bakes only when a bucket changes. Sizes stay in CSS px (`basePx`), as the per-frame model sizes them.
+  - **Edge strokes** follow the world edge runs (crisp, drag and pull, or bridge by class), with pulls and bridges walked across the run on the surface and wrapped round creases.
+  - **Data marks** (lines, arrow shafts, box edges) are split in world units.
+- **The underpainting** is coloured per vertex of the refined surface, per side, and drawn by the renderer's surface pass. Veils have none.
 
 **What moves into world space** (it was screen space):
-- **Planes:** cells of normal direction × value zone on the MESH, merged within a family by world area.
-- **Edge hardness:** contrast between planes, curvature across the edge, light side, and distance from the occluder for cast shadows. The focal points are the per-frame model's two, taken from the AUTHORED view (the framing the picture is composed for) and then fixed in the world: the terminator point nearest the authored eye, and the brightest. So the terminator is firmest where the authored view looks at it, and stays so as you orbit (ruled 2026-10-03: with the brightest highlight alone the baked terminator had no firm or hard stretch at the default softness, one gradient where Ben asks for many). Terminator, crease, cast-shadow and plane edges are view-independent and are baked.
+- **Planes:** cells of the world normal direction × value zone on the refined mesh, in equal latitude bands, merged within a family by world area (above a floor of three triangles).
+- **Edges:** the terminator and cast-shadow boundaries are iso-lines of the plan's own family weight. Plane boundaries join only planes of the same family. Creases and borders come from the mesh.
+- **Edge hardness:** contrast between planes (the planes' means), curvature across the edge, the light side, distance from the occluder for cast shadows, the noise, and the soft-terminator scale. The depth and focal terms are taken from the **authored view** and then fixed in the world:
+  - the depth term (`edges.wDepth`, on by default) is measured from the authored eye;
+  - the focal points are the per-frame model's two (the terminator point nearest the authored eye, and the brightest), with R from the projected area.
 
-**Per frame** (milliseconds):
-- select strokes by rank against the screen density (foreshortening);
-- fade by |n·v|;
-- scale widths by the zoom (`zoomStrokeScale`, `zoomGrowMax`);
-- project;
-- draw with the renderer's depth pre-pass, so hidden strokes vanish;
-- recompute the silhouette outline strokes, the only view-dependent edges, with the same colour logic.
+  So edges are firmest where the authored view looks at them, and they stay so as you orbit. (Ruled 2026-10-03: with the brightest highlight alone, the baked terminator had no firm or hard stretch at the default softness. That is one gradient, where Ben asks for many.)
 
-**Slider changes:**
-- colour-only params recolour the bake, which must be bit-identical to a re-bake;
-- any other param re-bakes in the worker, with a progress indicator, while the previous bake stays on screen.
+**Per frame** (a few ms on the main thread, about 3–7 ms at zoom 1 and 7–19 ms at zoom 2–4, with no model run):
+- choose the side of an open sheet that faces the eye, and fade by |n·v|;
+- select surface strokes by rank against the screen density;
+- take each surface stroke's sub-arc for the zoom, and size its width, bristles and close-up shape by the zoom's growth (`zoomStrokeScale`, `zoomGrowMax`);
+- pick the colour level for the zoom;
+- edge pulls and bridges keep the model's on-screen length and spacing at every zoom: they are baked at a quarter of the model's spacing with a spacing rank, and each frame keeps those its zoom asks for and takes each one's sub-arc;
+- the strokes along an edge (crisp strokes, drags) tile their stretch at the power of two at or under the zoom, so an edge never loses its own stroke or opens a gap;
+- edge and data strokes keep a constant width;
+- build points and arrowheads on screen;
+- order by view depth within each layer, then project;
+- the renderer's depth pre-pass hides what is behind a surface, and its hidden pass draws dashed data lines dashed where a surface is nearer;
+- recompute the **silhouette** outline strokes, the only view-dependent edges. They use the same colour recipes and hardness rules without a depth term, and the authored focal points. The side of an open sheet is decided per sample by a ray cast. Their jitters and cuts are anchored to the world, so the outline does not boil under orbit. They read the G-buffer (what lies beyond the outline) only at rest; while dragging, the canvas.
 
-**`light.worldFixed` = 0** (camera-relative light) keeps the per-frame path of §13, because nothing can be baked when the light moves with the view.
+**Changes:**
+- **Colour-only params** recolour the bake in its worker, bit-identical to a re-bake. Only the colour arrays travel back.
+- **Render-only params** repaint.
+- **Frame-only sliders** repaint, unless a path-length bucket moves.
+- **Any other param, the light, the particle set, or the theme** re-bakes in the worker, with "Painting… NN%" while the previous bake stays on screen.
+- **A new figure, a new theme, or a return from a debug view with a stale bake** shows the per-frame painter until the new bake lands.
+- **A window resize** within 0.5–2× of the first framing does not re-bake: the frame absorbs it like a zoom.
 
-**Parity:** at the authored view, the baked painting must match the per-frame model closely (mean colour ΔE and role agreement are measured and reported). Look differences from moving analysis into world space are accepted where they read more like a painter's planes of the form.
+**The per-frame path of §13** is used when:
+- `light.worldFixed` = 0 (nothing can be baked when the light moves with the view);
+- the renderer has no float render targets (it could not depth-test baked strokes);
+- a debug view is selected (they show the per-frame analysis);
+- with `&bake=0`;
+- after a bake worker has failed.
+
+**Parity:** at the authored view the baked painting matches the per-frame model closely. Measured on the sphere on a table:
+- role agreement 1.000;
+- stroke colour ΔE 0.013;
+- underpainting ΔE 0.015;
+- stroke count ratio 1.02 with the model's own visibility.
+
+Look differences from moving the analysis into world space are accepted where they read more like a painter's planes of the form. Known follow-ups:
+- baked silhouettes lose some of the model's thin dark accents;
+- a "comb" of stroke ends side by side at hard stops (cast-shadow edges, the terminator, plane stops), present in the per-frame model too.

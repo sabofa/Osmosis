@@ -700,3 +700,8 @@ Each ruling is "what was decided, why, and what it costs if wrong".
 6. **Data marks are split in world at the reference scale. Hidden dashes come from a renderer pass instead of a G-buffer test.** No readback is needed while dragging. If wrong, line pieces are longer on screen when zoomed in.
 7. **Silhouettes read the latest G-buffer (it may be a frame old), or the canvas when there is none.** Only the tint beyond the outline depends on it. If wrong, a one-frame lag in that tint while dragging.
 8. **Debug views use the per-frame model.** They are analysis views, not the painting. If wrong, the debug views don't show the bake's own planes; a later task can add them.
+
+## Superseded rulings (2026-10-07)
+
+- **Ruling 5 ("`edges.wDepth` is inert") and Task 2's "d = 0" are superseded.** The depth term is measured from the authored view (`authoredDepth`, on by default; Task 2 fix round 1), so the slider is live. The same holds for the focal points.
+- **The final review's fixes are in:** context loss during a bake, edge pull and bridge spacing at every zoom, frame-buffer reuse, and the dead bake worker. Ben's Bake on/off switch was added too. See the ledger.
