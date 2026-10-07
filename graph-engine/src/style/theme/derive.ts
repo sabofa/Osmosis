@@ -117,12 +117,13 @@ export function deriveSeries(input: SeriesInput): Hex[] {
 }
 
 // Fixed board bases, in OKLCH, with the most chroma the accent may add to each.
-// (Exported for the settings registry, which reads each board's `maxChroma` as `board.<name>.chromaCap`.)
-export const BOARD_BASES: Record<BoardName, { l: number; c: number; h: number; maxChroma: number }> = {
-  blackboard: { l: 0.27, c: 0.012, h: 230, maxChroma: 0.03 },
-  greenboard: { l: 0.33, c: 0.05, h: 160, maxChroma: 0.07 },
-  whiteboard: { l: 0.97, c: 0.004, h: 250, maxChroma: 0.012 },
-}
+// Frozen, and exported for the settings registry, which reads each board's `maxChroma` as `board.<name>.chromaCap`.
+type BoardBase = Readonly<{ l: number; c: number; h: number; maxChroma: number }>
+export const BOARD_BASES: Readonly<Record<BoardName, BoardBase>> = Object.freeze({
+  blackboard: Object.freeze({ l: 0.27, c: 0.012, h: 230, maxChroma: 0.03 }),
+  greenboard: Object.freeze({ l: 0.33, c: 0.05, h: 160, maxChroma: 0.07 }),
+  whiteboard: Object.freeze({ l: 0.97, c: 0.004, h: 250, maxChroma: 0.012 }),
+})
 
 // How much chroma a fully coloured accent adds, and the accent chroma that counts as fully coloured.
 const BOARD_CHROMA_BOOST = 0.012

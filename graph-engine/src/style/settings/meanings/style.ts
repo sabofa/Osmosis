@@ -26,12 +26,12 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.line.passes': {
     meaning:
-      "How many times a stroke is drawn over itself, 1 to 3. Only pencil reads it: each pass is a thin, translucent line laid a little to one side of the last, so two or three passes build a darker, sketchier line where they overlap, with the offset growing as the hand loosens. Every other pen draws one pass whatever this says, and so does shading drawn in any pen.",
+      "How many times a stroke is drawn over itself. Only pencil reads it: each pass is a thin, translucent line laid a little to one side of the last, so two or three passes build a darker, sketchier line where they overlap, with the offset growing as the hand loosens. Every other pen draws one pass whatever this says, and so does shading drawn in any pen.",
     interactions: ['style.line.type', 'style.line.opacity', 'style.line.looseness'],
   },
   'style.line.width': {
     meaning:
-      "A multiplier on every stroke weight the figure asks for, so 1 is the figure's own weight. Hatch and scribble lines are drawn at 1.1 times it, and the dashes of a hidden line grow with it (above 1) so that a thick marker line still reads as dashes. The presets run from 1 (clean) to 1.8 (marker); everything the hand does, the end misses and the wobble, scales with it.",
+      "A multiplier on every stroke weight the figure asks for, so 1 is the figure's own weight. Hatch and scribble lines are drawn at 1.1 times it, and the dashes of a hidden line grow with it (above 1) so that a thick marker line still reads as dashes. Everything the hand does, the end misses and the wobble, scales with it.",
     unit: '×',
     interactions: ['style.line.looseness', 'style.line.wobble', 'style.line.opacity'],
   },
@@ -47,12 +47,12 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.line.grain': {
     meaning:
-      "Texture broken into the line: the paper's tooth in graphite and the dust in chalk. Pencil knocks more specks out of every pass as it rises, so the line looks drier and greyer. Chalk scatters more loose dust beside the line and breaks its edge up more. Ink ignores it by design (an ink line has variance, never grain), and so do the technical, brush and marker pens. Hatching drawn in the style gets 30% of it, so a region of chalk hatching is not mostly dust.",
+      "Texture broken into the line: the paper's tooth in graphite and the dust in chalk. Pencil knocks more specks out of every pass as it rises, so the line looks drier and greyer. Chalk scatters more loose dust specks within the line's width and breaks its edge up more. Ink ignores it by design (an ink line has variance, never grain), and so do the technical, brush and marker pens. Hatching drawn in the style gets 30% of it, so a region of chalk hatching is not mostly dust.",
     interactions: ['style.line.type'],
   },
   'style.line.opacity': {
     meaning:
-      "How opaque one stroke is, from a faint 0.05 to solid 1. Each pen multiplies it by its own factor first (a pencil pass about 0.8 to 0.95, marker 0.82, chalk 0.85), so 1 is the pen's natural strength and not full black. Strokes that overlap add up beneath it. It also lightens hatch and scribble lines, which are drawn in the same pen.",
+      "How opaque one stroke is, from faint to solid. Each pen multiplies it by its own factor first (a pencil pass about 0.8 to 0.95, marker 0.82, chalk 0.85), so 1 is the pen's natural strength and not full black. Strokes that overlap add up beneath it. It also lightens hatch and scribble lines, which are drawn in the same pen.",
     interactions: ['style.line.passes', 'style.fill.opacity'],
   },
 
@@ -63,7 +63,7 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.fill.angle': {
     meaning:
-      "The direction of hatch and scribble lines, in degrees anticlockwise from horizontal (45 runs from lower left to upper right). Crosshatch lays its second family a quarter turn further round. Flat, stipple, wash and none have no direction and ignore it. Hatching is anchored to the page, so two regions that touch hatch as one set of lines at the same angle. With roughness above 0, each line leans off the angle a little and a scribble drifts across the region.",
+      "The direction of hatch and scribble lines, in degrees anticlockwise from horizontal (a small positive angle rises from lower left to upper right). Crosshatch lays its second family a quarter turn further round. Flat, stipple, wash and none have no direction and ignore it. At roughness 0 hatching is anchored to the page, so two regions that touch hatch as one set of lines at the same angle. Above 0, each line leans off the angle a little, the family is no longer anchored, and a scribble drifts across the region.",
     unit: '°',
     interactions: ['style.fill.type', 'style.fill.roughness'],
   },
@@ -75,7 +75,7 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.fill.opacity': {
     meaning:
-      "How strong the fill is. Hatch lines, scribbles and dots are drawn at this opacity in a deeper shade of the region's colour, and a solid area (flat or wash) at half of it, because a solid area reads about twice as heavy as lines at the same opacity. So the old flat backdrop of 0.22 is 0.44 here. 0 hides the fill; raising it darkens the shading without adding a single mark. Lines are also lightened by the line opacity, since they are drawn in the same pen.",
+      "How strong the fill is. Hatch lines, scribbles and dots are drawn at this opacity in a deeper shade of the region's colour, and a solid area (flat or wash) at half of it, because a solid area reads about twice as heavy as lines at the same opacity. 0 hides the fill; raising it darkens the shading without adding a single mark. Lines are also lightened by the line opacity, since they are drawn in the same pen.",
     interactions: ['style.fill.spacing', 'style.line.opacity'],
   },
   'style.fill.roughness': {
@@ -96,7 +96,7 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.paper.texture': {
     meaning:
-      "How strong the paper's tooth is: the fine speckle on paper, the coarse blotches and fibres on rough-paper, the weave's contrast and the yarn's fuzz on canvas, and how much the hand-ruled lines of rough-graph waver. 0 is a smooth sheet. Clean, none, graph, dotted and ruled have no tooth and ignore it.",
+      "How strong the paper's tooth is. It is the fine speckle on paper, the coarse blotches and fibres on rough-paper, the weave's contrast and the yarn's fuzz on canvas, and how much the hand-ruled lines of rough-graph waver. 0 is a smooth sheet. Clean, none, graph, dotted and ruled have no tooth and ignore it.",
     interactions: ['style.paper.type'],
   },
   'style.paper.grid': {
@@ -113,7 +113,7 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.lettering.size': {
     meaning:
-      "A multiplier on the size of every label (points, measures, angle captions). Labels are laid out at that size, so a bigger hand keeps its distance from the lines instead of crowding them. 1 is the normal size; the presets run from 1 to 1.25, with the hand faces the biggest. The givens table keeps its own size and only changes face.",
+      "A multiplier on the size of every label (points, measures, angle captions). Labels are laid out at that size, so a bigger hand keeps its distance from the lines instead of crowding them. 1 is the normal size. The givens table keeps its own size and only changes face.",
     unit: '×',
     interactions: ['style.lettering.face'],
   },
@@ -130,7 +130,7 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.colour.saturation': {
     meaning:
-      "Scales the colour strength of everything the figure draws, ink, fills, the paper tint and an author's own colours, holding each one's lightness and hue. 0 is greyscale at the same lightness, 1 changes nothing, 1.5 is vivid (a colour pushed out of range loses chroma and does not clip, so hue stays honest). The presets run from 0.4 (pencil, muted to a grey) to 1.1 (marker).",
+      "Scales the colour strength of everything the figure draws, ink, fills, the paper tint and an author's own colours, holding each one's lightness and hue. 0 is greyscale at the same lightness, 1 changes nothing, above 1 is vivid (a colour pushed out of range loses chroma and does not clip, so hue stays honest).",
     unit: '×',
     interactions: ['style.colour.ink', 'style.paper.tint'],
   },

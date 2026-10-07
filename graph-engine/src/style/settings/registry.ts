@@ -5,7 +5,8 @@
 //                          choices read from the token and its default from the clean
 //                          preset (a style starts as clean, with seed 0);
 //   paint.<path>           each PARAM_SCHEMA and CURVE_SCHEMA entry (space/paint/params.ts),
-//                          with its default read from DEFAULT_PAINT_PARAMS;
+//                          with its default read from DEFAULT_PAINT_PARAMS, and the few painter
+//                          settings that have no slider (EXTRA_PAINT_SETTINGS below);
 //   media.<name>.<key>     each setting of each medium (style/media/);
 //   board.tilt, board.<name>.chromaCap
 //                          the constants that derive the boards (style/theme/derive.ts).
@@ -84,6 +85,27 @@ function styleSpec(token: Token): SettingSpec {
 // paint.*
 // ---------------------------------------------------------------------------
 
+// The painter's settings that the Paint Lab has no slider for. They are in PaintParams and the painter reads
+// them, but PARAM_SCHEMA does not list them (and gains no slider for them): they are named here, so that no
+// setting of the painter is missing from the registry. registry.test.ts walks every leaf of
+// DEFAULT_PAINT_PARAMS to hold that. Their defaults are read from the defaults like the others; the range and
+// the choices have no other home, so they are written here.
+export interface ExtraPaintSetting {
+  path: string
+  label: string
+  group: string
+  choices?: readonly string[]
+  min?: number
+  max?: number
+  step?: number
+}
+export const EXTRA_PAINT_SETTINGS: readonly ExtraPaintSetting[] = Object.freeze([
+  // PaintParams.canvas.weave is typed 'duck' | 'linen', and there is no list of them to read.
+  { path: 'canvas.weave', label: 'Canvas weave', group: 'Impasto & canvas', choices: ['duck', 'linen'] },
+  // The share of the strokes a frame made while the camera is dragged draws.
+  { path: 'particles.dragDensity', label: 'Share of strokes while dragging', group: 'Particles', min: 0, max: 1, step: 0.01 },
+])
+
 function paintSpecs(): SettingSpec[] {
   const sliders = PARAM_SCHEMA.map((schema): SettingSpec => {
     const path = `paint.${schema.path}`
@@ -117,7 +139,15 @@ function paintSpecs(): SettingSpec[] {
       appliesTo: applies(['space'], 'all'),
     }
   })
-  return [...sliders, ...curves]
+  const extras = EXTRA_PAINT_SETTINGS.map((extra): SettingSpec => {
+    const path = `paint.${extra.path}`
+    const initial = getParam(DEFAULT_PAINT_PARAMS, extra.path) as unknown as string | number
+    const base = { path, label: extra.label, group: extra.group, ...prose(path), appliesTo: applies(['space'], 'all') }
+    return extra.choices !== undefined
+      ? { ...base, type: 'choice', choices: [...extra.choices], default: initial }
+      : { ...base, type: 'number', min: extra.min, max: extra.max, step: extra.step, default: initial }
+  })
+  return [...sliders, ...curves, ...extras]
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +221,20 @@ function boardSpecs(): SettingSpec[] {
 // The registry
 // ---------------------------------------------------------------------------
 
+// Interactions run both ways: when a setting names another, the other names it back. The meanings
+// write each pair once, and this adds the reverse link, so the guide never shows a one-way pair. A name
+// that is not a setting is left as it is (registry.test.ts refuses it).
+function linked(specs: SettingSpec[]): SettingSpec[] {
+  const byPath = new Map(specs.map((spec) => [spec.path, spec]))
+  for (const spec of specs) {
+    for (const other of [...spec.interactions]) {
+      const target = byPath.get(other)
+      if (target !== undefined && !target.interactions.includes(spec.path)) target.interactions.push(spec.path)
+    }
+  }
+  return specs
+}
+
 // A spec nobody can edit: the registry is shared by every engine and the guide.
 function frozen(spec: SettingSpec): SettingSpec {
   Object.freeze(spec.interactions)
@@ -205,7 +249,7 @@ function frozen(spec: SettingSpec): SettingSpec {
   return Object.freeze(spec)
 }
 
-export const REGISTRY: readonly SettingSpec[] = Object.freeze([...TOKENS.map(styleSpec), ...paintSpecs(), ...mediaSpecs(), ...boardSpecs()].map(frozen))
+export const REGISTRY: readonly SettingSpec[] = Object.freeze(linked([...TOKENS.map(styleSpec), ...paintSpecs(), ...mediaSpecs(), ...boardSpecs()]).map(frozen))
 
 const BY_PATH: ReadonlyMap<string, SettingSpec> = new Map(REGISTRY.map((spec) => [spec.path, spec]))
 
