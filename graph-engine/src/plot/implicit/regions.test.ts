@@ -460,6 +460,16 @@ describe('sampleRegion: the spend, one budget for the whole statement', () => {
     }
   })
 
+  it('draws a coarsened region as a smaller fill, never a false one: sin(x^2 + y^2) < 0.3 and sin(10x) < cos(10y), capped', () => {
+    for (const [text, qualities] of [['sin(x^2 + y^2) < 0.3', ['full', 'coarse']], ['sin(10*x) < cos(10*y)', ['coarse']]] as const) {
+      for (const quality of qualities) {
+        const r = regionOf(text, { quality })
+        expect(r.capped, `${text} ${quality}`).toBe(true)
+        expect(falseFill(r, text, BOUNDS, 300, 0.05), `${text} ${quality}`).toBe(0)
+      }
+    }
+  })
+
   it('says a blank view was starved, not empty: a budget too small to cut a leaf', () => {
     const r = regionOf('1 < x^2 + y^2 < 4', { budget: { points: 300, intervals: 120 } })
     expect(r.capped).toBe(true)

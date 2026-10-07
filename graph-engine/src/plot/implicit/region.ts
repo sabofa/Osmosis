@@ -229,6 +229,8 @@ export interface ClipInput {
   // the most the counter may read when this stage stops (absolute: the statement's budget)
   limit: { points: number; intervals: number }
   pool: EdgePool
+  // the widest a leaf the budget stopped halving may be and still be cut (default CONTOUR.maxBudgetLeafPx); a region passes its own
+  maxBudgetLeafPx?: number
 }
 
 export interface ClipStats {
@@ -285,11 +287,12 @@ export interface LeafAnalysis {
 
 export function analyseLeaves(inp: Omit<ClipInput, 'pool'>, pool: EdgePool | null): LeafAnalysis {
   const { leaves, comparisons, fns, px, clip, view, counter, limit } = inp
+  const maxWide = inp.maxBudgetLeafPx ?? CONTOUR.maxBudgetLeafPx
   const m = comparisons.length
   const stats = newClipStats()
 
   // which leaves are cut: not the ones the budget stopped halving that are too wide for a chord, and not more than the twin budget buys
-  const wide = (l: Leaf) => l.stop === 'budget' && ((l.x1 - l.x0) * px.x > CONTOUR.maxBudgetLeafPx || (l.y1 - l.y0) * px.y > CONTOUR.maxBudgetLeafPx)
+  const wide = (l: Leaf) => l.stop === 'budget' && ((l.x1 - l.x0) * px.x > maxWide || (l.y1 - l.y0) * px.y > maxWide)
   // (a leaf costs the twin of each comparison over it and, later, what its contouring spends: STATEMENT.intervalsPerLeaf, so the twin
   // of the leaves is not bought with what their contour needs)
   const afford = m === 0 ? leaves.length : Math.max(0, Math.floor((limit.intervals - counter.intervals) / (m + STATEMENT.intervalsPerLeaf)))
@@ -297,6 +300,7 @@ export function analyseLeaves(inp: Omit<ClipInput, 'pool'>, pool: EdgePool | nul
   for (let i = 0; i < leaves.length; i++) {
     if (wide(leaves[i])) {
       stats.refused++
+      stats.capped = true
       if (inView(leaves[i], view)) stats.starvedInView = true
     } else if (todo.length >= afford) {
       stats.capped = true

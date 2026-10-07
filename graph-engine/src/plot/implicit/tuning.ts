@@ -151,6 +151,14 @@ export const CONTOUR = {
   // true at their ends and off the curve by about (leaf size)^2 / (8 radius): 0.2 px for a leaf of 18.75 px on a circle
   // of 200 px. Past it the leaf is left out and the result says so (ContourResult.refused).
   maxBudgetLeafPx: 24,
+  // The same limit for a REGION. A chord across a wide leaf is a false fill when the leaf holds more than the one crossing the
+  // chord assumes (sin(x^2+y^2) < 0.3 filled 16 % too much at 24 px); a region coarsened is a smaller fill, never a false one, so a
+  // wide 'budget' leaf is refused (leftOut, capped) rather than chorded. Measured on the default view (+-10, 800 px) at FULL (leaves 9.4 px) and COARSE (wider):
+  // sin(x^2+y^2) < 0.3 FULL had outline area 621.5 against 535.5 (9,192 of 90,000 grid points false-filled, more than 0.05 from an edge) with
+  // any limit from 9.5 up, and none with 9 or less; COARSE 643.2 and sin(10x) < cos(10y) COARSE 455.8 (against 448.2) likewise at 12 and 24, none at 9.
+  // So 9, the widest that is clean: it refuses every leaf of those pictures (areas 24.8, 5.3, 0: small, never false, capped) and leaves the
+  // circle at budgets of 2,000 and 20,000 points drawn.
+  maxRegionBudgetLeafPx: 9,
 }
 
 // The critical point of H in a leaf (calc P3, task 3 fix round 1): two curves cross where grad H = 0 and H = 0, and

@@ -38,6 +38,7 @@ import type { Chain, MarkId, SceneObject, Vec2 } from '../../scene/types'
 import type { View } from '../sample/curve'
 import type { EvalCounter } from '../sample/types'
 import { buildChains } from './chains'
+import { CONTOUR } from './tuning'
 import { analyseCondition, type Comparison, clipLeaves, compileComparisons, conditionClassifier, truthOf } from './region'
 import { EdgePool } from './outline'
 import { gridPoints, inView, pictureFirst, prepare, walk } from './statement'
@@ -84,7 +85,7 @@ export function sampleRegion(condition: Expr, comparisons: readonly Comparison[]
   const pool = new EdgePool()
   for (const cell of sub.whole) pool.addBox(cell)
   const leaves = pictureFirst(sub.leaves, p.bounds)
-  const clip = clipLeaves({ leaves, comparisons, tree: analysed.tree, fns, px: p.px, clip: p.root, view: p.bounds, counter, limit: p.budget, pool })
+  const clip = clipLeaves({ leaves, comparisons, tree: analysed.tree, fns, px: p.px, clip: p.root, view: p.bounds, counter, limit: p.budget, pool, maxBudgetLeafPx: CONTOUR.maxRegionBudgetLeafPx })
   const outline = pool.finish()
 
   // 4. the objects: the region, then each comparison's boundary

@@ -85,7 +85,7 @@ export interface StatementOptions {
 //  - `drawnInView`: some of what was drawn is in the picture (not only the overscan). `blankInView`: nothing is, and the picture
 //    was not resolved: a leaf of it was left out for want of the budget or because it was too coarse. (Nothing drawn and nothing
 //    left out is a statement that is not there: off screen, or empty.)
-//  - `leftOut`: leaves not drawn, for the budget or because they could not be cut (a few a statement is a pixel each).
+//  - `leftOut`: leaves not drawn, for the budget, for being too coarse to cut truly, or because they could not be cut. The count says the picture has pieces missing, not how big they are.
 export interface Sampled {
   objects: SceneObject[]
   capped: boolean
