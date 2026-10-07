@@ -1418,7 +1418,7 @@ r = 1/cos(theta)`,
     label: 'Curves and regions: lemniscate',
     group: 'Calculus',
     spec: `@bounds: -3, 3, -2, 2
-(x^2+y^2)^2 - 4(x^2-y^2) = 0`,
+(x^2+y^2)^2 = 4(x^2-y^2)`,
   },
   {
     label: 'Curves and regions: sin x = cos y',
@@ -1442,9 +1442,6 @@ y < ln(x)`,
     label: 'Curves and regions: feasible region',
     group: 'Calculus',
     spec: `@bounds: -1, 6, -1, 6
-x + y <= 4
-x >= 0
-y >= 0
-y <= 2x + 1`,
+x + y <= 4 if x >= 0 and y >= 0 and y <= 2x + 1`,
   },
 ]
