@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseSpec } from '../../parser/parseSpec'
 import { buildScene } from '../../scene/buildScene'
 import { chainOf } from '../../scene/chains'
-import type { Scene } from '../../scene/types'
+import type { Chain, Scene } from '../../scene/types'
 import { type CorpusView, view } from './corpus'
 import { sceneToSvg } from './svgScene'
 
@@ -84,6 +84,35 @@ describe('sceneToSvg', () => {
     const out = sceneToSvg(plain, STD)
     expect(count(out, /<circle [^>]*data-kind="point"/g)).toBe(1)
     expect(out).toMatch(/<line [^>]*stroke-dasharray="6 5"\/>/)
+  })
+
+  describe('regions and dashed curves', () => {
+    const ring = (r: number): Chain => chainOf(Array.from({ length: 16 }, (_, i) => ({ x: r * Math.cos((i * Math.PI) / 8), y: r * Math.sin((i * Math.PI) / 8) })), Array.from({ length: 16 }, (_, i) => i), true)
+    const id = { statement: 0, object: 'region' }
+    const annulus: Scene = { objects: [{ kind: 'region', id, outline: [ring(4), ring(8)], boundary: [] }], errors: [], regression: null }
+    const out = sceneToSvg(annulus, STD)
+
+    it('draws an annulus as one even-odd path with a subpath per ring, translucent, with no stroke', () => {
+      const paths = out.match(/<path [^>]*fill-rule="evenodd"[^>]*>/g) ?? []
+      expect(paths).toHaveLength(1)
+      const path = paths[0]!
+      expect(count(path, /M/g)).toBe(2)
+      expect(path).toMatch(/fill-opacity="0\.18"/)
+      expect(path).toMatch(/stroke="none"/)
+      expect(out).not.toMatch(/NaN|Infinity/)
+    })
+
+    it('draws a region beneath the curves', () => {
+      const both: Scene = { objects: [{ kind: 'curve', id: { statement: 0, object: 'curve' }, chains: [ring(6)], breaks: [] }, annulus.objects[0]], errors: [], regression: null }
+      const o = sceneToSvg(both, STD)
+      expect(o.indexOf('fill-rule="evenodd"')).toBeLessThan(o.indexOf('<polyline'))
+    })
+
+    it('draws a dashed curve with stroke-dasharray and a solid one without', () => {
+      const curve = (dashed: boolean): Scene => ({ objects: [{ kind: 'curve', id: { statement: 0, object: 'curve' }, chains: [ring(6)], breaks: [], dashed }], errors: [], regression: null })
+      expect(sceneToSvg(curve(true), STD)).toMatch(/<polyline [^>]*stroke-dasharray="7 5"/)
+      expect(sceneToSvg(curve(false), STD)).not.toMatch(/stroke-dasharray/)
+    })
   })
 
   it('takes a dark theme', () => {

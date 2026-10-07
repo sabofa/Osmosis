@@ -42,12 +42,12 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
   const colorOf = (name: string | null | undefined, otherwise: number) => hex(name ? resolveColor(name) : otherwise)
   const line = (a: Vec2, b: Vec2, attrs: string) => `<line x1="${n(px(a.x))}" y1="${n(py(a.y))}" x2="${n(px(b.x))}" y2="${n(py(b.y))}" ${attrs}/>`
   const stroke = (color: string, width: number) => `stroke="${color}" stroke-width="${width}" vector-effect="non-scaling-stroke"`
-  const polyline = (chain: Chain, color: string) => {
+  const polyline = (chain: Chain, color: string, dashed = false) => {
     const points: string[] = []
     for (let i = 0; i < chain.param.length; i++) points.push(point({ x: chain.xy[2 * i], y: chain.xy[2 * i + 1] }))
     // a closed chain does not repeat its first vertex (scene/types.ts): the polyline does, to close
     if (chain.closed && points.length > 0) points.push(points[0])
-    return `<polyline points="${points.join(' ')}" fill="none" ${stroke(color, 1.6)} stroke-linejoin="round" stroke-linecap="round"/>`
+    return `<polyline points="${points.join(' ')}" fill="none" ${stroke(color, 1.6)}${dashed ? ' stroke-dasharray="7 5"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`
   }
 
   const parts: string[] = []
@@ -69,6 +69,10 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
         const d = Array.from({ length: chain.param.length }, (_, i) => `${i === 0 ? 'M' : 'L'}${point({ x: chain.xy[2 * i], y: chain.xy[2 * i + 1] })}`).join('')
         parts.push(`<path class="band" d="${d}Z" fill="${colorOf(o.color, palette.curve)}" fill-opacity="0.18" stroke="none"/>`)
       }
+    } else if (o.kind === 'region') {
+      // one path, one subpath per ring, filled even-odd so a ring inside a ring is a hole
+      const d = o.outline.map((chain) => Array.from({ length: chain.param.length }, (_, i) => `${i === 0 ? 'M' : 'L'}${point({ x: chain.xy[2 * i], y: chain.xy[2 * i + 1] })}`).join('') + 'Z').join('')
+      parts.push(`<path class="region" d="${d}" fill-rule="evenodd" fill="${colorOf(o.color, palette.region)}" fill-opacity="0.18" stroke="none"/>`)
     } else if (o.kind === 'line' || o.kind === 'ray') {
       // a guide, a construction line or a ray: clipped to the view as the viewer clips it
       const through = o.kind === 'line' ? o.through : o.from
@@ -87,7 +91,7 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
     }
   }
   for (const o of scene.objects) {
-    if (o.kind === 'curve') for (const chain of o.chains) parts.push(polyline(chain, colorOf(o.color, palette.curve)))
+    if (o.kind === 'curve') for (const chain of o.chains) parts.push(polyline(chain, colorOf(o.color, palette.curve), o.dashed === true))
   }
   for (const o of scene.objects) {
     if (o.kind === 'mark') {
