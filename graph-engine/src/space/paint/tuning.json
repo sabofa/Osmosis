@@ -1,1 +1,331 @@
-{}
+{
+  "seed": 1,
+  "curves": {
+    "lightResponse": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "value": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "lAdjust": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ]
+    ],
+    "cAdjust": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        1
+      ]
+    ],
+    "hAdjust": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        0
+      ]
+    ],
+    "mixAmount": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  "environment": {
+    "hue": 250,
+    "chroma": 0.02,
+    "absorption": 0.3,
+    "occlusion": 0.35,
+    "occlusionRadiusPx": 14
+  },
+  "detect": {
+    "formBandNL": 0.18,
+    "scumbleGradient": 0.004,
+    "scumbleMinPx": 6,
+    "dabTopFraction": 0.015,
+    "dabMinPx": 12,
+    "glazeBelow": 0.4,
+    "reflectedMin": 0.04,
+    "edgeMinContrast": 0.05,
+    "edgeReachPx": 20
+  },
+  "light": {
+    "azimuth": -35,
+    "elevation": 39,
+    "worldFixed": 1,
+    "intensity": 0.75,
+    "ambient": 0.18,
+    "sky": 0.12,
+    "bounce": 0.1,
+    "shadows": 1
+  },
+  "value": {
+    "halfLo": 0.52,
+    "halfHi": 0.72,
+    "lightLo": 0.85,
+    "lightHi": 0.94,
+    "lightTurn": 0.6,
+    "lightSoftness": 0.5,
+    "terminatorSoftness": 0.655,
+    "coreWidth": 0.2,
+    "corePlateau": 0.368,
+    "reflectedShare": 0.4,
+    "reflectedSoftness": 0.35,
+    "castPlateau": 0.32,
+    "castContact": 0.2,
+    "deviation": 0.018
+  },
+  "curve": {
+    "lSlope": 0.8,
+    "lPivot": 0.62,
+    "cBase": 0.42,
+    "cPeak": 0.88,
+    "cCentre": 0.5,
+    "cWidth": 0.25,
+    "warmHue": 75,
+    "coolHue": 280,
+    "kWarm": 0.4,
+    "kCool": 0.46,
+    "shiftMax": 12,
+    "accentHue": 95,
+    "accentMax": 18,
+    "planeStepA": 10,
+    "planeStepB": 6,
+    "tintWarm": 0.018,
+    "tintCool": 0.022,
+    "skyTint": 0.03,
+    "skyHue": 250,
+    "bounceTint": 0.034,
+    "bounceHue": 68,
+    "reflectedBounceMix": 0.55,
+    "devL": 0.01,
+    "devC": 0.06,
+    "devH": 2.2,
+    "colormapHue": 0.3333333333333333
+  },
+  "mix": {
+    "strength": 1,
+    "hueMin": 12,
+    "hueMax": 25,
+    "chromaMin": 0.7,
+    "chromaMax": 1.35,
+    "valueHold": 0.012,
+    "valueStepFraction": 0.25,
+    "valueStep": 0.03,
+    "greyChroma": 0.05,
+    "greyVecMin": 0.012,
+    "greyVecMax": 0.026,
+    "flipHue": 0.8,
+    "flipChroma": 0.75,
+    "drift": 0.45,
+    "loadMin": 3,
+    "loadMax": 8,
+    "loadBreakPx": 120,
+    "loadCell": 0.5,
+    "colormapScale": 0.3333333333333333,
+    "hueBias": 0,
+    "chromaBias": 0,
+    "valueBias": 0,
+    "roleBlock": 1,
+    "roleForm": 0.7,
+    "roleScumble": 0.85,
+    "roleGlaze": 0.6,
+    "roleLine": 0.75,
+    "roleEdge": 0.5,
+    "roleDab": 0.4
+  },
+  "edges": {
+    "wContrast": [
+      0.32,
+      0.52,
+      0.36
+    ],
+    "wCurvature": [
+      0.22,
+      0.08,
+      0.08
+    ],
+    "wFocal": [
+      0.26,
+      0.14,
+      0.06
+    ],
+    "wLight": [
+      0.1,
+      0.08,
+      0.08
+    ],
+    "wDepth": [
+      0.1,
+      0.18,
+      0.12
+    ],
+    "wShadowDist": 0.3,
+    "noise": 0.12,
+    "lostBelow": 0.24,
+    "softBelow": 0.46,
+    "firmBelow": 0.68,
+    "stopAt": 0.46,
+    "bleedAt": 0.24,
+    "planeCellDeg": 26,
+    "planeMinPx": 70,
+    "planeGradient": 0.45
+  },
+  "roles": {
+    "block": {
+      "density": 1,
+      "width": 22,
+      "length": 46,
+      "curvature": 0.15,
+      "load": 0.9,
+      "impasto": 1,
+      "bristles": 9,
+      "bristleVar": 0.35,
+      "dry": 0.25,
+      "wet": 0.15
+    },
+    "form": {
+      "density": 1,
+      "width": 12,
+      "length": 40,
+      "curvature": 0.5,
+      "load": 0.8,
+      "impasto": 0.9,
+      "bristles": 7,
+      "bristleVar": 0.35,
+      "dry": 0.3,
+      "wet": 0.2
+    },
+    "scumble": {
+      "density": 0.8,
+      "width": 9,
+      "length": 22,
+      "curvature": 0.3,
+      "load": 0.55,
+      "impasto": 0.6,
+      "bristles": 6,
+      "bristleVar": 0.5,
+      "dry": 0.6,
+      "wet": 0.35
+    },
+    "glaze": {
+      "density": 0.7,
+      "width": 26,
+      "length": 50,
+      "curvature": 0.15,
+      "load": 0.3,
+      "impasto": 0.1,
+      "bristles": 10,
+      "bristleVar": 0.25,
+      "dry": 0.2,
+      "wet": 0.4
+    },
+    "reflected": {
+      "density": 0.6,
+      "width": 10,
+      "length": 24,
+      "curvature": 0.3,
+      "load": 0.5,
+      "impasto": 0.5,
+      "bristles": 6,
+      "bristleVar": 0.35,
+      "dry": 0.35,
+      "wet": 0.3
+    },
+    "dab": {
+      "density": 0.15,
+      "width": 7,
+      "length": 9,
+      "curvature": 0.1,
+      "load": 1.2,
+      "impasto": 1.6,
+      "bristles": 5,
+      "bristleVar": 0.3,
+      "dry": 0.1,
+      "wet": 0
+    },
+    "edge": {
+      "density": 1,
+      "width": 4,
+      "length": 30,
+      "curvature": 0.2,
+      "load": 0.9,
+      "impasto": 0.8,
+      "bristles": 4,
+      "bristleVar": 0.25,
+      "dry": 0.2,
+      "wet": 0.2
+    },
+    "line": {
+      "density": 1,
+      "width": 3,
+      "length": 36,
+      "curvature": 0,
+      "load": 1,
+      "impasto": 0.7,
+      "bristles": 4,
+      "bristleVar": 0.2,
+      "dry": 0.1,
+      "wet": 0
+    }
+  },
+  "particles": {
+    "maxPerUnit2": 3000,
+    "targetPer10kPx": 90,
+    "fadeLo": 0.08,
+    "fadeHi": 0.25,
+    "dragDensity": 1,
+    "zoomGrowMax": 3,
+    "zoomStrokeScale": 0.35,
+    "zoomBigMax": 4
+  },
+  "underpaint": {
+    "opacity": 0.85,
+    "streak": 0.4
+  },
+  "impasto": {
+    "strength": 1,
+    "lightAzimuth": 135,
+    "lightElevation": 23
+  },
+  "canvas": {
+    "texture": 0.5,
+    "weave": "linen",
+    "tone": [
+      0.93,
+      0.004,
+      0.022
+    ]
+  }
+}

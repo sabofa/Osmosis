@@ -70,7 +70,12 @@ export function makeFrameCtx(scene: SpaceScene, view: PaintView, g: GBuffer, par
 // below 1 (zooming out does not shrink the brush under the size the roles were tuned at) and never
 // past particles.zoomBigMax.
 export function zoomSizeScale(view: PaintView, params: PaintParams): number {
-  const z = view.zoom !== undefined && Number.isFinite(view.zoom) ? Math.max(1, view.zoom) : 1
+  return zoomSizeScaleAt(view.zoom, params)
+}
+
+// zoomSizeScale at a zoom (the pure form: the baked painting's length scan reads it too).
+export function zoomSizeScaleAt(zoom: number | undefined, params: PaintParams): number {
+  const z = zoom !== undefined && Number.isFinite(zoom) ? Math.max(1, zoom) : 1
   return Math.min(z ** clamp(params.particles.zoomStrokeScale, 0, 1), bigMax(params))
 }
 
@@ -239,8 +244,8 @@ export function meshArea(mesh: MeshMark): number {
 // The particles that are visible in this view, with what the model needs to
 // know about each. Arrays are scratch: valid until the next call.
 // How much of the surfaces' fade band (particles.fadeLo..fadeHi of |n·v|) a veil fades over.
-const VEIL_FADE_LO = 0.25
-const VEIL_FADE_HI = 0.5
+export const VEIL_FADE_LO = 0.25
+export const VEIL_FADE_HI = 0.5
 
 export interface Visible {
   count: number
@@ -373,9 +378,19 @@ export const roleRank = (rank: number, role: Role): number => (rank + ROLE_SHIFT
 // The chance a visible particle is drawn for a role: the screen-density rule. `scale` thins the role further
 // (a veil's glazes: roles.ts VEIL_DENSITY).
 export function drawChance(fc: FrameCtx, pxArea: number, role: Role, scale = 1): number {
-  const p = fc.params
-  const drag = fc.view.dragging ? p.particles.dragDensity : 1
-  return clamp((p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag * scale, 0, 1)
+  return drawChanceOf(fc.params, fc.view.dragging, pxArea, role, scale)
+}
+
+// drawChance from its factors (the target per px, the screen area, the role's density, the drag's share, the scale): the arithmetic of drawChanceOf, for a caller
+// that reads the factors once and asks of many strokes (the baked painting's frame).
+export function drawChanceFor(perPx: number, pxArea: number, density: number, drag: number, scale: number): number {
+  return clamp(perPx * pxArea * density * drag * scale, 0, 1)
+}
+
+// drawChance from the params and whether the camera is being dragged (the pure form: the baked painting's frame reads it too).
+export function drawChanceOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role, scale = 1): number {
+  const drag = dragging ? p.particles.dragDensity : 1
+  return drawChanceFor(p.particles.targetPer10kPx / 10000, pxArea, p.roles[role].density, drag, scale)
 }
 
 // A load of paint is a patch of the surface (mix.loadCell world units across), and a painter mixes a new
@@ -394,10 +409,19 @@ export function loadCellLevel(zoom: number | undefined): number {
 // sqrt(target / available) = sqrt(drawChance before its clamp), up to particles.zoomGrowMax, so they
 // still overlap and cover the form. 1 while the particles are plentiful.
 export function zoomGrow(fc: FrameCtx, pxArea: number, role: Role): number {
-  const p = fc.params
-  const drag = fc.view.dragging ? p.particles.dragDensity : 1
-  const need = (p.particles.targetPer10kPx / 10000) * pxArea * p.roles[role].density * drag
-  return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, p.particles.zoomGrowMax))
+  return zoomGrowOf(fc.params, fc.view.dragging, pxArea, role)
+}
+
+// zoomGrow from the params and whether the camera is being dragged (the pure form: the baked painting's length scan reads it too).
+export function zoomGrowOf(p: PaintParams, dragging: boolean, pxArea: number, role: Role): number {
+  const drag = dragging ? p.particles.dragDensity : 1
+  return zoomGrowFor(p.particles.targetPer10kPx / 10000, pxArea, p.roles[role].density, drag, p.particles.zoomGrowMax)
+}
+
+// zoomGrowOf from its factors (as drawChanceFor is of drawChanceOf).
+export function zoomGrowFor(perPx: number, pxArea: number, density: number, drag: number, growMax: number): number {
+  const need = perPx * pxArea * density * drag
+  return clamp(Math.sqrt(Math.max(1, need)), 1, Math.max(1, growMax))
 }
 
 // Is visible entry k drawn for `role`?
@@ -411,8 +435,13 @@ export function drawn(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, r
 export function drawFade(fc: FrameCtx, vis: Visible, set: ParticleSet, k: number, role: Role, scale = 1): number {
   const chance = drawChance(fc, vis.pxArea[k], role, scale)
   const r = roleRank(set.rank[vis.idx[k]], role)
-  if (r >= chance) return 0
-  return chance >= 1 ? 1 : smooth(0, 0.2, 1 - r / chance)
+  return drawFadeAt(chance, r)
+}
+
+// The fade of a drawn particle from its chance and its (role-shifted) rank: 0 when it is not drawn (the pure form: the baked painting's frame reads it too).
+export function drawFadeAt(chance: number, rank: number): number {
+  if (rank >= chance) return 0
+  return chance >= 1 ? 1 : smooth(0, 0.2, 1 - rank / chance)
 }
 
 // A per-role cache-free helper for tests and the lab's readout: the indices of

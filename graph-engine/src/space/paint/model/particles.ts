@@ -87,6 +87,8 @@ export const buildParticles: BuildParticles = (scene: SpaceScene, colours: Scene
   for (const m of meshes) samplePoisson(m.mesh, m.index, m.area, m.cum, r, params, drafts)
 
   const count = drafts.length
+  const tri = new Uint32Array(count)
+  const bary = new Float32Array(2 * count)
   const set: ParticleSet = {
     count,
     mark: new Uint32Array(count),
@@ -99,6 +101,8 @@ export const buildParticles: BuildParticles = (scene: SpaceScene, colours: Scene
     rank: new Float32Array(count),
     cell: new Uint32Array(count),
     seed: new Uint32Array(count),
+    tri,
+    bary,
   }
   sides.set(set, { markColour: scene.marks.map((_, i) => colours.markColour(i)) })
   // ranks and seeds come from one stream per mesh, in particle order
@@ -118,6 +122,9 @@ export const buildParticles: BuildParticles = (scene: SpaceScene, colours: Scene
     const n = interpolatedNormal(mesh, i0, i1, i2, d.w0, d.w1, d.w2)
     const t = tangentOf(mesh, i0, i1, i2, n)
     set.mark[i] = d.mark
+    tri[i] = d.tri
+    bary[2 * i] = d.w1
+    bary[2 * i + 1] = d.w2
     set.position.set([d.x, d.y, d.z], 3 * i)
     set.normal.set(n, 3 * i)
     set.tangent.set(t, 3 * i)

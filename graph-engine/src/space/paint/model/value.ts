@@ -290,6 +290,59 @@ export function planSample(
   return out
 }
 
+// What one sample of the plan hands the strokes and the planes (the arrays of a PlanMap, per sample): the value the plan shows, the plan value
+// the strokes read, the zone, how far into a zone's boundary, the reflected-light lift (a PlanMap's `bounce`), the key light (Lambert × shadow),
+// the light, shadow and reflected weights, and the family.
+export interface PlanFacts {
+  value: number
+  u: number
+  zone: number
+  trans: number
+  lift: number
+  key: number
+  lightW: number
+  shadowW: number
+  reflW: number
+  fam: number
+}
+
+export const newPlanFacts = (): PlanFacts => ({ value: 0, u: 0, zone: Z_LIGHT, trans: 0, lift: 0, key: 0, lightW: 1, shadowW: 0, reflW: 0, fam: FAM_LIGHT })
+
+// The plan at one sample of a surface, for the per-pixel plan (buildPlanMap) and the baked one per vertex (bake/plan.ts): the one place that
+// says how a sample's numbers come from planSample. Bare canvas in the light (a ground, not in shadow) is the canvas value (the strokes' u
+// stays the canvas, so a value curve never repaints the ground; the value plan shows what the curve would make of it), light and unshadowed;
+// anything else is planSample, with its weights as the roles read them (the light weight is the light plus 0.6 of the half-tone; the shadow
+// weight the core plus the cast). `uCanvas` is canvasValue(params); `zs` is scratch.
+export function planFacts(
+  params: PaintParams, curves: CompiledCurves, uCanvas: number, nl: number, shadow: boolean, nx: number, ny: number, nz: number, ao: number,
+  ground: boolean, zs: ZoneSample, out: PlanFacts,
+): PlanFacts {
+  out.key = shadow ? 0 : Math.max(0, nl)
+  if (ground && !shadow) {
+    out.value = clamp(curves.value(uCanvas), 0, 1)
+    out.u = uCanvas
+    out.zone = Z_LIGHT
+    out.trans = 0
+    out.lift = 0
+    out.lightW = 1
+    out.shadowW = 0
+    out.reflW = 0
+    out.fam = FAM_LIGHT
+    return out
+  }
+  planSample(params, curves, nl, shadow, nx, ny, nz, ao, zs, ground)
+  out.value = zs.u
+  out.u = zs.u
+  out.zone = zs.zone
+  out.trans = zs.trans
+  out.lift = zs.lift
+  out.lightW = zs.w[0] + 0.6 * zs.w[1]
+  out.shadowW = zs.w[2] + zs.w[4]
+  out.reflW = zs.w[3]
+  out.fam = zs.fam
+  return out
+}
+
 // ---- screen-space occlusion ----
 
 const AO_SAMPLES = 8
@@ -442,6 +495,7 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
   else ao.fill(0)
   const L = view.lightDir
   const zs = newZoneSample()
+  const pf = newPlanFacts()
   for (let i = 0; i < n; i++) {
     const m = g.mark[i]
     if (m < 0) {
@@ -463,32 +517,18 @@ export function buildPlanMap(fc: FrameCtx): PlanMap {
     const nz = g.normal[3 * i + 2]
     const ndl = nx * L[0] + ny * L[1] + nz * L[2]
     const shadow = g.shadow[i] === 1
-    keyA[i] = shadow ? 0 : Math.max(0, ndl)
     nlA[i] = ndl
-    if (fc.ground[m] === 1 && !shadow) {
-      // bare canvas in the light: the canvas value (the strokes' u stays the canvas, so a value curve never repaints
-      // the ground; the value plan shows what the curve would make of it)
-      value[i] = clamp(curves.value(uCanvas), 0, 1)
-      u[i] = uCanvas
-      zone[i] = Z_LIGHT
-      trans[i] = 0
-      bounceA[i] = 0
-      lightW[i] = 1
-      shadowW[i] = 0
-      reflW[i] = 0
-      fam[i] = FAM_LIGHT
-      continue
-    }
-    planSample(params, curves, ndl, shadow, nx, ny, nz, ao[i], zs, fc.ground[m] === 1)
-    value[i] = zs.u
-    u[i] = zs.u
-    zone[i] = zs.zone
-    trans[i] = zs.trans
-    bounceA[i] = zs.lift
-    lightW[i] = zs.w[0] + 0.6 * zs.w[1]
-    shadowW[i] = zs.w[2] + zs.w[4]
-    reflW[i] = zs.w[3]
-    fam[i] = zs.fam
+    planFacts(params, curves, uCanvas, ndl, shadow, nx, ny, nz, ao[i], fc.ground[m] === 1, zs, pf)
+    keyA[i] = pf.key
+    value[i] = pf.value
+    u[i] = pf.u
+    zone[i] = pf.zone
+    trans[i] = pf.trans
+    bounceA[i] = pf.lift
+    lightW[i] = pf.lightW
+    shadowW[i] = pf.shadowW
+    reflW[i] = pf.reflW
+    fam[i] = pf.fam
   }
   // the gradient of the value, per CSS px; 999 beside an edge of the figure
   const W = g.width

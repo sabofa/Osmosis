@@ -245,6 +245,36 @@ describe('paint particles', () => {
     expect(distinct(set)).toBeGreaterThan(2)
   })
 
+  it('records where each particle was seeded: the source triangle and the barycentric weights b1, b2, so P(tri, bary) is its position', () => {
+    // (the pre-existing arrays are pinned byte for byte by frameHash.test.ts)
+    const table = tableMesh({ z: -1, half: 2, index: 1 })
+    const both = buildParticles(sceneOf([sphere, table]), COLOURS, P)
+    expect(both.tri).toBeInstanceOf(Uint32Array)
+    expect(both.bary).toBeInstanceOf(Float32Array)
+    expect(both.tri!.length).toBe(both.count)
+    expect(both.bary!.length).toBe(2 * both.count)
+    const meshes = [sphere, table]
+    let worst = 0
+    for (let i = 0; i < both.count; i++) {
+      const mesh = meshes[both.mark[i]]
+      const t = both.tri![i]
+      expect(t).toBeLessThan(mesh.indices.length / 3)
+      const b1 = both.bary![2 * i]
+      const b2 = both.bary![2 * i + 1]
+      expect(b1).toBeGreaterThanOrEqual(0)
+      expect(b2).toBeGreaterThanOrEqual(0)
+      expect(b1 + b2).toBeLessThanOrEqual(1 + 1e-6)
+      const w = [1 - b1 - b2, b1, b2]
+      for (let a = 0; a < 3; a++) {
+        let p = 0
+        for (let k = 0; k < 3; k++) p += w[k] * mesh.positions[3 * mesh.indices[3 * t + k] + a]
+        worst = Math.max(worst, Math.abs(p - both.position[3 * i + a]))
+      }
+    }
+    expect(both.count).toBeGreaterThan(500)
+    expect(worst).toBeLessThan(1e-5)
+  })
+
   it('handles a scene with no meshes', () => {
     const empty = buildParticles(sceneOf([]), COLOURS, P)
     expect(empty.count).toBe(0)

@@ -57,7 +57,7 @@ const BAND_PENALTY = 1e9
 // The ring about the band is, besides the plan's own N·L reach (a band's width more), this many pixels of the image: where the plan climbs a
 // tenth in one pixel (a form's limb with the light at its edge) the ring in N·L is no pixel wide, and the band would meet the lattice, which
 // is tens of hundredths off there, in a seam.
-const RING_PX = 3
+export const RING_PX = 3
 // Distinct (mark, family) pairs sampled in one lattice cell (a cell holds a boundary of a few meshes at most, each
 // with its terminator or shadow edge).
 const MAX_KEYS_PER_CELL = 16
@@ -420,7 +420,7 @@ function readSample(f: UnderpaintField, s: number, r: ReturnType<typeof newRecip
   r.pz = f.pos[3 * s + 2]
 }
 
-const mixerOf = (params: PaintParams): LoadMixer => new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
+export const mixerOf = (params: PaintParams): LoadMixer => new LoadMixer({ ...params, mix: { ...params.mix, strength: params.mix.strength * UNDERPAINT_MIX } })
 
 // The colour (linear-light sRGB, 3 per band pixel) of every pixel of the plan's terminator band and of its ring: the recipe of its
 // donor sample made at the pixel's own plan value, then the donor cell's brush-load mix. A pixel of the band is held to no family: it

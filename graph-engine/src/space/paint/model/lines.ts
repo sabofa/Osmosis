@@ -19,6 +19,7 @@
 
 import { randomFor } from '../../../style/random'
 import type { Mark } from '../../scene/types'
+import { HIDDEN_DASH } from '../bake/types'
 import { PATH_POINTS } from '../types'
 import { clamp, hash3 } from './math'
 import { colourOfDraft, newRecipe, type ColourRecipe, type DraftColour } from './recipe'
@@ -26,8 +27,7 @@ import { veilOf, type Veil } from './roles'
 import { BEHIND_VEIL_LAYER, polylinePath, roleIndex, type PaintCtx } from './strokes'
 import { project, pxPerUnit } from './view'
 
-// The default dash of a hidden stretch drawn dashed, CSS px.
-const HIDDEN_DASH = [5, 4]
+// (The default dash of a hidden stretch drawn dashed, HIDDEN_DASH, is bake/types.ts's: the renderer shares it.)
 // A corner sharper than this ends a stroke (the corner is its end, exactly).
 const CORNER = (30 * Math.PI) / 180
 // The head of an arrow opens ±26 degrees from the shaft.
@@ -111,6 +111,8 @@ function splitCorners(pl: PL): PL[] {
 // ribbon, a Catmull-Rom curve through them, lies on the polyline. A longer stroke strays from a curved one between its points:
 // 0.2 to 0.5 px on a small circle, for strokes of the role's own length (36 px), where a data mark must be exact.
 export const LINE_MAX_PX = 21
+// The plan value a line's colour is made at.
+export const LINE_U = 0.6
 
 // Split into equal pieces no longer than maxLen.
 function splitLength(pl: PL, maxLen: number): PL[] {
@@ -143,7 +145,7 @@ function dashed(pl: PL, pattern: readonly number[]): PL[] {
 
 // Is a flat veil between the eye and the world point p? The segment from the point toward the eye
 // (along the view direction for an orthographic camera) crosses the sheet's plane, inside its edges.
-export function behindVeil(fc: PaintCtx['fc'], veils: readonly Veil[], p: readonly number[]): boolean {
+export function behindVeil(fc: Pick<PaintCtx['fc'], 'view' | 'ortho'>, veils: readonly Veil[], p: readonly number[]): boolean {
   const view = fc.view
   for (const v of veils) {
     if (!v.plane) continue
@@ -172,6 +174,26 @@ export function behindVeil(fc: PaintCtx['fc'], veils: readonly Veil[], p: readon
     if (v.inside(x, y, z)) return true
   }
   return false
+}
+
+// The recipe of a line stroke's colour: the mark's local colour through the curve at u = 0.6 (lScale 0.55, so its own value is kept), with the stroke's small
+// seeded jitter (none where `rng` is left out: the mark's own colour). Pure: the baked painting's data marks build theirs with it too.
+export function lineRecipeOf(local: ArrayLike<number>, rng?: ReturnType<typeof randomFor>): ColourRecipe {
+  const r = newRecipe()
+  r.lx = local[0]
+  r.ly = local[1]
+  r.lz = local[2]
+  r.u = LINE_U
+  r.lScale = 0.55
+  if (rng) {
+    r.g0 = rng.gauss()
+    r.g1 = rng.gauss()
+    r.g2 = rng.gauss()
+  }
+  r.c0 = 0.4
+  r.c1 = 1 / 3
+  r.c2 = 0.36
+  return r
 }
 
 export function lineStrokes(an: PaintCtx): void {
@@ -269,22 +291,7 @@ export function lineStrokes(an: PaintCtx): void {
   }
 
   // the mark's colour through the curve at u = 0.6, with a small seeded jitter per stroke
-  const recipeOf = (mark: number, rng: ReturnType<typeof randomFor>): ColourRecipe => {
-    const local = side.markColour[mark] ?? [0.4, 0.04, 0.035]
-    const r = newRecipe()
-    r.lx = local[0]
-    r.ly = local[1]
-    r.lz = local[2]
-    r.u = 0.6
-    r.lScale = 0.55
-    r.g0 = rng.gauss()
-    r.g1 = rng.gauss()
-    r.g2 = rng.gauss()
-    r.c0 = 0.4
-    r.c1 = 1 / 3
-    r.c2 = 0.36
-    return r
-  }
+  const recipeOf = (mark: number, rng: ReturnType<typeof randomFor>): ColourRecipe => lineRecipeOf(side.markColour[mark] ?? [0.4, 0.04, 0.035], rng)
 
   // the flat translucent sheets of the scene (a curved veil's lines lie on it, not behind it)
   const veilSheets: Veil[] = []
@@ -315,7 +322,7 @@ export function lineStrokes(an: PaintCtx): void {
       depth: pl.d[mid],
       lab: colourOfDraft(colour, an.env),
       colour,
-      u: 0.6,
+      u: LINE_U,
       cell,
       mx: pl.x[mid],
       my: pl.y[mid],

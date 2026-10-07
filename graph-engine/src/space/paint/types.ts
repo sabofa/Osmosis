@@ -43,6 +43,11 @@ export interface ParticleSet {
   rank: Float32Array // seeded, [0, 1)
   cell: Uint32Array // surface cell id for brush loads (§3.5)
   seed: Uint32Array
+  // Where each particle was seeded, for the bake and its diagnostics (bake/types.ts): the source triangle (index into the
+  // mark's `indices / 3`) and its barycentric weights b1 and b2 of the triangle's second and third vertices (the first's is
+  // 1 - b1 - b2, as TriangleHit in space/pick/bvh.ts). Absent on a set made before they existed.
+  tri?: Uint32Array
+  bary?: Float32Array // 2 per particle
 }
 
 // The camera and light for one frame. Matrices are column-major Float32Array(16).
@@ -119,6 +124,10 @@ export interface StrokeBatch {
   // The unit world normal at the stroke's anchor, turned toward the viewer the stroke was made for, 3 per stroke;
   // (0, 0, 0) for a stroke that has none (lines, edges). A view turned away from it fades the stroke out.
   worldNormal: Float32Array
+  // Per stroke, what the renderer does where a surface is nearer (bake/types.ts HIDDEN_*): only a baked frame
+  // fills it (data-mark lines drawn dashed where hidden); the per-frame model leaves it undefined and makes its
+  // own hidden runs.
+  hidden?: Uint8Array
 }
 export const EDGE_CLASSES: readonly EdgeClass[] = ['lost', 'soft', 'firm', 'hard']
 
@@ -154,6 +163,11 @@ export interface PaintFrame {
   // Counts for the lab readout.
   stats: { strokes: number; byRole: Record<Role, number>; loads: number }
 }
+
+// What the renderer paints: a PaintFrame, or a baked frame (the baked painting's, bake/types.ts FrameFromBake), which has no
+// underpainting image (null, or empty): the renderer draws its underpainting from the baked surfaces it was given
+// (PaintRenderer.setBakedSurfaces), and lays none when it has none. A PaintFrame is one.
+export type PaintFrameInput = Omit<PaintFrame, 'underpaint'> & { underpaint: Float32Array | null }
 
 // The model's two entry points (implemented in space/paint/model/index.ts).
 export type BuildParticles = (scene: SpaceScene, colours: SceneColours, params: PaintParams) => ParticleSet

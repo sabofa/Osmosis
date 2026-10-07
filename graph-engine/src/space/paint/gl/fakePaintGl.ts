@@ -177,7 +177,7 @@ export function createPaintFakeGl(options: FakeGlOptions = {}, size = { width: 8
 
 // The kinds of draw the paint renderer makes, told apart by the shader's own
 // header comment.
-export type PaintPass = 'shadow' | 'gbuffer' | 'depth' | 'underpaint' | 'stroke' | 'copy' | 'composite' | 'image' | 'edges' | 'other'
+export type PaintPass = 'shadow' | 'gbuffer' | 'depth' | 'underpaint' | 'surfaces' | 'dilate' | 'stroke' | 'copy' | 'composite' | 'image' | 'edges' | 'other'
 
 export function passOf(fake: FakeGl, draw: FakeGl['draws'][number]): PaintPass {
   const { vertex, fragment } = fake.programSource(draw.program)
@@ -187,6 +187,8 @@ export function passOf(fake: FakeGl, draw: FakeGl['draws'][number]): PaintPass {
     ['gbuffer', '// paint: gbuffer'],
     ['depth', '// paint: depth'],
     ['underpaint', '// paint: underpaint'],
+    ['surfaces', '// paint: baked surfaces'],
+    ['dilate', '// paint: baked dilate'],
     ['stroke', '// paint: stroke'],
     ['copy', '// paint: copy'],
     ['composite', '// paint: composite'],

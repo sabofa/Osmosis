@@ -5,9 +5,9 @@ import type { SpaceView } from '../../graph-engine/src/space/config'
 import type { PaintParams } from '../../graph-engine/src/space/paint/params'
 import type { PaintDebugMode, SceneColours } from '../../graph-engine/src/space/paint/types'
 import type { SpaceScene } from '../../graph-engine/src/space/scene/types'
-import { buildPaintView, type BuiltFigure } from './paintLabCamera'
+import { buildPaintView, heldFraming, type BuiltFigure, type HeldFraming } from './paintLabCamera'
 import { oklabToHex } from './paintLabColours'
-import { createPaintEngine, type FrameStats, type PaintEngine } from './paintLabEngine'
+import { createPaintEngine, type BakeStatus, type FrameStats, type PaintEngine } from './paintLabEngine'
 import { FpsMeter } from './paintLabMeter'
 import { URL_STATE, type InjectedState } from './paintLabState'
 
@@ -27,7 +27,10 @@ export interface Readout {
   particlesMs: number
   paperMs: number
   paintMs: number
-  kind: 'full' | 'colour' | 'repaint' | 'reproject'
+  kind: 'full' | 'colour' | 'repaint' | 'reproject' | 'baked'
+  // Which painter drew the frame, and what a baked frame's own build cost (ms).
+  path: 'baked' | 'live'
+  buildMs: number
   view: SpaceView
 }
 
@@ -37,10 +40,14 @@ export interface StageProps {
   colours: SceneColours
   params: PaintParams
   debug: PaintDebugMode
+  // The lab's Bake switch (a view setting, not a painter parameter): off is the per-frame painter whatever the light, and a bake in the making is stopped.
+  bake: boolean
   caption: { label: string; text: string }
   banner: string | null
   injected: InjectedState
   onReadout: (r: Readout) => void
+  // What the baked painting is doing: which painter is drawing, a bake's progress, why the per-frame painter when the light is fixed in the world.
+  onBake?: (status: BakeStatus) => void
 }
 
 const READOUT_MS = 250
@@ -59,6 +66,9 @@ export function Stage(props: StageProps) {
   const readoutTimer = useRef(0)
   const pendingReadout = useRef<Readout | null>(null)
   const builtRef = useRef<BuiltFigure | null>(null)
+  // The framing the baked painting is made for: the figure's authored camera at zoom 1, made at the stage's first size and kept (one object) while the
+  // stage's size leaves the figure within a factor of two of that: a resize is no reason to bake again (paintLabCamera.ts heldFraming).
+  const framingRef = useRef<{ built: BuiltFigure; width: number; height: number; held: HeldFraming } | null>(null)
   const [message, setMessage] = useState<{ title: string; text: string } | null>(null)
   // Everything a frame reads, kept current so the frame loop never goes stale.
   const live = useRef(props)
@@ -116,10 +126,15 @@ export function Stage(props: StageProps) {
     const camera = cameraMatrices(viewRef.current, p.built.world, { width, height }, p.built.projection)
     // the brush follows how far in the camera is against the figure's authored framing
     const view = buildPaintView(camera, p.params.light, dpr, draggingRef.current, viewRef.current.zoom / p.built.authored.zoom)
+    let framing = framingRef.current
+    if (!framing || framing.built !== p.built || framing.width !== width || framing.height !== height) {
+      framing = { built: p.built, width, height, held: heldFraming(framing && framing.built === p.built ? framing.held : null, p.built, { width, height }) }
+      framingRef.current = framing
+    }
     try {
       if (p.injected === 'engine-error') throw new Error('Injected engine failure (?state=engine-error).')
       // The frame's result arrives through the engine's events (onFrame, onError).
-      engine.render(view, p.params, p.debug)
+      engine.render(view, p.params, p.debug, framing.held.framing, p.bake)
     } catch (error) {
       setMessage({ title: 'The painter hit an error', text: error instanceof Error ? error.message : String(error) })
     }
@@ -169,6 +184,14 @@ export function Stage(props: StageProps) {
         canvas,
         {
           onFrame: framed,
+          onBake: (status) => {
+            // (?perf=1: the status line's history, for measuring a bake's time from a script)
+            if (URL_STATE.perf) {
+              const w = window as unknown as { __paintBake?: unknown[] }
+              ;(w.__paintBake ??= []).push({ ...status, t: performance.now() })
+            }
+            live.current.onBake?.(status)
+          },
           onError: (text) => setMessage(text === null ? null : { title: 'The painter hit an error', text }),
           onCrossfade: () => {
             if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -318,8 +341,8 @@ export function Stage(props: StageProps) {
     request()
   }, [props.built, request])
 
-  // Any parameter or mode change draws on the next animation frame.
-  useEffect(() => request(), [props.params, props.debug, request])
+  // Any parameter or mode change draws on the next animation frame (the Bake switch too: turned off, the live picture is asked for at once).
+  useEffect(() => request(), [props.params, props.debug, props.bake, request])
 
   return (
     <div className="pl-stage" ref={hostRef} style={{ background: oklabToHex(props.params.canvas.tone) }} tabIndex={0} aria-label="Painted figure: drag to orbit, right-drag to pan, wheel to zoom, double-click to reset">

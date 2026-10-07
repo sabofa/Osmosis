@@ -27,7 +27,7 @@ import { clamp, vcross, vdot, vlen, type V3 } from './math'
 import { colourOfDraft, newRecipe, type ColourRecipe, type ColourSource, type DraftColour } from './recipe'
 import { holdOf, polylinePath, roleIndex, type PaintCtx, type StrokeDraft } from './strokes'
 import { FAM_SHADOW } from './value'
-import { gIndex, project, pxPerUnit, toEye, unproject } from './view'
+import { gIndex, project, pxPerUnit, unproject } from './view'
 
 // ---- the meshes' own lines ----
 
@@ -63,7 +63,7 @@ function canonOf(mesh: MeshMark): Canon {
 const lines = new WeakMap<MeshMark, Float64Array[]>()
 
 // The border of an open mesh and its sharp creases, as polylines (xyz per vertex). Static per mesh.
-function staticLines(mesh: MeshMark): Float64Array[] {
+export function staticLines(mesh: MeshMark): Float64Array[] {
   const have = lines.get(mesh)
   if (have) return have
   const { id } = canonOf(mesh)
@@ -158,20 +158,40 @@ function chainEdges(edges: [number, number][]): number[][] {
 // The silhouette of a mesh in this view: the zero crossings of n·v over its triangles.
 function silhouetteLines(an: PaintCtx, mesh: MeshMark): Float64Array[] {
   const fc = an.fc
+  return silhouettePolylines(mesh, fc.view.eye, fc.ortho, fc.view.viewDir)
+}
+
+// The geometry of silhouetteLines, from what it reads of the view (the eye, whether the projection is orthographic, and the unit view direction):
+// the zero crossings of n·toEye over the mesh's triangles, chained into polylines (xyz per vertex), each point ON a triangle edge. Pure: the baked
+// painting's frame builds its silhouette strokes from it, with no G-buffer. `scratch`, when given, is the per-vertex array to write into (any length
+// at least the vertex count; it is written, not read). Under a perspective view the array holds n · (eye - p), whose sign is n·toEye's, and the
+// normalised n·toEye (what the crossing's place is made from) is taken only at the vertices of the edges the silhouette crosses: a vertex is not
+// normalised for a sign (the hypot of a mesh's every vertex was most of a silhouette's cost).
+export function silhouettePolylines(
+  mesh: MeshMark, eye: readonly number[], ortho: boolean, viewDir: readonly number[], scratch?: Float64Array,
+): Float64Array[] {
   const { id } = canonOf(mesh)
   const V = canonOf(mesh).count
   const p = mesh.positions
   const nv = p.length / 3
-  const s = new Float64Array(nv)
-  const ve = [0, 0, 0]
+  const s = scratch && scratch.length >= nv ? scratch : new Float64Array(nv)
+  const nrm = mesh.normals
   for (let i = 0; i < nv; i++) {
-    const nx = mesh.normals[3 * i], ny = mesh.normals[3 * i + 1], nz = mesh.normals[3 * i + 2]
-    if (nx === 0 && ny === 0 && nz === 0) {
-      s[i] = 1
-      continue
-    }
-    toEye(fc, p[3 * i], p[3 * i + 1], p[3 * i + 2], ve)
-    s[i] = nx * ve[0] + ny * ve[1] + nz * ve[2]
+    const nx = nrm[3 * i], ny = nrm[3 * i + 1], nz = nrm[3 * i + 2]
+    if (nx === 0 && ny === 0 && nz === 0) s[i] = 1
+    else if (ortho) s[i] = nx * -viewDir[0] + ny * -viewDir[1] + nz * -viewDir[2]
+    else s[i] = nx * (eye[0] - p[3 * i]) + ny * (eye[1] - p[3 * i + 1]) + nz * (eye[2] - p[3 * i + 2])
+  }
+  // n·toEye of vertex i, with the unit vector toward the eye made as view.ts toEye makes it
+  const exact = (i: number): number => {
+    const nx = nrm[3 * i], ny = nrm[3 * i + 1], nz = nrm[3 * i + 2]
+    if (nx === 0 && ny === 0 && nz === 0) return 1
+    if (ortho) return s[i]
+    const dx = eye[0] - p[3 * i]
+    const dy = eye[1] - p[3 * i + 1]
+    const dz = eye[2] - p[3 * i + 2]
+    const l = Math.hypot(dx, dy, dz) || 1
+    return nx * (dx / l) + ny * (dy / l) + nz * (dz / l)
   }
   // each triangle that changes sign gives a segment between two edge crossings
   const pts = new Map<number, V3>()
@@ -180,7 +200,8 @@ function silhouetteLines(an: PaintCtx, mesh: MeshMark): Float64Array[] {
     const a = id[i], b = id[j]
     const key = Math.min(a, b) * V + Math.max(a, b)
     if (!pts.has(key)) {
-      const t = s[i] / (s[i] - s[j])
+      const si = exact(i)
+      const t = si / (si - exact(j))
       pts.set(key, [p[3 * i] + (p[3 * j] - p[3 * i]) * t, p[3 * i + 1] + (p[3 * j + 1] - p[3 * i + 1]) * t, p[3 * i + 2] + (p[3 * j + 2] - p[3 * i + 2]) * t])
     }
     return key
@@ -412,17 +433,27 @@ function transition(an: PaintCtx, mark: number, poly: Float64Array, a: number, b
 function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: ReturnType<typeof randomFor>, lScale?: number): ColourRecipe {
   const { fc, planes } = an
   const pl = plane >= 0 ? planes.planes[plane] : null
+  const planeColour = pl && an.planeHasColour[plane] === 1 ? [an.planeColour[3 * plane], an.planeColour[3 * plane + 1], an.planeColour[3 * plane + 2]] : null
+  return sideRecipeOf(pl, planeColour, fc.ground[mark] === 1, [an.markColour[3 * mark], an.markColour[3 * mark + 1], an.markColour[3 * mark + 2]], u, rng, lScale)
+}
+
+// The same, from what it reads (pure: the baked painting's edge strokes build theirs with it too): the plane (null: none), the mean local colour of
+// the particles on it (null: it has none), whether the mark is bare table, and the mark's mean local colour.
+export function sideRecipeOf(
+  pl: { ground: boolean; nx: number; ny: number; nz: number } | null, planeColour: ArrayLike<number> | null, markIsGround: boolean, markColour: ArrayLike<number>,
+  u: number, rng: ReturnType<typeof randomFor>, lScale?: number,
+): ColourRecipe {
   const r = newRecipe()
   if (pl && pl.ground) r.ground = true
-  else if (pl && an.planeHasColour[plane] === 1) {
-    r.lx = an.planeColour[3 * plane]
-    r.ly = an.planeColour[3 * plane + 1]
-    r.lz = an.planeColour[3 * plane + 2]
-  } else if (fc.ground[mark] === 1) r.ground = true
+  else if (pl && planeColour) {
+    r.lx = planeColour[0]
+    r.ly = planeColour[1]
+    r.lz = planeColour[2]
+  } else if (markIsGround) r.ground = true
   else {
-    r.lx = an.markColour[3 * mark]
-    r.ly = an.markColour[3 * mark + 1]
-    r.lz = an.markColour[3 * mark + 2]
+    r.lx = markColour[0]
+    r.ly = markColour[1]
+    r.lz = markColour[2]
   }
   r.u = clamp(u, 0.05, 0.98)
   if (pl) r.nz = pl.nz
@@ -444,7 +475,7 @@ function sideRecipe(an: PaintCtx, plane: number, mark: number, u: number, rng: R
 
 // The recipe of bare table at plan value u: what lies across an outline where the table is in shadow (the figure's own
 // cast shadow), as the table is painted there.
-function groundRecipe(u: number, rng: ReturnType<typeof randomFor>): ColourRecipe {
+export function groundRecipe(u: number, rng: ReturnType<typeof randomFor>): ColourRecipe {
   const r = newRecipe()
   r.ground = true
   r.u = clamp(u, 0.05, 0.98)

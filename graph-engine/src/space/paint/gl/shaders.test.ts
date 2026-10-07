@@ -7,10 +7,12 @@ import { GBUFFER_VERTEX, gbufferFragment } from './shaders/gbuffer'
 import { SHADOW_FRAGMENT, SHADOW_VERTEX } from './shaders/shadow'
 import { DEPTH_FRAGMENT, DEPTH_VERTEX } from './shaders/depth'
 import { UNDERPAINT_WARP_FRAGMENT, UNDERPAINT_FRAGMENT as UNDERPAINT_PLAIN } from './shaders/underpaint'
+import { BAKED_DILATE_FRAGMENT, BAKED_FRAGMENT, BAKED_VERTEX } from './shaders/bakedUnderpaint'
 import { RIBBON_SEGMENTS, RIBBON_SUBDIV, STROKE_FRAGMENT, STROKE_VERTEX, TEXELS_PER_STROKE, VERTICES_PER_STROKE } from './shaders/stroke'
 import { UNDERPAINT_FRAGMENT } from './shaders/underpaint'
 import { BRISTLE_REACH, CAP_PAD } from './brush'
-import { DEPTH_SLOPE_CAP, FORM_REACH } from './depthTest'
+import { DASH_EDGE, DASH_OFF, DASH_ON, DEPTH_SLOPE_CAP, FORM_REACH, HIDDEN_ALPHA } from './depthTest'
+import { UNDERPAINT_BLEED } from './underpaint'
 
 const ALL = {
   fullscreen: FULLSCREEN_VERTEX,
@@ -28,6 +30,9 @@ const ALL = {
   image: IMAGE_FRAGMENT,
   edgeV: EDGE_VERTEX,
   edgeF: EDGE_FRAGMENT,
+  bakedV: BAKED_VERTEX,
+  bakedF: BAKED_FRAGMENT,
+  bakedDilateF: BAKED_DILATE_FRAGMENT,
 }
 
 describe('every shader', () => {
@@ -132,6 +137,28 @@ describe('the stroke shaders (R3)', () => {
     expect(f).toContain('float a = 0.9 * m * depthVisible(ivec2(gl_FragCoord.xy), hw, role);')
     // a stroke built on the screen alone has no world path, and is never tested
     expect(f).toContain('v_world < 0.5')
+  })
+
+  it('draw the hidden parts of a dashed data line in a second pass: where a surface is nearer, dashed by arc length, faint', () => {
+    const f = STROKE_FRAGMENT
+    // a uniform the normal passes never set (it stays 0), in the fragment shader only
+    expect(f).toContain('uniform bool u_hiddenPass;')
+    expect(STROKE_VERTEX).not.toContain('u_hiddenPass')
+    // the dash mask from the arc length in CSS px (v_geo.y), the pattern of the per-frame model's hidden run
+    expect(f).toContain(`const float DASH_ON = ${DASH_ON.toFixed(1)};`)
+    expect(f).toContain(`const float DASH_OFF = ${DASH_OFF.toFixed(1)};`)
+    expect(f).toContain(`const float DASH_EDGE = ${DASH_EDGE.toFixed(1)};`)
+    expect([DASH_ON, DASH_OFF]).toEqual([5, 4])
+    expect(f).toContain('float p = s - floor(s / period) * period;')
+    expect(f).toContain('float d = p > DASH_ON + 0.5 * DASH_OFF ? p - period : p;')
+    expect(f).toContain('return clamp((d + 0.5 * DASH_EDGE) / DASH_EDGE, 0.0, 1.0) * clamp((DASH_ON - d + 0.5 * DASH_EDGE) / DASH_EDGE, 0.0, 1.0);')
+    // the share is the normal pass's complement (the same tolerance, the same line), times the mask and the faintness
+    expect(f).toContain('if (u_hiddenPass) return (1.0 - seen) * dashMask(v_geo.y) * ' + HIDDEN_ALPHA.toFixed(2) + ';')
+    // with no depth to test against, or no world path, the hidden pass draws nothing, and the normal pass everything
+    expect(f).toContain('if (u_hiddenPass && (!u_depthTest || v_world < 0.5)) return 0.0;')
+    expect(f).toContain('if (!u_depthTest || v_world < 0.5) return 1.0;')
+    // the edge's form test is the normal pass's alone
+    expect(f).toContain('return role == ROLE_EDGE ? seen * v_form : seen;')
   })
 
   it('clip an edge decal that has left its form once per stroke, at its point nearest the viewer, and not at every fragment', () => {
@@ -322,5 +349,27 @@ describe('the composite shader (R4)', () => {
     expect(c).toContain('if (u_grey)')
     expect(c).toContain('oklabL(srgbDecode(col))')
     expect(c).toContain('u_noCanvas ? u_flatTone')
+  })
+})
+
+describe('the baked underpainting shaders (the baked painting, Task 5)', () => {
+  it('draw into an image the way the underpainting image is: sRGB colour, a coverage, one target', () => {
+    expect(BAKED_FRAGMENT).toContain('layout(location = 0) out vec4 o_colour;')
+    expect(BAKED_FRAGMENT).toContain('o_colour = vec4(srgbEncode(c.rgb / c.a), min(c.a, 1.0));')
+    expect(BAKED_DILATE_FRAGMENT).toContain('layout(location = 0) out vec4 o_colour;')
+  })
+
+  it('take the nearer of two surfaces by the hardware depth, and the scene’s depth by the view depth of the fragment', () => {
+    expect(BAKED_VERTEX).toContain('gl_Position = u_viewProj * vec4(a_position, 1.0);')
+    expect(BAKED_FRAGMENT).toContain('uniform sampler2D u_sceneDepth;')
+    expect(BAKED_FRAGMENT).toContain('uniform bool u_sceneTest;')
+  })
+
+  it('dilate the rim as far as the model’s image does: UNDERPAINT_BLEED texels, the nearest covered one, coverage 0', () => {
+    expect(UNDERPAINT_BLEED).toBe(2)
+    expect(BAKED_DILATE_FRAGMENT).toContain(`for (int dy = -${UNDERPAINT_BLEED}; dy <= ${UNDERPAINT_BLEED}; dy++) {`)
+    expect(BAKED_DILATE_FRAGMENT).toContain('o_colour = vec4(taken, 0.0);')
+    // a covered texel is copied as it is
+    expect(BAKED_DILATE_FRAGMENT).toContain('if (c.a > 0.0) {')
   })
 })

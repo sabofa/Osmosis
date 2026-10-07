@@ -23,3 +23,13 @@ export class FpsMeter {
     return ((this.times.length - 1) * 1000) / span
   }
 }
+
+// The readout's name for the painter that drew a frame. "baked" says what drew it. A live frame says why it is live when the baked painting is the
+// painter's to choose: "live (bake off)" when the Bake switch is off (the painter's own choice, said plainly), "live (no bake here)" when the switch
+// is on and the light is fixed in the world but the device or a failed bake rules the bake out (`why`), and plain "live" otherwise (a light that moves
+// with the camera, a debug view, the first bake still being made).
+export function pathLabel(path: 'baked' | 'live', bakeOn: boolean, why: string | null): string {
+  if (path === 'baked') return 'baked'
+  if (!bakeOn) return 'live (bake off)'
+  return why ? 'live (no bake here)' : 'live'
+}

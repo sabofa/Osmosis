@@ -73,7 +73,7 @@ export function groundLocal(params: PaintParams): Oklab {
 }
 
 // What a stroke's colour recipe reads from the parameters of the moment.
-function recipeEnv(params: PaintParams, curve: Curve, ground: Oklab): RecipeEnv {
+export function recipeEnv(params: PaintParams, curve: Curve, ground: Oklab): RecipeEnv {
   return { curve, ground, devL: params.curve.devL, devC: params.curve.devC, devH: params.curve.devH }
 }
 
@@ -281,8 +281,8 @@ const retained = new WeakMap<PaintFrame, { drafts: StrokeDraft[]; field: Underpa
 // mix (but not the size of its cell, which is the particles'). Everything else
 // (the light, the value plan, the strokes' shape, the edges, the particles, the
 // canvas tone) changes where strokes go or how they are made, and needs a full frame.
-const COLOUR_ONLY = ['curve', 'curves.lAdjust', 'curves.cAdjust', 'curves.hAdjust', 'curves.mixAmount', 'environment.hue', 'environment.chroma', 'environment.absorption', 'mix']
-const NOT_COLOUR_ONLY = ['mix.loadCell']
+export const COLOUR_ONLY = ['curve', 'curves.lAdjust', 'curves.cAdjust', 'curves.hAdjust', 'curves.mixAmount', 'environment.hue', 'environment.chroma', 'environment.absorption', 'mix']
+export const NOT_COLOUR_ONLY = ['mix.loadCell']
 
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -307,7 +307,7 @@ const isColourPath = (p: string): boolean =>
 // The parameters only the RENDERER reads: the relief light and strength, the canvas's own texture and weave, the
 // underpainting's opacity and streaks. The model's strokes are the same under any of them, and so are their
 // colours; the picture is made again from them.
-const RENDER_ONLY = ['impasto', 'canvas.texture', 'canvas.weave', 'underpaint']
+export const RENDER_ONLY = ['impasto', 'canvas.texture', 'canvas.weave', 'underpaint']
 const isRenderPath = (p: string): boolean => RENDER_ONLY.some((r) => p === r || p.startsWith(`${r}.`))
 
 // What going from `prev` (the parameters a frame was analysed under) to `next` asks of a frame:

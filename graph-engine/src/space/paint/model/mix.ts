@@ -240,6 +240,20 @@ export class LoadMixer {
     return made
   }
 
+  // Mix one stroke by its cell, whatever its role: the cell's offset for the role (a pure function of the role, the cell and the seed, as a surface stroke's
+  // is), and a place in it from the stroke's own seed. No load of strokes before it is kept, so what a stroke is mixed with does not depend on which others are
+  // drawn: the strokes of a view-dependent outline name one cell for each stretch of it.
+  mixByCell(input: MixInput): MixResult {
+    const params = this.params
+    const m = params.mix
+    const s = m.strength * roleScale(params, input.role) * this.amount(input.u)
+    const lab = input.lab
+    if (s <= 0) return { lab: [lab[0], lab[1], lab[2]], load: -1, index: 0, size: 0, kd: 0, hueOffset: 0, chromaOffset: 0, step: 0 }
+    const c = this.cellOffset(input.role, input.cell)
+    const kd = 1 - (1 - m.drift) * hash01(input.seed, input.cell, 0x2f6e2b1)
+    return this.apply(input, s, c.off, kd, c.id, 0, 1)
+  }
+
   // Mix one stroke. A surface stroke takes its cell's offset; a line or an edge
   // stroke takes its load's, and those must arrive in painting order, one role's
   // strokes consecutively, for loads to be what they are.
@@ -268,6 +282,23 @@ export class LoadMixer {
     st.left--
     st.pos = [input.x, input.y]
     return this.apply(input, s, off, kd, st.load, index, st.size)
+  }
+
+  // Mix a SEQUENTIAL stroke that rides the load of the stroke before it in its role's chain (the baked painting's finer edge strokes, bake/draft.ts
+  // ColourRecipes.follow): it takes that load's offset at the place in the load that stroke has (its drift), and no place of its own, so the
+  // load's size, its break and the strokes after it are as if it were not there. A role that has no load yet (or a spatial role, which has none) mixes
+  // as `mix` does.
+  mixFollow(input: MixInput): MixResult {
+    const params = this.params
+    const m = params.mix
+    const st = SPATIAL[input.role] ? null : this.stateOf(input.role)
+    if (!st || !st.off) return this.mix(input)
+    const s = m.strength * roleScale(params, input.role) * this.amount(input.u)
+    const lab = input.lab
+    if (s <= 0) return { lab: [lab[0], lab[1], lab[2]], load: -1, index: 0, size: 0, kd: 0, hueOffset: 0, chromaOffset: 0, step: 0 }
+    const index = Math.max(0, st.idx - 1)
+    const kd = 1 - (1 - m.drift) * (st.size > 1 ? index / (st.size - 1) : 0)
+    return this.apply(input, s, st.off, kd, st.load, index, st.size)
   }
 
   // The stroke's colour: the curve colour moved by an offset, scaled by the drift.

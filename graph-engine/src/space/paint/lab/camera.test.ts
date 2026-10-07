@@ -3,7 +3,7 @@ import { cameraMatrices } from '../../camera/projection'
 import { screenBasis } from '../../camera/turntable'
 import { worldMap } from '../../camera/world'
 import type { Box3, SpaceScene } from '../../scene/types'
-import { buildFigure, buildPaintView, keyLightDirection, lightDirection, prepareFigure, toWorldScene, worldLightDirection } from '../../../../../review/src/paintLabCamera'
+import { authoredFraming, buildFigure, buildPaintView, heldFraming, keyLightDirection, lightDirection, prepareFigure, toWorldScene, worldLightDirection } from '../../../../../review/src/paintLabCamera'
 import { PAINT_FIGURES } from '../../../../../review/src/paintLabFigures'
 
 // Building a figure (a res-120 surface, a marching level curve) takes a second or two,
@@ -241,5 +241,108 @@ describe('prepareFigure', () => {
       for (let i = 0; i < mark.positions.length; i++) expect(Math.abs(mark.positions[i])).toBeLessThanOrEqual(1 + 1e-9)
     }
     expect(prepareFigure(PAINT_FIGURES[1])).not.toBe(a)
+  })
+})
+
+describe('authoredFraming: what the baked painting is composed for', () => {
+  const SPEC = '@frame: none\n@bounds3d: x [-2, 2], y [-2, 2], z [0, 4]\n@camera: azimuth 20, elevation 30, zoom 1.5\nz = x^2 for x in [-2, 2], y in [-2, 2]'
+  const ortho = buildFigure(SPEC)
+  const persp = buildFigure(`@projection: perspective\n${SPEC}`)
+
+  it('is the authored camera at zoom 1 in the viewport: its eye, its view direction toward the target, and the world size of a CSS px at the centre', () => {
+    const viewport = { width: 1028, height: 690 }
+    const f = authoredFraming(ortho, viewport)
+    const camera = cameraMatrices(ortho.authored, ortho.world, viewport, 'orthographic')
+    near(f.eye, camera.eye)
+    near(f.viewDir, camera.basis.forward)
+    expect(Math.hypot(...f.viewDir)).toBeCloseTo(1, 12)
+    expect(f.ortho).toBe(true)
+    expect(f.worldPerPx).toBe(camera.worldPerPixel)
+    // that is 1 / (CSS px per world unit) at the centre: a world unit along the screen's right projects to 1 / worldPerPx px
+    const a = camera.viewProj
+    const px = (p: readonly number[]) => ((a[0] * p[0] + a[4] * p[1] + a[8] * p[2] + a[12]) / (a[3] * p[0] + a[7] * p[1] + a[11] * p[2] + a[15])) * 0.5 * viewport.width
+    const r = camera.basis.right
+    const centre = ortho.world.toWorld(ortho.authored.target)
+    expect(px([centre[0] + r[0], centre[1] + r[1], centre[2] + r[2]]) - px(centre)).toBeCloseTo(1 / f.worldPerPx, 6)
+  })
+
+  it('says so for a perspective figure, whose size of a px is the one at the target’s plane', () => {
+    const viewport = { width: 800, height: 600 }
+    const f = authoredFraming(persp, viewport)
+    expect(persp.projection).toBe('perspective')
+    expect(f.ortho).toBe(false)
+    expect(f.worldPerPx).toBe(cameraMatrices(persp.authored, persp.world, viewport, 'perspective').worldPerPixel)
+    // the eye is where the authored camera is: a distance from the target (a perspective eye is near, an orthographic one stands off)
+    const d = Math.hypot(...f.eye.map((v, i) => v - persp.world.toWorld(persp.authored.target)[i]))
+    expect(d).toBeGreaterThan(0)
+    expect(d).toBeLessThan(Math.hypot(...authoredFraming(ortho, viewport).eye.map((v, i) => v - ortho.world.toWorld(ortho.authored.target)[i])) * 2)
+  })
+
+  it('does not depend on where the camera is now, only on the figure and the size of the stage: the same for equal inputs, another for another size', () => {
+    const a = authoredFraming(ortho, { width: 1000, height: 700 })
+    expect(authoredFraming(ortho, { width: 1000, height: 700 })).toEqual(a)
+    // a stage twice as high (and as wide) shows the figure at twice the px to the world unit: half the world size of a px
+    expect(authoredFraming(ortho, { width: 2000, height: 1400 }).worldPerPx).toBeCloseTo(a.worldPerPx / 2, 12)
+    // a wider stage at the same height changes nothing of the scale (the box fits the height, a wide stage)
+    expect(authoredFraming(ortho, { width: 2000, height: 700 }).worldPerPx).toBeCloseTo(a.worldPerPx, 12)
+    // another figure is another framing
+    const other = buildFigure('@frame: none\n@bounds3d: x [-1, 1], y [-1, 1], z [0, 1]\n@camera: azimuth 70, elevation 10, zoom 1\nz = x*y for x in [-1, 1], y in [-1, 1]')
+    expect(authoredFraming(other, { width: 1000, height: 700 })).not.toEqual(a)
+  })
+
+  it('is the sphere figure’s own camera in the lab’s stage (an orthographic framing with a positive world size of a px, looking at the centre)', () => {
+    const sphere = prepareFigure(PAINT_FIGURES[0])
+    const f = authoredFraming(sphere.built, { width: 1028, height: 690 })
+    expect(f.worldPerPx).toBeGreaterThan(0)
+    expect(f.worldPerPx).toBeLessThan(0.05) // a figure a few hundred px across, in a box of half-extent about 1
+    const centre = sphere.built.world.toWorld(sphere.built.authored.target)
+    // the view direction points from the eye at the figure's centre
+    const toCentre = centre.map((v, i) => v - f.eye[i])
+    const len = Math.hypot(...toCentre)
+    near(toCentre.map((v) => v / len), f.viewDir, 9)
+  })
+})
+
+describe('heldFraming: a stage that is resized does not bake the figure again', () => {
+  const SPEC = '@frame: none\n@bounds3d: x [-2, 2], y [-2, 2], z [0, 4]\n@camera: azimuth 20, elevation 30, zoom 1.5\nz = x^2 for x in [-2, 2], y in [-2, 2]'
+  const figure = buildFigure(SPEC)
+
+  it('is made at the first size of the stage, and is the figure’s authored framing there', () => {
+    const first = heldFraming(null, figure, { width: 3000, height: 700 })
+    expect(first.built).toBe(figure)
+    expect(first.framing).toEqual(authoredFraming(figure, { width: 3000, height: 700 }))
+  })
+
+  it('is the same object for a stage up to twice as large in px as the one it was made at, and down to half of it, edges included (the height, for a landscape stage: the figure fits the height)', () => {
+    const first = heldFraming(null, figure, { width: 3000, height: 700 })
+    for (const height of [350, 420, 700, 1000, 1400]) expect(heldFraming(first, figure, { width: 3000, height }), `height ${height}`).toBe(first)
+    // the held one does not drift: it is the first size that counts, not the last
+    let held = first
+    for (const height of [900, 1100, 1300, 1400, 800, 500, 360]) held = heldFraming(held, figure, { width: 3000, height })
+    expect(held).toBe(first)
+  })
+
+  it('is made again for a stage past the band, either way, and then held at the new size', () => {
+    const first = heldFraming(null, figure, { width: 3000, height: 700 })
+    const big = heldFraming(first, figure, { width: 3000, height: 1401 })
+    expect(big).not.toBe(first)
+    expect(big.framing.worldPerPx).toBeCloseTo(authoredFraming(figure, { width: 3000, height: 1401 }).worldPerPx, 15)
+    expect(heldFraming(big, figure, { width: 3000, height: 1500 })).toBe(big)
+    const small = heldFraming(first, figure, { width: 3000, height: 349 })
+    expect(small).not.toBe(first)
+    expect(small.framing.worldPerPx).toBeGreaterThan(first.framing.worldPerPx * 2)
+    // (the eye and the direction are the camera's, not the stage's: only the size of a px moves)
+    expect(big.framing.eye).toEqual(first.framing.eye)
+    expect(big.framing.viewDir).toEqual(first.framing.viewDir)
+  })
+
+  it('is made again for another figure, whatever the size, and is the size of a px that the stage gives the figure for a portrait stage too', () => {
+    const first = heldFraming(null, figure, { width: 3000, height: 700 })
+    const other = buildFigure(SPEC)
+    expect(heldFraming(first, other, { width: 3000, height: 700 })).not.toBe(first)
+    // a portrait stage fits the figure across its width: the width is what sets the px, and the band is on that
+    const tall = heldFraming(null, figure, { width: 500, height: 900 })
+    expect(heldFraming(tall, figure, { width: 800, height: 1100 })).toBe(tall)
+    expect(heldFraming(tall, figure, { width: 1100, height: 1900 })).not.toBe(tall)
   })
 })

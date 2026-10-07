@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { lengthFactorsMoved } from '../bake/index'
+import type { AuthoredFraming, BakedPainting } from '../bake/types'
 import { DEFAULT_PAINT_PARAMS, setParam, type PaintParams } from '../params'
 import { createPaintFakeGl, timeline } from '../gl/fakePaintGl'
 import { encodeFloatTexel } from '../gl/gbuffer'
@@ -6,10 +8,25 @@ import { edgeFade, matchStrokes } from '../liveOrbit'
 import { flatColours, paintView, sceneOf, sphereGBuffer, sphereMesh, tableMesh } from '../model/testing'
 import { reprojectStrokes } from '../reproject'
 import type { Scratch as ScratchClass } from '../scratch'
-import { PaintSession, type FrameResponse, type SceneColourData, type SessionRequest, type SessionResponse } from '../session'
+import {
+  bakeTransferList,
+  PaintSession,
+  recolourTransferList,
+  type BakeAnswer,
+  type BakeRequest,
+  type BakedColours,
+  type FrameResponse,
+  type RecolourAnswer,
+  type RecolourRequest,
+  type SceneColourData,
+  type SessionRequest,
+  type SessionResponse,
+} from '../session'
 import { PATH_POINTS, ROLES, type PaintDebugMode, type PaintFrame, type PaintView, type StrokeBatch } from '../types'
 import type { SpaceScene } from '../../scene/types'
-import type { EngineEvents, EngineOptions, FrameStats, ModelHost, PaintEngine } from '../../../../../review/src/paintLabEngine'
+import type { BakeHost, BakeStatus, EngineEvents, EngineOptions, FrameStats, ModelHost, PaintEngine } from '../../../../../review/src/paintLabEngine'
+import { buildFigure, heldFraming } from '../../../../../review/src/paintLabCamera'
+import { colourData } from '../gl/bakedSurfaces'
 
 // The Paint Lab's engine: one frame at a time, newest request wins, a colour-only change is a
 // colour frame, a Showcase tile is copied when it is painted. It runs here on the fake GL and on
@@ -17,12 +34,13 @@ import type { EngineEvents, EngineOptions, FrameStats, ModelHost, PaintEngine } 
 vi.setConfig({ testTimeout: 120_000 })
 
 let createPaintEngine: typeof import('../../../../../review/src/paintLabEngine').createPaintEngine
+let BAKE_DEBOUNCE_MS: number
 
 // paintLabState reads the page's URL when it is imported.
 async function load(search: string) {
   vi.resetModules()
   vi.stubGlobal('location', { search, href: `http://lab/paint-lab.html${search}` })
-  ;({ createPaintEngine } = await import('../../../../../review/src/paintLabEngine'))
+  ;({ createPaintEngine, BAKE_DEBOUNCE_MS } = await import('../../../../../review/src/paintLabEngine'))
 }
 
 beforeAll(async () => load('?worker=0'))
@@ -1743,5 +1761,1466 @@ describe('a fade that is not the base’s any more', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ---- the baked painting: bake in the worker, a frame from the bake on this thread ----
+
+// The model's host of these tests: the real session, and a count of the frames it was asked for. (The bake is NOT made here: it has a host of its own.)
+class LiveHost implements ModelHost {
+  readonly background = true
+  readonly session = new PaintSession()
+  readonly frameRequests: SessionRequest[] = []
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.session.setScene(sceneId, scene, colours)
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    this.session.setColours(sceneId, colours)
+  }
+  frame(request: SessionRequest): Promise<SessionResponse> {
+    this.frameRequests.push(request)
+    return Promise.resolve(this.session.frame(request))
+  }
+  dispose() {}
+}
+
+// The bake's host of these tests: the real session behind it, as a worker of its own is, and what comes back is a COPY with the transferred arrays moved
+// (structuredClone with the transfer lists), so the page's painting is not the session's own object. `manual` holds a bake in flight until the test
+// releases it (the real bake is made then). `cancel` is what the worker's is: what is in flight is abandoned (never made, its promise settles with id -1),
+// and the session is made again with the scenes it held and none of its bake.
+class BakeSide implements BakeHost {
+  readonly background = true
+  session = new PaintSession()
+  readonly bakeRequests: BakeRequest[] = []
+  readonly recolourRequests: RecolourRequest[] = []
+  readonly bakes: BakedPainting[] = []
+  // The colours of each recolour answered, copied before they were handed over.
+  readonly recoloured: BakedColours[] = []
+  cancels = 0
+  respawns = 0
+  sceneSets = 0
+  maxRunning = 0
+  private running = 0
+  private readonly scenes = new Map<number, { scene: SpaceScene; colours: SceneColourData }>()
+  private waiting: { run: () => void; settle: (a: BakeAnswer) => void }[] = []
+  private readonly manual: boolean
+  constructor(manual = false) {
+    this.manual = manual
+  }
+  // Bakes asked for and neither made nor cancelled.
+  get held(): number {
+    return this.waiting.length
+  }
+  setScene(sceneId: number, scene: SpaceScene, colours: SceneColourData) {
+    this.scenes.set(sceneId, { scene, colours })
+    this.session.setScene(sceneId, scene, colours)
+    this.sceneSets++
+  }
+  setColours(sceneId: number, colours: SceneColourData) {
+    const have = this.scenes.get(sceneId)
+    if (have) have.colours = colours
+    this.session.setColours(sceneId, colours)
+  }
+  bake(request: BakeRequest, progress: (percent: number) => void): Promise<BakeAnswer> {
+    this.bakeRequests.push(request)
+    this.maxRunning = Math.max(this.maxRunning, ++this.running)
+    return new Promise((resolve) => {
+      const entry = {
+        settle: resolve,
+        run: () => {
+          const answer = this.session.bake(request, progress)
+          this.running--
+          if (!answer.ok) return resolve(answer)
+          const sent = structuredClone(answer, { transfer: bakeTransferList(answer.baked) }) as BakeAnswer
+          if (sent.ok) this.bakes.push(sent.baked)
+          resolve(sent)
+        },
+      }
+      this.waiting.push(entry)
+      if (!this.manual) {
+        setTimeout(() => {
+          const i = this.waiting.indexOf(entry)
+          if (i >= 0) {
+            this.waiting.splice(i, 1)
+            entry.run()
+          }
+        }, 0)
+      }
+    })
+  }
+  recolour(request: RecolourRequest): Promise<RecolourAnswer> {
+    this.recolourRequests.push(request)
+    const answer = this.session.recolour(request)
+    if (!answer.ok) return Promise.resolve(answer)
+    this.recoloured.push(structuredClone(answer.colours))
+    return Promise.resolve(structuredClone(answer, { transfer: recolourTransferList(answer.colours) }) as RecolourAnswer)
+  }
+  // The bake in flight (manual) is made, and its answer handed back.
+  release(): void {
+    const entry = this.waiting.shift()
+    entry?.run()
+  }
+  cancel() {
+    this.cancels++
+    for (const w of this.waiting.splice(0)) w.settle({ id: -1, ok: false, error: 'the bake was cancelled' })
+    this.running = 0
+    this.session = new PaintSession()
+    for (const [id, sc] of this.scenes) {
+      this.session.setScene(id, sc.scene, sc.colours)
+      this.sceneSets++
+    }
+    this.respawns++
+  }
+  dispose() {}
+}
+
+// The key light in the world, as the lab's view carries it when the light is fixed in the world (paintLabCamera.ts worldLightDirection): from the
+// light's own azimuth and elevation, the same for every view of the camera.
+const worldLightOf = (params: PaintParams): [number, number, number] => {
+  const a = (params.light.azimuth * Math.PI) / 180
+  const e = (params.light.elevation * Math.PI) / 180
+  return [Math.cos(e) * Math.cos(a), Math.cos(e) * Math.sin(a), Math.sin(e)]
+}
+const bview = (opts: Parameters<typeof paintView>[0] = {}): PaintView => paintView({ width: 320, height: 240, azimuth: 30, elevation: 25, zoom: 100, ...opts })
+const FRAMING = ((): AuthoredFraming => {
+  const v = bview()
+  return { eye: [...v.eye], viewDir: [...v.viewDir], ortho: true, worldPerPx: 1 / 100 }
+})()
+// A sphere and a table, with few particles: a bake is heavy and the machine shared.
+const BP: PaintParams = { ...P, particles: { ...P.particles, maxPerUnit2: 250 } }
+const FLAT = setParam(BP, 'light.worldFixed', 0)
+const BSCENE = sceneOf([sphereMesh({ radius: 0.6, nu: 20, nv: 14 }), tableMesh({ z: -0.6, half: 1.5, index: 1 })])
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const sumOf = (a: Float32Array): number => a.reduce((x, y) => x + y, 0)
+
+function bakeSetup(
+  opts: { manual?: boolean; host?: ModelHost; bakeHost?: BakeHost | null; fake?: Parameters<typeof createPaintFakeGl>[0]; limits?: Parameters<typeof createPaintFakeGl>[2] } = {},
+) {
+  const live = opts.host ?? new LiveHost()
+  const bake = opts.bakeHost === undefined ? new BakeSide(opts.manual ?? false) : opts.bakeHost
+  const gl = createPaintFakeGl(opts.fake ?? {}, { width: 320, height: 240 }, opts.limits ?? {})
+  Object.assign(gl.canvas.canvas, { style: {} })
+  const frames: FrameStats[] = []
+  const errors: (string | null)[] = []
+  const statuses: BakeStatus[] = []
+  const painted: { frame: PaintFrame; kind: FrameStats['kind'] }[] = []
+  // The batches of the baked frames as the engine gave them: it builds each in arrays it keeps from frame to frame (the next frame writes over them), so `painted`
+  // holds a copy of each, which a test can read at its leisure.
+  const raw: StrokeBatch[] = []
+  const inner = createPaintEngine(
+    gl.canvas.canvas,
+    {
+      onFrame: (f) => frames.push(f),
+      onError: (m) => errors.push(m),
+      onBake: (s) => statuses.push(s),
+      onPaint: (frame, kind) => {
+        if (kind === 'baked') raw.push(frame.strokes)
+        painted.push({ frame: kind === 'baked' ? { ...frame, strokes: copyOf(frame.strokes) } : frame, kind })
+      },
+    },
+    { host: live, bakeHost: bake },
+  )
+  // (the view's light is the params' light in the world, as the lab builds it)
+  const engine: PaintEngine = { ...inner, render: (v, p, d, a, b) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a, b) }
+  engine.setScene(BSCENE, COLOURS)
+  const baked = () => frames.filter((f) => f.kind === 'baked')
+  // The first frames: the per-frame painter's while the first bake is made, then the bake's.
+  const ready = async (params: PaintParams = BP, framing: AuthoredFraming = FRAMING) => {
+    engine.render(bview(), params, 'none', framing)
+    // (a manual bake host is let go: the first bake is made when it is asked for)
+    if (bake instanceof BakeSide && opts.manual) {
+      await vi.waitFor(() => expect(bake.bakeRequests.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+      bake.release()
+    }
+    await vi.waitFor(() => expect(baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+  }
+  const composites = () => timeline(gl).filter((e) => e.kind === 'composite').length
+  const gbuffers = () => timeline(gl).filter((e) => e.kind === 'gbuffer').length / 2
+  // `host` is the bake's (BakeSide), `live` the model's (LiveHost) unless the test gave its own.
+  return { host: bake as BakeSide, live: live as LiveHost, gl, engine, frames, errors, statuses, painted, raw, baked, ready, composites, gbuffers }
+}
+
+// A batch of strokes copied (every typed array of it).
+function copyOf(b: StrokeBatch): StrokeBatch {
+  return Object.fromEntries(Object.entries(b).map(([k, v]) => [k, ArrayBuffer.isView(v) ? (v as Float32Array).slice() : v])) as unknown as StrokeBatch
+}
+
+describe('the baked painting: which painter draws', () => {
+  it('draws per frame, and builds no bake, when the light is not fixed in the world', async () => {
+    const t = bakeSetup()
+    t.engine.render(bview(), FLAT, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.frames.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(t.frames[0]).toMatchObject({ kind: 'full', path: 'live', buildMs: 0 })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests).toEqual([])
+    expect(t.statuses.every((s) => s.path === 'live' && s.painting === null && s.why === null)).toBe(true)
+    // and a drag is the live orbit's: re-projected frames, the model behind
+    t.engine.render(bview({ azimuth: 40, dragging: true }), FLAT, 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1].kind).toBe('reproject')
+    t.engine.dispose()
+  })
+
+  it('draws per frame, and builds no bake, when a debug view is chosen, the page gave no framing, the host cannot bake, or the lab has the bake switched off', async () => {
+    const t = bakeSetup()
+    t.engine.render(bview(), BP, 'value', FRAMING)
+    t.engine.render(bview(), BP, 'none')
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests).toEqual([])
+    expect(t.frames.every((f) => f.path === 'live')).toBe(true)
+    t.engine.dispose()
+    // (a host with no bake in it: the lab's own is a worker or the session; a test's slow host is neither)
+    const slow = new SlowHost()
+    const s = bakeSetup({ host: slow, bakeHost: null })
+    s.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(slow.requests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    slow.finish()
+    await vi.waitFor(() => expect(s.frames.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(s.frames[0].path).toBe('live')
+    s.engine.dispose()
+    // the Bake switch off (the page's: &bake=0 starts it off, and the stage gives it to every render; the engine no longer reads the URL for it)
+    const off = bakeSetup()
+    off.engine.render(bview(), BP, 'none', FRAMING, false)
+    await vi.waitFor(() => expect(off.frames.length).toBe(1), { timeout: 60_000, interval: 5 })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(off.host.bakeRequests).toEqual([])
+    expect(off.frames[0].path).toBe('live')
+    off.engine.dispose()
+  })
+
+  it('draws per frame, and says why, when the renderer cannot depth-test strokes (no float render targets): the status line, and no bake', async () => {
+    const t = bakeSetup({ fake: { colorBufferFloat: false } })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.frames.length).toBe(1), { timeout: 60_000, interval: 5 })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests).toEqual([])
+    expect(t.frames[0].path).toBe('live')
+    const last = t.statuses[t.statuses.length - 1]
+    expect(last).toMatchObject({ path: 'live', painting: null })
+    expect(last.why).toMatch(/float/)
+    t.engine.dispose()
+  })
+
+  it('draws from the bake when all three hold: the light is fixed in the world, the renderer can depth-test, no debug view', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    expect(t.host.bakeRequests.length).toBe(1)
+    const f = t.baked()[0]
+    expect(f).toMatchObject({ kind: 'baked', path: 'baked', modelMs: 0, gbufferMs: 0 })
+    expect(f.strokes).toBeGreaterThan(100)
+    expect(f.buildMs).toBeGreaterThan(0)
+    expect(f.paintMs).toBeGreaterThan(0)
+    expect(f.ms).toBeGreaterThanOrEqual(f.buildMs)
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'baked', painting: null, why: null })
+    expect(t.errors.filter((m) => m !== null)).toEqual([])
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: the first bake', () => {
+  it('shows the per-frame painter while it is made (150 ms after the first render, in the worker), with its progress, and the bake from then on', async () => {
+    const t = bakeSetup()
+    const t0 = performance.now()
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    // nothing asked for yet: the bake waits out the debounce, so the first picture is the per-frame painter's
+    expect(t.host.bakeRequests.length).toBe(0)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(BAKE_DEBOUNCE_MS - 15)
+    const request = t.host.bakeRequests[0]
+    expect(request.params).toBe(BP)
+    expect(request.lightDir).toEqual(worldLightOf(BP))
+    expect(request.authored).toEqual(FRAMING)
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+    expect(t.frames[0]).toMatchObject({ kind: 'full', path: 'live' })
+    // the progress: "Painting… 0%" first, then it grows (whole percents, each once), 100 at the end, and cleared on arrival
+    const percents = t.statuses.filter((s) => s.painting !== null).map((s) => s.painting as number)
+    expect(percents[0]).toBe(0)
+    expect(percents.length).toBeGreaterThan(3)
+    for (let i = 1; i < percents.length; i++) expect(percents[i]).toBeGreaterThan(percents[i - 1])
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'baked', painting: null, why: null })
+    // the model's frame the bake replaced did not come back over it
+    await sleep(100)
+    expect(t.frames.slice(t.frames.indexOf(t.baked()[0])).every((f) => f.kind === 'baked')).toBe(true)
+    t.engine.dispose()
+  })
+
+  it('does not bake for another figure’s inputs: a bake that lands after the figure changed is dropped, and the new figure is baked (live frames meanwhile)', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    // another figure while the first is baked
+    const other = sceneOf([sphereMesh({ radius: 0.5, nu: 20, nv: 14 }), tableMesh({ z: -0.5, half: 1.5, index: 1 })])
+    t.engine.setScene(other, COLOURS)
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    const before = t.frames.length
+    t.host.release()
+    await sleep(50)
+    // the old figure's bake was dropped: nothing baked was painted
+    expect(t.baked().length).toBe(0)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].sceneId).not.toBe(t.host.bakeRequests[0].sceneId)
+    t.host.release()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+    expect(t.frames.length).toBeGreaterThan(before)
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: every frame is a frame of the bake, with no model run', () => {
+  it('builds every baked frame in arrays it keeps (final fix wave, L3): the strokes of two frames in a row are views of the same buffers, and the renderer has painted the first before the second writes over it', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    for (const az of [50, 55, 60]) t.engine.render(bview({ azimuth: az }), BP, 'none', FRAMING)
+    const [a, b] = t.raw.slice(-2)
+    expect(b).not.toBe(a)
+    let arrays = 0
+    for (const k of Object.keys(a) as (keyof StrokeBatch)[]) {
+      const x = a[k]
+      const y = b[k]
+      if (!ArrayBuffer.isView(x) || !ArrayBuffer.isView(y)) continue
+      arrays++
+      expect(y.buffer, String(k)).toBe(x.buffer)
+    }
+    expect(arrays).toBeGreaterThanOrEqual(19)
+    // (what a test is shown of each is a copy: the pictures differ from frame to frame, the arrays do not)
+    const last = t.painted.filter((p) => p.kind === 'baked')
+    expect(last[last.length - 1].frame.strokes.path.buffer).not.toBe(last[last.length - 2].frame.strokes.path.buffer)
+    t.engine.dispose()
+  })
+
+  it('builds a frame for each render of a drag, synchronously, asks the model for nothing, and does not bake again (frame build and paint times reported)', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    const asked = { frames: t.live.frameRequests.length, bakes: t.host.bakeRequests.length }
+    const before = t.frames.length
+    for (let k = 1; k <= 30; k++) t.engine.render(bview({ azimuth: 30 + 3 * k, dragging: true }), BP, 'none', FRAMING)
+    // (every render painted its frame as it returned: the G-buffer's landing may add repaints, not fewer)
+    expect(t.frames.length - before).toBeGreaterThanOrEqual(30)
+    for (const f of t.frames.slice(before)) expect(f).toMatchObject({ kind: 'baked', path: 'baked', modelMs: 0, gbufferMs: 0 })
+    expect(t.frames.slice(before).every((f) => f.buildMs > 0 && f.paintMs >= 0 && f.strokes > 0)).toBe(true)
+    await sleep(BAKE_DEBOUNCE_MS + 150)
+    expect(t.live.frameRequests.length).toBe(asked.frames)
+    expect(t.host.bakeRequests.length).toBe(asked.bakes)
+    expect(t.host.recolourRequests.length).toBe(0)
+    // the camera at rest again: a frame at full density, from the same bake
+    t.engine.render(bview({ azimuth: 120 }), BP, 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1].kind).toBe('baked')
+    expect(t.host.bakeRequests.length).toBe(asked.bakes)
+    t.engine.dispose()
+  })
+
+  it('thins a frame under a drag by the drag density, as the frame does, and draws every stroke at rest', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    t.engine.render(bview({ azimuth: 50 }), BP, 'none', FRAMING)
+    const rest = t.frames[t.frames.length - 1].strokes
+    t.engine.render(bview({ azimuth: 50, dragging: true }), setParam(BP, 'particles.dragDensity', 0.3), 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1].strokes).toBeLessThan(rest)
+    t.engine.dispose()
+  })
+
+  it('reads the G-buffer back without waiting, and paints the picture again with it when it lands for the view the camera stopped at', async () => {
+    const t = bakeSetup({ limits: { asyncReadback: true, fenceDelayPolls: 2 } })
+    await t.ready()
+    // let the readbacks of the first frames land, then move the camera and stop
+    await sleep(60)
+    const asked = t.live.frameRequests.length
+    t.engine.render(bview({ azimuth: 70, dragging: true }), BP, 'none', FRAMING)
+    t.engine.render(bview({ azimuth: 75 }), BP, 'none', FRAMING)
+    const n = t.frames.length
+    const passes = t.gbuffers()
+    // the G-buffer for this view was drawn (not waited for) and, when its fence has passed, the picture is made again with it
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 10_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1].kind).toBe('baked')
+    expect(t.gbuffers()).toBeGreaterThanOrEqual(passes)
+    expect(t.live.frameRequests.length).toBe(asked) // no model request was made for it
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: what a change of parameters asks of it', () => {
+  it('repaints only, with no request at all, for a renderer parameter or one only a frame reads (the relief, the drag density, the fade)', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    for (const [path, value] of [['impasto.strength', 1.6], ['particles.dragDensity', 0.5], ['particles.fadeHi', 0.5], ['roles.block.density', 0.8]] as const) {
+      const n = t.frames.length
+      t.engine.render(bview(), setParam(BP, path, value), 'none', FRAMING)
+      expect(t.frames.length, path).toBe(n + 1)
+      expect(t.frames[n].kind, path).toBe('baked')
+    }
+    await sleep(BAKE_DEBOUNCE_MS + 200)
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.host.recolourRequests.length).toBe(0)
+    t.engine.dispose()
+  })
+
+  it('makes the colours again, in the worker, for a colour parameter: only the colour arrays come back, and the picture has the new colours; no bake', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    const first = t.painted[t.painted.length - 1].frame.strokes
+    const colours = sumOf(first.colour)
+    const strokes = first.count
+    const next = setParam(BP, 'curve.warmHue', 20)
+    const n = t.frames.length
+    t.engine.render(bview(), next, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.recolourRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(t.host.recolourRequests[0]).toMatchObject({ key: t.host.bakes[0].key, params: next })
+    // the colours land and the picture is painted with them, without anyone asking for a frame
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n + 1), { timeout: 60_000, interval: 5 })
+    t.engine.render(bview(), next, 'none', FRAMING)
+    const recoloured = t.painted[t.painted.length - 1].frame.strokes
+    expect(recoloured.count).toBe(strokes)
+    expect(sumOf(recoloured.colour)).not.toBeCloseTo(colours, 3)
+    expect(t.host.bakeRequests.length).toBe(1)
+    // and a second colour change, and the first one back: recolours again, never a bake
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.recolourRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    await sleep(200)
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)).toBeCloseTo(colours, 3)
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('makes a new bake for anything else the bake reads (the light, a role’s size, the seed), 150 ms after the last change, with the old bake on screen meanwhile', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    const firstColours = (() => {
+      t.engine.render(bview(), BP, 'none', FRAMING)
+      return sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)
+    })()
+    for (const [path, value] of [['light.azimuth', 20], ['roles.block.width', 30], ['seed', 7]] as const) {
+      const bakes = t.host.bakeRequests.length
+      const next = setParam(BP, path, value)
+      const at = performance.now()
+      t.engine.render(bview(), next, 'none', FRAMING)
+      // the old bake is what is on screen, and the status line says it is painting
+      expect(t.frames[t.frames.length - 1].kind, path).toBe('baked')
+      expect(t.statuses[t.statuses.length - 1].painting, path).toBe(0)
+      expect(t.host.bakeRequests.length, path).toBe(bakes)
+      await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(bakes + 1), { timeout: 60_000, interval: 5 })
+      expect(performance.now() - at, path).toBeGreaterThanOrEqual(BAKE_DEBOUNCE_MS - 15)
+      expect(t.host.bakeRequests[bakes].params, path).toBe(next)
+      // (the next frames, with the bake in the making, are still the old bake's)
+      t.engine.render(bview({ azimuth: 35 }), next, 'none', FRAMING)
+      expect(t.frames[t.frames.length - 1].kind, path).toBe('baked')
+      await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1].painting).toBeNull(), { timeout: 120_000, interval: 5 })
+      // back to the first params: another bake (the one held is the changed one's), whose colours are the first's again
+      t.engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(bakes + 2), { timeout: 60_000, interval: 5 })
+      await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1].painting).toBeNull(), { timeout: 120_000, interval: 5 })
+      t.engine.render(bview(), BP, 'none', FRAMING)
+      expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour), path).toBeCloseTo(firstColours, 3)
+    }
+    t.engine.dispose()
+  }, 600_000)
+
+  it('is one bake for a slider that is dragged: a change in every 100 ms keeps the debounce waiting, and the bake is for the last', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    const bakes = t.host.bakeRequests.length
+    let last = BP
+    let at = 0
+    for (let k = 1; k <= 4; k++) {
+      last = setParam(BP, 'light.azimuth', -35 + 5 * k)
+      t.engine.render(bview(), last, 'none', FRAMING)
+      at = performance.now()
+      await sleep(90)
+    }
+    expect(t.host.bakeRequests.length).toBe(bakes)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(bakes + 1), { timeout: 60_000, interval: 5 })
+    expect(performance.now() - at).toBeGreaterThanOrEqual(BAKE_DEBOUNCE_MS - 15 - 90)
+    expect(t.host.bakeRequests[bakes].params).toBe(last)
+    t.engine.dispose()
+  })
+
+  it('re-bakes when a slider that only a frame reads moves a stroke’s baked length across a bucket, and not when it does not', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    const held = t.host.bakes[0]
+    const moved = [0.2, 0.5, 2, 4, 8, 16].find((v) => lengthFactorsMoved(held.areaPerParticle, held.referenceWorldPerPx, BP, setParam(BP, 'particles.zoomGrowMax', v)))
+    expect(moved, 'a zoom growth that moves the bucketed length of the baked paths').toBeDefined()
+    const still = setParam(BP, 'particles.dragDensity', 0.4)
+    expect(lengthFactorsMoved(held.areaPerParticle, held.referenceWorldPerPx, BP, still)).toBe(false)
+    t.engine.render(bview(), still, 'none', FRAMING)
+    await sleep(BAKE_DEBOUNCE_MS + 150)
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.render(bview(), setParam(BP, 'particles.zoomGrowMax', moved as number), 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    t.engine.dispose()
+  })
+
+  it('makes a new bake for another framing (a resized stage, another figure’s camera), and none for the camera that orbits', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    t.engine.render(bview({ azimuth: 100, elevation: 50 }), BP, 'none', { ...FRAMING, eye: [5, 5, 5], viewDir: [-0.6, -0.6, -0.5] })
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].authored.eye).toEqual([5, 5, 5])
+    t.engine.dispose()
+  })
+
+  it('makes a new bake for new colours of the figure (a theme, a local colour), the per-frame painter drawing meanwhile', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    t.engine.setScene(BSCENE, flatColours({ 0: [0.4, 0.1, -0.1], 1: [0.9, 0.01, 0.02] }))
+    const n = t.frames.length
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    // (the old bake is of the old colours: the model draws the picture for the new ones)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[n]).toMatchObject({ kind: 'full', path: 'live' })
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    await vi.waitFor(() => expect(t.frames[t.frames.length - 1].kind).toBe('baked'), { timeout: 120_000, interval: 5 })
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: one bake at a time, the newest request, a stale bake dropped', () => {
+  it('stops a bake that a change made useless (the one on screen stays), and bakes the newest', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    t.host.release()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    const onScreen = sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)
+    // a change: its bake starts, and while it is made another change comes
+    const second = setParam(BP, 'light.azimuth', 10)
+    t.engine.render(bview(), second, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    const third = setParam(BP, 'light.azimuth', 40)
+    t.engine.render(bview(), third, 'none', FRAMING)
+    await sleep(60) // (the G-buffer of these light parameters lands, and the picture is painted again with it)
+    const n = t.frames.length
+    expect(t.host.cancels).toBe(1) // the second's bake was stopped by the third's light
+    t.host.release() // (nothing is in flight to make)
+    await sleep(100)
+    expect(t.frames.length).toBe(n) // nothing was painted for it
+    t.engine.render(bview(), third, 'none', FRAMING)
+    expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)).toBeCloseTo(onScreen, 3) // still the first bake's
+    // the newest is baked (one at a time: never two in flight), and when it lands it is the picture
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(3), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[2].params).toBe(third)
+    t.host.release()
+    await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1].painting).toBeNull(), { timeout: 120_000, interval: 5 })
+    t.engine.render(bview(), third, 'none', FRAMING)
+    expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)).not.toBeCloseTo(onScreen, 3)
+    expect(t.host.maxRunning).toBe(1)
+    t.engine.dispose()
+  }, 600_000)
+
+  it('cancels the bake in flight for a change of the light, and of the changes that follow bakes the newest, once', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    // changes come while the first is made
+    const params = [20, 30, 40].map((v) => setParam(BP, 'light.azimuth', v))
+    for (const p of params) {
+      t.engine.render(bview(), p, 'none', FRAMING)
+      await sleep(20)
+    }
+    // the first change stopped the bake in flight (nothing was made of it); the last, 150 ms on, is baked, once
+    expect(t.host.cancels).toBe(1)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 120_000, interval: 5 })
+    expect(t.host.bakeRequests[1].params).toBe(params[2])
+    t.host.release()
+    await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1].painting).toBeNull(), { timeout: 120_000, interval: 5 })
+    expect(t.host.bakeRequests.length).toBe(2)
+    expect(t.host.maxRunning).toBe(1)
+    t.engine.dispose()
+  }, 600_000)
+
+  it('drops a bake that lands stale for what a cancel does not see (a frame-only slider that moves the bucketed length of its paths): it is made, its answer is not shown, and the newest is baked', async () => {
+    const t = bakeSetup({ manual: true })
+    await t.ready()
+    const first = t.host.bakes[0]
+    const grow = [0.2, 0.5, 2, 4, 8, 16].find((v) => lengthFactorsMoved(first.areaPerParticle, first.referenceWorldPerPx, BP, setParam(BP, 'particles.zoomGrowMax', v)))
+    expect(grow, 'a zoom growth that crosses a bucket').toBeDefined()
+    const second = setParam(BP, 'light.azimuth', 10)
+    t.engine.render(bview(), second, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    // a slider only a frame reads: the bake in the making is not useless (no cancel), but its paths will be of a length that is no longer the bucket's
+    const third = setParam(second, 'particles.zoomGrowMax', grow as number)
+    t.engine.render(bview(), third, 'none', FRAMING)
+    expect(t.host.cancels).toBe(0)
+    await sleep(60)
+    const n = t.frames.length
+    t.host.release()
+    await sleep(100)
+    expect(t.frames.length).toBe(n) // the bake was made and dropped: nothing was painted for it
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(3), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[2].params).toBe(third)
+    t.host.release()
+    await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1].painting).toBeNull(), { timeout: 120_000, interval: 5 })
+    t.engine.dispose()
+  }, 600_000)
+
+  it('keeps a colour change that came while a bake was made, once the bake has landed: a recolour of it', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    const coloured = setParam(BP, 'curve.warmHue', 25)
+    t.engine.render(bview(), coloured, 'none', FRAMING)
+    t.host.release()
+    // the bake is not stale (the colour is not what it is made of): it is the picture, then its colours are made again
+    await vi.waitFor(() => expect(t.host.recolourRequests.length).toBe(1), { timeout: 120_000, interval: 5 })
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.host.recolourRequests[0].params).toBe(coloured)
+    expect(t.baked().length).toBeGreaterThanOrEqual(1)
+    t.engine.dispose()
+  }, 600_000)
+})
+
+describe('the baked painting: the paths back and forth', () => {
+  it('goes to the per-frame painter for a debug view and the light turned camera-relative, and back to the bake held, with no new bake', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    const live = async (params: PaintParams, debug: PaintDebugMode) => {
+      const n = t.frames.length
+      t.engine.render(bview({ azimuth: 45 }), params, debug, FRAMING)
+      await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+      return t.frames[t.frames.length - 1]
+    }
+    expect(await live(BP, 'value')).toMatchObject({ kind: 'full', path: 'live' })
+    expect((await live(BP, 'none')).path).toBe('baked')
+    expect(await live(FLAT, 'none')).toMatchObject({ kind: 'full', path: 'live' })
+    expect((await live(BP, 'none')).path).toBe('baked')
+    await sleep(BAKE_DEBOUNCE_MS + 100)
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('does not paint a model frame over the bake: one still in the worker when the bake takes over is dropped', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    // a live frame asked for by a debug view, then the bake takes the picture back before its answer is taken
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'value', FRAMING)
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING)
+    await sleep(250)
+    // the frames since are the bake's (the model's frame for the debug view, which came back after the bake took over, was not painted)
+    expect(t.frames.length).toBeGreaterThan(n)
+    expect(t.frames.slice(n).every((f) => f.path === 'baked')).toBe(true)
+    t.engine.dispose()
+  })
+
+  it('leaves the Showcase’s tiles to the per-frame painter whatever the light (renderTo), and builds no bake for them', async () => {
+    const t = bakeSetup()
+    const target = { canvas: { width: 100, height: 75 }, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+    const stats = await t.engine.renderTo(target, bview(), BP, 'none')
+    expect(stats).toMatchObject({ kind: 'full', path: 'live', buildMs: 0 })
+    await sleep(BAKE_DEBOUNCE_MS + 200)
+    expect(t.host.bakeRequests).toEqual([])
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: failures and the graphics context', () => {
+  it('keeps a bake that lands while the context is lost, and paints it when the context comes back: a paint that painted nothing says nothing of the renderer’s depth test (final fix wave, M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    // (the per-frame painter's first picture is on screen, from a context that could depth-test: the renderer's stats say so)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    t.gl.canvas.lose()
+    expect(String(t.errors[t.errors.length - 1])).toMatch(/graphics context was lost/)
+    // the bake lands during the loss
+    t.host.release()
+    await vi.waitFor(() => expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'baked' }), { timeout: 60_000, interval: 5 })
+    await sleep(50)
+    // it is kept: the baked path is the one the status line says, with nothing said of a renderer that cannot depth-test, and nothing was painted for it
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    expect(t.baked().length).toBe(0)
+    t.gl.canvas.restore()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.errors[t.errors.length - 1]).toBeNull()
+    // and it stays the picture: the next render is the bake's, with no new bake, and the status line never said it was off
+    t.engine.render(bview({ azimuth: 50 }), BP, 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    t.engine.dispose()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the baked path when a debug view is left while the context is lost, and paints the bake again when it comes back (final fix wave, M1)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = bakeSetup()
+    await t.ready()
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'value', FRAMING)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ path: 'live' })
+    t.gl.canvas.lose()
+    // back from the debug view, with the context gone
+    const m = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING)
+    await sleep(50)
+    expect(t.statuses.some((s) => s.why !== null)).toBe(false)
+    expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'baked' })
+    // (nothing could be painted: no frame is reported, none is called baked)
+    expect(t.frames.length).toBe(m)
+    t.gl.canvas.restore()
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(m), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+    vi.restoreAllMocks()
+  })
+
+  it('falls back to the per-frame painter, and says why, when a bake fails; the figure still paints', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    class FailingHost extends BakeSide {
+      override bake(request: BakeRequest): Promise<BakeAnswer> {
+        this.bakeRequests.push(request)
+        return Promise.resolve({ id: request.id, ok: false, error: 'out of memory' })
+      }
+    }
+    const t = bakeSetup({ bakeHost: new FailingHost() })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.statuses.some((s) => s.why?.includes('out of memory'))).toBe(true), { timeout: 60_000, interval: 5 })
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 50 }), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1].path).toBe('live')
+    expect(t.host.bakeRequests.length).toBe(1) // not asked again and again
+    t.engine.dispose()
+    vi.restoreAllMocks()
+  })
+
+  it('paints the baked picture again when the context comes back (the renderer put the surfaces up itself), with no bake and no model run', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    t.engine.render(bview({ azimuth: 60 }), BP, 'none', FRAMING)
+    const asked = t.live.frameRequests.length
+    const before = t.composites()
+    const n = t.frames.length
+    t.gl.canvas.lose()
+    expect(String(t.errors[t.errors.length - 1])).toMatch(/graphics context was lost/)
+    t.gl.canvas.restore()
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    expect(t.composites()).toBeGreaterThan(before)
+    expect(t.errors[t.errors.length - 1]).toBeNull()
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.live.frameRequests.length).toBe(asked)
+    t.engine.dispose()
+  })
+})
+
+// ---- fix round 1: a worker of its own for the bake, a bake that is not stale to enter on, a stage that may be resized, the G-buffer at rest ----
+
+describe('the baked painting: a bake of its own host', () => {
+  it('does not hold the new figure’s first frame behind the bake of the old one: the figure changes mid-bake, the bake is cancelled, and the model’s frame comes at once', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(t.host.held).toBe(1) // the bake is in flight and will stay so: the test does not let it finish
+    // (the first figure's live frame was not waiting for it)
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    const other = sceneOf([sphereMesh({ radius: 0.5, nu: 20, nv: 14 }), tableMesh({ z: -0.5, half: 1.5, index: 1 })])
+    const n = t.frames.length
+    t.engine.setScene(other, COLOURS)
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    expect(t.host.cancels).toBe(1)
+    expect(t.host.held).toBe(0)
+    // the new figure's picture arrives with the old bake still not done (it never will be): a model frame, from the model's own host
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+    expect(t.frames[n]).toMatchObject({ kind: 'full', path: 'live' })
+    expect(t.baked().length).toBe(0)
+    expect(t.live.frameRequests[t.live.frameRequests.length - 1].sceneId).not.toBe(t.host.bakeRequests[0].sceneId)
+    // then its own bake, for its own scene, and the worker that made the cancelled one was made again with both scenes
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].sceneId).not.toBe(t.host.bakeRequests[0].sceneId)
+    expect(t.host.respawns).toBe(1)
+    t.host.release()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+    expect(t.host.maxRunning).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('shows a first load a picture while its bake is made: the model’s frame arrives with the bake still in flight', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    await vi.waitFor(() => expect(t.frames.length).toBeGreaterThanOrEqual(1), { timeout: 60_000, interval: 5 })
+    expect(t.frames[0]).toMatchObject({ kind: 'full', path: 'live' })
+    expect(t.host.held).toBe(1)
+    expect(t.baked().length).toBe(0)
+    t.engine.dispose()
+  })
+
+  it('cancels a bake in flight for real when a change makes it useless (the light, a role’s size, the framing, new colours): the host is told, nothing waits for it, and the newest is baked after the debounce', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    const changes: [string, PaintParams, AuthoredFraming][] = [
+      ['the light', setParam(BP, 'light.azimuth', 20), FRAMING],
+      ['a role’s size', setParam(BP, 'roles.block.width', 30), FRAMING],
+      ['the framing', BP, { ...FRAMING, worldPerPx: FRAMING.worldPerPx * 1.5 }],
+    ]
+    let cancels = 0
+    let requests = 1
+    for (const [name, params, framing] of changes) {
+      t.engine.render(bview(), params, 'none', framing)
+      expect(t.host.cancels, name).toBe(++cancels)
+      expect(t.host.held, name).toBe(0)
+      const wanted = ++requests
+      await vi.waitFor(() => expect(t.host.bakeRequests.length, name).toBe(wanted), { timeout: 60_000, interval: 5 })
+      expect(t.host.bakeRequests[wanted - 1].params, name).toBe(params)
+      expect(t.host.bakeRequests[wanted - 1].authored, name).toEqual(framing)
+      // the worker was made again, with the scene it held
+      expect(t.host.respawns, name).toBe(cancels)
+    }
+    // back to the first: the bake in flight is again of something else, and is cancelled too
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    expect(t.host.cancels).toBe(cancels + 1)
+    t.engine.dispose()
+  })
+
+  it('does not cancel a bake for a change that leaves it right (a colour parameter, a renderer parameter, one only a frame reads): it lands, and is the picture', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    for (const [path, value] of [['curve.warmHue', 20], ['impasto.strength', 1.7], ['particles.dragDensity', 0.6]] as const) t.engine.render(bview(), setParam(BP, path, value), 'none', FRAMING)
+    expect(t.host.cancels).toBe(0)
+    expect(t.host.held).toBe(1)
+    t.host.release()
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(1), { timeout: 120_000, interval: 5 })
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('does not cancel a bake when the baked path is left for a debug view: it lands, is held, and is the picture on the way back, with no new bake', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    t.engine.render(bview(), BP, 'value', FRAMING)
+    expect(t.host.cancels).toBe(0)
+    t.host.release()
+    await sleep(200)
+    // (nothing baked was drawn: the debug view is the model's)
+    expect(t.baked().length).toBe(0)
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    expect(t.frames[t.frames.length - 1]).toMatchObject({ kind: 'baked', path: 'baked' })
+    await sleep(BAKE_DEBOUNCE_MS + 150)
+    expect(t.host.bakeRequests.length).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('makes the bake cancelled by new colours not wait for the colours either: the colours are told to the bake host, the bake is cancelled and made again', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    t.engine.setScene(BSCENE, flatColours({ 0: [0.4, 0.1, -0.1], 1: [0.9, 0.01, 0.02] }))
+    expect(t.host.cancels).toBe(1)
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    t.engine.dispose()
+  })
+})
+
+// A Worker that never answers: what the engine posts to each is recorded. (A bake in a real one is not interruptible, so the lab terminates it.)
+class FakeWorker {
+  static all: FakeWorker[] = []
+  onmessage: ((event: unknown) => void) | null = null
+  onerror: ((event: { message: string }) => void) | null = null
+  readonly posted: { type: string; [key: string]: unknown }[] = []
+  terminated = false
+  constructor() {
+    FakeWorker.all.push(this)
+  }
+  postMessage(message: { type: string; request?: { id: number } }) {
+    this.posted.push(message)
+    // (the model's frames are answered, with a failure the lab shows and goes on from: a model that never answered would hold every later request)
+    if (message.type === 'frame' && message.request) {
+      const id = message.request.id
+      queueMicrotask(() => this.onmessage?.({ data: { type: 'frame', response: { id, ok: false, error: 'a worker that does not paint' } } }))
+    }
+  }
+  terminate() {
+    this.terminated = true
+  }
+  types(): string[] {
+    return this.posted.map((m) => m.type)
+  }
+}
+
+describe('the baked painting: the workers', () => {
+  async function withWorkers() {
+    FakeWorker.all = []
+    vi.stubGlobal('Worker', FakeWorker)
+    await load('?')
+    const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const statuses: BakeStatus[] = []
+    const inner = createPaintEngine(gl.canvas.canvas, { onFrame: () => {}, onError: () => {}, onBake: (s) => statuses.push(s) })
+    const engine: PaintEngine = { ...inner, render: (v, p, d, a, b) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a, b) }
+    engine.setScene(BSCENE, COLOURS)
+    return { engine, statuses }
+  }
+
+  it('gives the bake a worker of its own: frames go to the model’s worker and bakes to the other, which has its own copy of the scene', async () => {
+    const { engine } = await withWorkers()
+    try {
+      engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(FakeWorker.all.length).toBe(2), { timeout: 10_000, interval: 5 })
+      const [model, bake] = FakeWorker.all
+      await vi.waitFor(() => expect(bake.types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+      await vi.waitFor(() => expect(model.types()).toContain('frame'), { timeout: 10_000, interval: 5 })
+      expect(model.types().filter((t) => t !== 'scene' && t !== 'frame')).toEqual([])
+      expect(bake.types()).toEqual(['scene', 'bake'])
+      expect(bake.posted[1]).toMatchObject({ request: { params: BP, authored: FRAMING } })
+      expect(bake.posted[0].sceneId).toBe(model.posted[0].sceneId)
+    } finally {
+      engine.dispose()
+      await load('?worker=0')
+    }
+  })
+
+  it('terminates the bake worker and makes another, with the scene, when a bake in flight is made useless; and for another figure, with both scenes', async () => {
+    const { engine } = await withWorkers()
+    try {
+      engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(FakeWorker.all[1]?.types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+      const first = FakeWorker.all[1]
+      const light = setParam(BP, 'light.azimuth', 25)
+      engine.render(bview(), light, 'none', FRAMING)
+      expect(first.terminated).toBe(true)
+      expect(FakeWorker.all.length).toBe(3)
+      const second = FakeWorker.all[2]
+      expect(second.types()).toEqual(['scene'])
+      await vi.waitFor(() => expect(second.types()).toEqual(['scene', 'bake']), { timeout: 10_000, interval: 5 })
+      expect(second.posted[1]).toMatchObject({ request: { params: light } })
+      // the model's worker was never terminated
+      expect(FakeWorker.all[0].terminated).toBe(false)
+      // another figure: the model's frame goes to the model's worker at once; the bake worker is made again and given both scenes
+      const other = sceneOf([sphereMesh({ radius: 0.5, nu: 20, nv: 14 }), tableMesh({ z: -0.5, half: 1.5, index: 1 })])
+      engine.setScene(other, COLOURS)
+      expect(second.terminated).toBe(true)
+      const third = FakeWorker.all[3]
+      expect(third.types()).toEqual(['scene', 'scene'])
+      const ids = new Set(third.posted.map((m) => m.sceneId))
+      expect(ids.size).toBe(2)
+      engine.render(bview(), light, 'none', FRAMING)
+      await vi.waitFor(() => expect(third.types()).toEqual(['scene', 'scene', 'bake']), { timeout: 10_000, interval: 5 })
+      expect((third.posted[2].request as BakeRequest).sceneId).toBe(third.posted[1].sceneId)
+      expect(FakeWorker.all[0].terminated).toBe(false)
+      expect(FakeWorker.all[0].posted.some((m) => m.type === 'frame' && (m.request as SessionRequest).sceneId === third.posted[1].sceneId)).toBe(true)
+    } finally {
+      engine.dispose()
+      await load('?worker=0')
+    }
+  })
+
+  it('turns the bake off when its worker dies, says so in the status line, and does not bake on this thread; the model’s worker is not the bake’s', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { engine, statuses } = await withWorkers()
+    try {
+      engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(FakeWorker.all[1]?.types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+      FakeWorker.all[1].onerror?.({ message: 'boom' })
+      const last = statuses[statuses.length - 1]
+      expect(last.path).toBe('live')
+      expect(last.painting).toBeNull()
+      expect(last.why).toMatch(/bake worker stopped.*boom/)
+      // the worker that threw is stopped, not left running: the engine lets go of the host, and its dispose() would not find it
+      expect(FakeWorker.all[1].terminated).toBe(true)
+      expect(FakeWorker.all[0].terminated).toBe(false)
+      // from now on no bake is asked for, anywhere: no new worker, and no bake on this thread (the model's worker is the live one)
+      const posted = FakeWorker.all.map((w) => w.types().length)
+      engine.render(bview(), setParam(BP, 'light.azimuth', 40), 'none', FRAMING)
+      await sleep(BAKE_DEBOUNCE_MS + 250)
+      expect(FakeWorker.all.length).toBe(2)
+      expect(FakeWorker.all.some((w) => w.types().includes('bake') && w !== FakeWorker.all[1])).toBe(false)
+      expect(FakeWorker.all[1].posted.filter((m) => m.type === 'bake').length).toBe(1)
+      expect(FakeWorker.all[0].types().length).toBeGreaterThanOrEqual(posted[0])
+      expect(statuses[statuses.length - 1].why).toMatch(/bake worker stopped/)
+    } finally {
+      engine.dispose()
+      vi.restoreAllMocks()
+      await load('?worker=0')
+    }
+  })
+
+  it('does not start a worker for the bake when it is not wanted (the model’s worker alone for a figure drawn per frame, and for the Showcase)', async () => {
+    const { engine } = await withWorkers()
+    try {
+      engine.render(bview(), FLAT, 'none', FRAMING)
+      await sleep(BAKE_DEBOUNCE_MS + 150)
+      expect(FakeWorker.all.length).toBe(1)
+      const target = { canvas: { width: 100, height: 75 }, drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+      void engine.renderTo(target, bview(), BP, 'none').catch(() => {})
+      await sleep(50)
+      expect(FakeWorker.all.length).toBe(1)
+    } finally {
+      engine.dispose()
+      await load('?worker=0')
+    }
+  })
+
+  it('bakes on this thread, in the model’s own session, when &worker=0 asked for it (the default of this file): no worker is made, and the baked frames come', async () => {
+    FakeWorker.all = []
+    vi.stubGlobal('Worker', FakeWorker)
+    const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const frames: FrameStats[] = []
+    const inner = createPaintEngine(gl.canvas.canvas, { onFrame: (f) => frames.push(f), onError: () => {} })
+    const engine: PaintEngine = { ...inner, render: (v, p, d, a, b) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a, b) }
+    engine.setScene(BSCENE, COLOURS)
+    engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(frames.some((f) => f.kind === 'baked')).toBe(true), { timeout: 120_000, interval: 5 })
+    expect(FakeWorker.all.length).toBe(0)
+    engine.dispose()
+  })
+})
+
+describe('the baked painting: a bake worker that died', () => {
+  it('is terminated when it errors, and again nothing is left running when the engine is disposed after (final fix wave, T6-Low)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    FakeWorker.all = []
+    vi.stubGlobal('Worker', FakeWorker)
+    await load('?')
+    const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const inner = createPaintEngine(gl.canvas.canvas, { onFrame: () => {}, onError: () => {}, onBake: () => {} })
+    const engine: PaintEngine = { ...inner, render: (v, p, d, a, b) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a, b) }
+    engine.setScene(BSCENE, COLOURS)
+    try {
+      engine.render(bview(), BP, 'none', FRAMING)
+      await vi.waitFor(() => expect(FakeWorker.all[1]?.types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+      const [model, bake] = FakeWorker.all
+      expect(bake.terminated).toBe(false)
+      bake.onerror?.({ message: 'it broke' })
+      expect(bake.terminated).toBe(true)
+      // (it does not talk to the engine any more)
+      expect(bake.onmessage).toBeNull()
+      expect(bake.onerror).toBeNull()
+      expect(model.terminated).toBe(false)
+      engine.dispose()
+      expect(model.terminated).toBe(true)
+      expect(bake.terminated).toBe(true)
+      expect(FakeWorker.all.length).toBe(2)
+    } finally {
+      vi.restoreAllMocks()
+      await load('?worker=0')
+    }
+  })
+})
+
+describe('the baked painting: coming back to it', () => {
+  it('holds the live picture, on the way back from a debug view, until a bake for the params of the moment lands: a stale bake is not shown', async () => {
+    const t = bakeSetup({ manual: true })
+    await t.ready()
+    const live = async (params: PaintParams, debug: PaintDebugMode) => {
+      const n = t.frames.length
+      t.engine.render(bview({ azimuth: 45 }), params, debug, FRAMING)
+      await vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+      return t.frames[t.frames.length - 1]
+    }
+    const moved = setParam(BP, 'light.azimuth', 15)
+    expect(await live(BP, 'value')).toMatchObject({ kind: 'full', path: 'live' })
+    // the light moves in the debug view (a bake is not wanted there), then the debug view goes: the bake held is for the old light
+    expect(await live(moved, 'value')).toMatchObject({ kind: 'full', path: 'live' })
+    expect(await live(moved, 'none')).toMatchObject({ kind: 'full', path: 'live' })
+    // ... and stays the per-frame painter's while the new bake is made (150 ms, and the bake in flight)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].params).toBe(moved)
+    expect(await live(moved, 'none')).toMatchObject({ path: 'live' })
+    expect(t.statuses[t.statuses.length - 1].path).toBe('live')
+    expect(t.statuses[t.statuses.length - 1].painting).not.toBeNull()
+    // the bake lands: it takes over, at once
+    t.host.release()
+    await vi.waitFor(() => expect(t.frames[t.frames.length - 1].kind).toBe('baked'), { timeout: 120_000, interval: 5 })
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'baked', painting: null, why: null })
+    t.engine.dispose()
+  })
+
+  it('keeps the old bake on screen when it is the baked path already (a slider moved: the old bake until the new one lands, as ruled)', async () => {
+    const t = bakeSetup({ manual: true })
+    await t.ready()
+    const n = t.frames.length
+    t.engine.render(bview(), setParam(BP, 'light.azimuth', 15), 'none', FRAMING)
+    expect(t.frames.length).toBe(n + 1)
+    expect(t.frames[n]).toMatchObject({ kind: 'baked', path: 'baked' })
+    t.engine.dispose()
+  })
+
+  it('enters the baked path on a bake that is right for the params of the moment even when the colours still to be made again (a recolour is on its way)', async () => {
+    const t = bakeSetup({ manual: true })
+    await t.ready()
+    const colour = setParam(BP, 'curve.warmHue', 20)
+    t.engine.render(bview(), BP, 'value', FRAMING)
+    const n = t.frames.length
+    t.engine.render(bview(), colour, 'none', FRAMING)
+    expect(t.frames[n]).toMatchObject({ kind: 'baked', path: 'baked' })
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: the Bake switch', () => {
+  // The lab's view setting (the panel's "Bake (instant orbit)"), given to render() as its fifth argument; it is not a painter parameter. The light is
+  // fixed in the world throughout (BP's is), so the switch is the only thing that decides.
+  const waitFrames = (t: { frames: FrameStats[] }, n: number) => vi.waitFor(() => expect(t.frames.length).toBeGreaterThan(n), { timeout: 60_000, interval: 5 })
+
+  it('draws per frame, with no bake asked for, while it is off, though the light is fixed in the world: every slider is a live frame at once', async () => {
+    expect(BP.light.worldFixed).toBe(1)
+    const t = bakeSetup()
+    t.engine.render(bview(), BP, 'none', FRAMING, false)
+    await waitFrames(t, 0)
+    expect(t.frames[0]).toMatchObject({ kind: 'full', path: 'live', buildMs: 0 })
+    // a slider the bake would have made anew (the light, a role's size) and one it would have made the colours of again: each a frame of the live
+    // painter's, asked for at once and not after a bake
+    const light = setParam(BP, 'light.azimuth', 20)
+    const role = setParam(light, 'roles.block.width', 30)
+    const colour = setParam(role, 'curve.warmHue', 20)
+    for (const [params, kind] of [[light, 'full'], [role, 'full'], [colour, 'colour']] as const) {
+      const n = t.frames.length
+      t.engine.render(bview(), params, 'none', FRAMING, false)
+      await waitFrames(t, n)
+      expect(t.frames[t.frames.length - 1]).toMatchObject({ kind, path: 'live' })
+    }
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests).toEqual([])
+    expect(t.host.recolourRequests).toEqual([])
+    expect(t.host.cancels).toBe(0)
+    expect(t.baked()).toEqual([])
+    expect(t.live.frameRequests.length).toBeGreaterThanOrEqual(4)
+    expect(t.statuses.every((s) => s.path === 'live' && s.painting === null && s.why === null)).toBe(true)
+    // a drag is the live orbit's, too
+    t.engine.render(bview({ azimuth: 40, dragging: true }), colour, 'none', FRAMING, false)
+    expect(t.frames[t.frames.length - 1].kind).toBe('reproject')
+    t.engine.dispose()
+  })
+
+  it('stops a bake in the making when it is turned off, for real, and the live frames come at once: nothing waits for the bake, and it never lands', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    await waitFrames(t, 0) // (the first load's picture, the live painter's, with the bake in flight)
+    expect(t.host.held).toBe(1)
+    expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'live', painting: 0 })
+    const n = t.frames.length
+    const asked = t.live.frameRequests.length
+    const painted = t.composites()
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING, false)
+    // the host is told in the task of the render: terminated and made again, nothing in it to wait for, and the status line has no "Painting…"
+    expect(t.host.cancels).toBe(1)
+    expect(t.host.respawns).toBe(1)
+    expect(t.host.held).toBe(0)
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'live', painting: null, why: null })
+    // the live picture comes at once, with the bake never done: the strokes of the first load's frame (the live base, which the bake in the making never
+    // replaced) through the new view, painted; then the model's own frame for the view the camera stopped at
+    await waitFrames(t, n)
+    expect(t.frames[n]).toMatchObject({ kind: 'reproject', path: 'live' })
+    expect(t.composites()).toBeGreaterThan(painted)
+    await vi.waitFor(() => expect(t.live.frameRequests.length).toBeGreaterThan(asked), { timeout: 60_000, interval: 5 })
+    await waitFrames(t, n + 1)
+    expect(t.frames[n + 1]).toMatchObject({ kind: 'full', path: 'live' })
+    // and it stays off: nothing is baked, not even for a slider
+    t.engine.render(bview({ azimuth: 45 }), setParam(BP, 'light.azimuth', 15), 'none', FRAMING, false)
+    t.host.release()
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.baked()).toEqual([])
+    expect(t.frames.every((f) => f.path === 'live')).toBe(true)
+    expect(t.errors.filter((m) => m !== null)).toEqual([])
+    t.engine.dispose()
+  })
+
+  it('leaves the baked picture for the live one when it is turned off after the bake landed: the next frame and every slider are the live painter’s, with no new bake or recolour', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'baked', painting: null, why: null })
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING, false)
+    await waitFrames(t, n)
+    expect(t.frames[n]).toMatchObject({ kind: 'full', path: 'live' })
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'live', painting: null, why: null })
+    const m = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), setParam(BP, 'curve.warmHue', 20), 'none', FRAMING, false)
+    await waitFrames(t, m)
+    expect(t.frames[m]).toMatchObject({ kind: 'colour', path: 'live' })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.host.recolourRequests).toEqual([])
+    t.engine.dispose()
+  })
+
+  it('does not start the bake that is waiting out its debounce when it is turned off', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING)
+    expect(t.statuses[t.statuses.length - 1]).toMatchObject({ painting: 0 })
+    t.engine.render(bview(), BP, 'none', FRAMING, false)
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'live', painting: null, why: null })
+    await sleep(BAKE_DEBOUNCE_MS + 250)
+    expect(t.host.bakeRequests).toEqual([])
+    expect(t.host.cancels).toBe(0)
+    t.engine.dispose()
+  })
+
+  it('asks for a bake of the moment when it is turned on, says "Painting…", and keeps the live picture until it lands', async () => {
+    const t = bakeSetup({ manual: true })
+    t.engine.render(bview(), BP, 'none', FRAMING, false)
+    await waitFrames(t, 0)
+    await sleep(BAKE_DEBOUNCE_MS + 100)
+    expect(t.host.bakeRequests).toEqual([])
+    // on, with the light moved while it was off
+    const moved = setParam(BP, 'light.azimuth', 15)
+    t.engine.render(bview(), moved, 'none', FRAMING, true)
+    expect(t.statuses[t.statuses.length - 1]).toMatchObject({ path: 'live', painting: 0 })
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(1), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[0].params).toBe(moved)
+    expect(t.host.bakeRequests[0].lightDir).toEqual(worldLightOf(moved))
+    // the picture holds as the live painter's while the bake is made, a view moved included
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 50 }), moved, 'none', FRAMING)
+    await waitFrames(t, n)
+    expect(t.frames.slice(n).every((f) => f.path === 'live')).toBe(true)
+    expect(t.baked()).toEqual([])
+    expect(t.statuses[t.statuses.length - 1].painting).not.toBeNull()
+    // the bake lands and takes over
+    t.host.release()
+    await vi.waitFor(() => expect(t.frames[t.frames.length - 1].kind).toBe('baked'), { timeout: 120_000, interval: 5 })
+    expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'baked', painting: null, why: null })
+    t.engine.dispose()
+  })
+
+  it('never shows a stale bake when it is turned on again: the live picture holds if a slider moved while it was off, and the bake held is entered at once if none did', async () => {
+    const t = bakeSetup({ manual: true })
+    await t.ready()
+    const go = async (params: PaintParams, bake: boolean) => {
+      const n = t.frames.length
+      t.engine.render(bview({ azimuth: 45 }), params, 'none', FRAMING, bake)
+      await waitFrames(t, n)
+      return t.frames[t.frames.length - 1]
+    }
+    expect(await go(BP, false)).toMatchObject({ kind: 'full', path: 'live' })
+    // back on with nothing moved: the bake held is right for these params, and is the picture in the task of the render, with no new bake
+    const n = t.frames.length
+    t.engine.render(bview({ azimuth: 45 }), BP, 'none', FRAMING, true)
+    expect(t.frames[n]).toMatchObject({ kind: 'baked', path: 'baked' })
+    await sleep(BAKE_DEBOUNCE_MS + 100)
+    expect(t.host.bakeRequests.length).toBe(1)
+    // off, the light moved, on: the bake held is for the old light and is not shown; a new one is asked for and the live picture holds until it lands
+    const moved = setParam(BP, 'light.azimuth', 15)
+    expect(await go(BP, false)).toMatchObject({ path: 'live' })
+    expect(await go(moved, false)).toMatchObject({ kind: 'full', path: 'live' })
+    expect(await go(moved, true)).toMatchObject({ path: 'live' })
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].params).toBe(moved)
+    expect(await go(moved, true)).toMatchObject({ path: 'live' })
+    t.host.release()
+    await vi.waitFor(() => expect(t.frames[t.frames.length - 1].kind).toBe('baked'), { timeout: 120_000, interval: 5 })
+    expect(t.host.maxRunning).toBe(1)
+    t.engine.dispose()
+  })
+
+  it('can be turned on and off over and over with one bake at a time and no blank frame: each stop paints a live picture at once, and the last bake lands', async () => {
+    const t = bakeSetup({ manual: true })
+    for (let i = 0; i < 4; i++) {
+      const params = setParam(BP, 'light.azimuth', 10 + 5 * i)
+      t.engine.render(bview(), params, 'none', FRAMING, true)
+      await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(i + 1), { timeout: 60_000, interval: 5 })
+      expect(t.host.held).toBe(1)
+      const n = t.frames.length
+      const painted = t.composites()
+      t.engine.render(bview(), params, 'none', FRAMING, false)
+      expect(t.host.held).toBe(0)
+      expect(t.host.cancels).toBe(i + 1)
+      // a frame is painted at once (the canvas is drawn again, never left cleared), and it is the live painter's
+      await waitFrames(t, n)
+      expect(t.frames[t.frames.length - 1]).toMatchObject({ path: 'live' })
+      expect(t.composites()).toBeGreaterThan(painted)
+      expect(t.statuses[t.statuses.length - 1]).toEqual({ path: 'live', painting: null, why: null })
+    }
+    t.engine.render(bview(), BP, 'none', FRAMING, true)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(5), { timeout: 60_000, interval: 5 })
+    t.host.release()
+    await vi.waitFor(() => expect(t.frames[t.frames.length - 1].kind).toBe('baked'), { timeout: 120_000, interval: 5 })
+    expect(t.host.maxRunning).toBe(1)
+    expect(t.baked().length).toBeGreaterThanOrEqual(1)
+    expect(t.errors.filter((m) => m !== null)).toEqual([])
+    t.engine.dispose()
+  })
+
+  it('keeps no more than the model’s worker and one for the bake however often it is turned on and off: each stop terminates the one it stops, and none is made while it is off', async () => {
+    FakeWorker.all = []
+    vi.stubGlobal('Worker', FakeWorker)
+    await load('?')
+    const gl = createPaintFakeGl({}, { width: 320, height: 240 })
+    Object.assign(gl.canvas.canvas, { style: {} })
+    const inner = createPaintEngine(gl.canvas.canvas, { onFrame: () => {}, onError: () => {} })
+    const engine: PaintEngine = { ...inner, render: (v, p, d, a, b) => inner.render({ ...v, lightDir: worldLightOf(p) }, p, d, a, b) }
+    engine.setScene(BSCENE, COLOURS)
+    const alive = () => FakeWorker.all.filter((w) => !w.terminated).length
+    try {
+      // off from the start: the model's worker only, and no worker for a bake that is not wanted
+      engine.render(bview(), BP, 'none', FRAMING, false)
+      await sleep(BAKE_DEBOUNCE_MS + 150)
+      expect(FakeWorker.all.length).toBe(1)
+      for (let i = 0; i < 3; i++) {
+        engine.render(bview(), BP, 'none', FRAMING, true)
+        await vi.waitFor(() => expect(FakeWorker.all[FakeWorker.all.length - 1].types()).toContain('bake'), { timeout: 10_000, interval: 5 })
+        const working = FakeWorker.all[FakeWorker.all.length - 1]
+        expect(alive()).toBe(2)
+        engine.render(bview(), BP, 'none', FRAMING, false)
+        expect(working.terminated).toBe(true)
+        // (the worker made again, with the scene, is the one a next bake goes to)
+        expect(alive()).toBe(2)
+        expect(FakeWorker.all[FakeWorker.all.length - 1].types()).toEqual(['scene'])
+      }
+      expect(FakeWorker.all[0].terminated).toBe(false)
+      expect(FakeWorker.all.length).toBe(1 + 1 + 3)
+      // on and off again inside the debounce: no worker is stopped, none is made
+      engine.render(bview(), BP, 'none', FRAMING, true)
+      engine.render(bview(), BP, 'none', FRAMING, false)
+      await sleep(BAKE_DEBOUNCE_MS + 150)
+      expect(FakeWorker.all.length).toBe(5)
+      expect(alive()).toBe(2)
+    } finally {
+      engine.dispose()
+      expect(alive()).toBe(0)
+      await load('?worker=0')
+    }
+  })
+})
+
+describe('the baked painting: the stage may be resized', () => {
+  const FIGURE = buildFigure('@frame: none\n@bounds3d: x [-2, 2], y [-2, 2], z [0, 4]\n@camera: azimuth 20, elevation 30, zoom 1.5\nz = x^2 for x in [-2, 2], y in [-2, 2]')
+
+  it('keeps the bake for a stage within a factor of two of the one the framing was made at, and bakes again for one past it', async () => {
+    const t = bakeSetup({ manual: true })
+    const first = heldFraming(null, FIGURE, { width: 3200, height: 240 })
+    await t.ready(BP, first.framing)
+    // a taller stage, and a shorter one (a landscape stage: the height is what sets the px), within the band: the same framing, so no bake, no cancel, nothing asked
+    const within = heldFraming(first, FIGURE, { width: 3200, height: 400 })
+    expect(within).toBe(first)
+    t.engine.render(bview(), BP, 'none', within.framing)
+    const shrunk = heldFraming(within, FIGURE, { width: 3200, height: 140 })
+    expect(shrunk).toBe(first)
+    t.engine.render(bview(), BP, 'none', shrunk.framing)
+    await sleep(BAKE_DEBOUNCE_MS + 200)
+    expect(t.host.bakeRequests.length).toBe(1)
+    expect(t.host.cancels).toBe(0)
+    expect(t.frames[t.frames.length - 1].path).toBe('baked')
+    // past it (a stage 2.5 times as high): a new framing, and a bake for it, the old bake on screen meanwhile
+    const larger = heldFraming(shrunk, FIGURE, { width: 3200, height: 600 })
+    expect(larger).not.toBe(first)
+    t.engine.render(bview(), BP, 'none', larger.framing)
+    expect(t.frames[t.frames.length - 1].path).toBe('baked')
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    expect(t.host.bakeRequests[1].authored).toEqual(larger.framing)
+    expect(t.host.bakeRequests[1].authored.worldPerPx).toBeLessThan(first.framing.worldPerPx / 2)
+    t.engine.dispose()
+  })
+
+  it('bakes again for a stage that is too small, too', async () => {
+    const t = bakeSetup()
+    const first = heldFraming(null, FIGURE, { width: 3200, height: 240 })
+    await t.ready(BP, first.framing)
+    const small = heldFraming(first, FIGURE, { width: 3200, height: 100 })
+    expect(small).not.toBe(first)
+    t.engine.render(bview(), BP, 'none', small.framing)
+    await vi.waitFor(() => expect(t.host.bakeRequests.length).toBe(2), { timeout: 60_000, interval: 5 })
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: the underpainting follows a recolour', () => {
+  it('writes the recoloured underpainting into the GPU’s colour buffers of the baked surfaces, one write each, with the colours the worker made', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    await sleep(60)
+    const surfaces = t.host.bakes[0].surfaces
+    const marks = surfaces.map((s, m) => (s ? m : -1)).filter((m) => m >= 0)
+    expect(marks.length).toBeGreaterThanOrEqual(2)
+    const lengths = new Set(marks.map((m) => colourData(surfaces[m]!).length))
+    const writes = () => t.gl.fake.calls.filter((c) => c.fn === 'bufferSubData' && c.args[2] instanceof Float32Array && lengths.has((c.args[2] as Float32Array).length))
+    const before = writes().length
+    t.engine.render(bview(), setParam(BP, 'curve.warmHue', 20), 'none', FRAMING)
+    await vi.waitFor(() => expect(t.host.recoloured.length).toBe(1), { timeout: 60_000, interval: 5 })
+    await vi.waitFor(() => expect(writes().length).toBeGreaterThan(before), { timeout: 10_000, interval: 5 })
+    const written = writes().slice(before)
+    expect(written.length).toBeGreaterThanOrEqual(1)
+    const colours = t.host.recoloured[0]
+    const recoloured = marks.map((m) => Array.from(colourData({ ...surfaces[m]!, underFront: colours.surfaces[m]!.underFront, underBack: colours.surfaces[m]!.underBack })))
+    const old = marks.map((m) => Array.from(colourData(surfaces[m]!)))
+    for (const w of written) {
+      const data = Array.from(w.args[2] as Float32Array)
+      // each write is the recoloured underpainting of a baked surface, and not the colours the bake was made with
+      expect(recoloured.some((r) => r.length === data.length && r.every((v, i) => v === data[i]))).toBe(true)
+      expect(old.some((r) => r.length === data.length && r.every((v, i) => v === data[i]))).toBe(false)
+    }
+    t.engine.dispose()
+  })
+})
+
+describe('the baked painting: the G-buffer at rest only', () => {
+  it('starts no readback under a drag (the silhouettes read the canvas), and one when the camera stops', async () => {
+    const t = bakeSetup()
+    await t.ready()
+    // let what the first frames asked for land
+    await sleep(120)
+    const passes = t.gbuffers()
+    const reads = t.gl.reads.length
+    for (let k = 1; k <= 30; k++) t.engine.render(bview({ azimuth: 30 + 3 * k, dragging: true }), BP, 'none', FRAMING)
+    await sleep(120)
+    expect(t.gbuffers()).toBe(passes)
+    expect(t.gl.reads.length).toBe(reads)
+    // the pointer is released: a frame at rest, and its G-buffer, for this view
+    t.engine.render(bview({ azimuth: 120 }), BP, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.gbuffers()).toBeGreaterThan(passes), { timeout: 10_000, interval: 5 })
+    t.engine.dispose()
+  })
+
+  it('gives a frame under a drag no G-buffer, even when one was read for its very view: the silhouettes read the canvas there (the frame is the one made before any readback landed, not the one made with it)', async () => {
+    const t = bakeSetup()
+    const v = bview()
+    // the sphere and its table as the G-buffer: beyond the outline the silhouettes have another mark to read (the table)
+    const g = sphereGBuffer(v.width, v.height, { view: v, params: BP, centre: [0, 0, 0], radius: 0.6, mark: 0, table: { z: -0.6, mark: 1 } })
+    t.gl.setReadback((_a, _w, _h, dst) => {
+      const out = dst as Float32Array
+      for (let i = 0; i < g.width * g.height; i++) {
+        const texel =
+          g.mark[i] < 0
+            ? [0, 0, 1e30, 0]
+            : encodeFloatTexel({ normal: [g.normal[3 * i], g.normal[3 * i + 1], g.normal[3 * i + 2]], depth: g.depth[i], value: g.value[i], shadow: g.shadow[i] === 1, mark: g.mark[i] })
+        out.set(texel, 4 * i)
+      }
+    })
+    const params = setParam(BP, 'particles.dragDensity', 1)
+    t.engine.render(v, params, 'none', FRAMING)
+    await vi.waitFor(() => expect(t.baked().length).toBeGreaterThanOrEqual(2), { timeout: 120_000, interval: 5 })
+    const bakedFrames = t.painted.filter((p) => p.kind === 'baked')
+    // the first baked frame had no G-buffer (none had been read), the last has the one read for this view
+    const without = bakedFrames[0].frame.strokes
+    const withG = bakedFrames[bakedFrames.length - 1].frame.strokes
+    expect(withG.count).toBe(without.count)
+    expect(sumOf(withG.colour), 'the G-buffer reaches the silhouettes: the picture it makes differs').not.toBeCloseTo(sumOf(without.colour), 4)
+    // the same view, dragging: the G-buffer for it is held, and is not used
+    t.engine.render(v, params, 'none', FRAMING)
+    expect(sumOf(t.painted[t.painted.length - 1].frame.strokes.colour)).toBeCloseTo(sumOf(withG.colour), 4)
+    t.engine.render(bview({ dragging: true }), params, 'none', FRAMING)
+    const dragged = t.painted[t.painted.length - 1].frame.strokes
+    expect(dragged.count).toBe(without.count)
+    expect(sumOf(dragged.colour)).toBeCloseTo(sumOf(without.colour), 4)
+    expect(sumOf(dragged.colour)).not.toBeCloseTo(sumOf(withG.colour), 4)
+    t.engine.dispose()
+  })
+
+  it('does not start a readback when a read that was begun at rest lands during a drag', async () => {
+    const t = bakeSetup({ limits: { asyncReadback: true, fenceDelayPolls: 6 } })
+    await t.ready()
+    await sleep(200)
+    // a frame at rest asks for its G-buffer, which is still with the GPU when the drag begins
+    t.engine.render(bview({ azimuth: 80 }), BP, 'none', FRAMING)
+    const passes = t.gbuffers()
+    for (let k = 1; k <= 10; k++) t.engine.render(bview({ azimuth: 80 + 3 * k, dragging: true }), BP, 'none', FRAMING)
+    await sleep(250)
+    expect(t.gbuffers()).toBe(passes)
+    t.engine.dispose()
   })
 })
