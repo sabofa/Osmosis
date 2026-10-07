@@ -52,6 +52,24 @@ async function blobUrlFor(key: string): Promise<string | null> {
   return blob ? URL.createObjectURL(blob) : null
 }
 
+// Keys of the cache that no `<image data-paper-key>` under doc uses. Pure, so it can be tested alone.
+export function unusedKeys(cached: Iterable<string>, inUse: ReadonlySet<string>): string[] {
+  return Array.from(cached).filter((key) => !inUse.has(key))
+}
+
+// Revoke the blob URL of every cached key no image in doc uses any more, and drop the cache entry. A tile still
+// generating or that failed has no URL to revoke; its entry is only dropped.
+export function releaseUnusedPaperTiles(doc: ParentNode = document): void {
+  const inUse = new Set(Array.from(doc.querySelectorAll<SVGImageElement>('image[data-paper-key]')).map((image) => image.getAttribute('data-paper-key')!))
+  for (const key of unusedKeys(blobUrls.keys(), inUse)) {
+    const pending = blobUrls.get(key)!
+    blobUrls.delete(key)
+    void pending.then((url) => {
+      if (url) URL.revokeObjectURL(url)
+    }, () => {})
+  }
+}
+
 // Fill every empty paper `<image>` under root, generating each distinct tile once per page.
 export async function fillPaperTiles(root: ParentNode): Promise<void> {
   const images = Array.from(root.querySelectorAll<SVGImageElement>('image[data-paper-key]'))

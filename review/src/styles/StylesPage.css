@@ -11,8 +11,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.4 Inter
 .sc-head, .sc-rowlabel { font: 600 11px 'Space Grotesk', sans-serif; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .sc-rowlabel { align-self: center; }
 .sc-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; }
-.sc-figure { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3; }
-.sc-figure svg { width: 100%; height: 100%; display: block; }
+.sc-figure { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.sc-figure svg { width: 100%; height: auto; display: block; }
 .sc-placeholder { border: 1px dashed var(--line); border-radius: 6px; padding: 14px; color: var(--muted); }
 .sc-note { color: var(--muted); margin: 0; align-self: center; }
 .sc-space { position: relative; aspect-ratio: 4 / 3; }

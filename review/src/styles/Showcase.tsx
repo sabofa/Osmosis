@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { EXAMPLES } from '../../../graph-engine/src/examples'
 import { renderFigure } from '../../../graph-engine/src/figure/render'
 import { parseSpec } from '../../../graph-engine/src/parser/parseSpec'
@@ -7,7 +7,7 @@ import { SPACE_EXAMPLES } from '../../../graph-engine/src/space/examples'
 import { SpaceRenderer } from '../../../graph-engine/src/space/SpaceRenderer'
 import type { SettingsLayer, ThemeStyles } from '../../../graph-engine/src/style/layers'
 import { PRESET_NAMES, type PresetName } from '../../../graph-engine/src/style/presets'
-import { fillPaperTiles } from '../../../graph-engine/src/style/papers/host'
+import { fillPaperTiles, releaseUnusedPaperTiles } from '../../../graph-engine/src/style/papers/host'
 import type { StyleLayer } from '../../../graph-engine/src/style/resolve'
 import { GRAPH_TYPES, type GraphType } from '../../../graph-engine/src/style/theme/types'
 import { themeInputOf, type ThemeChoice } from './controls'
@@ -45,7 +45,7 @@ function drawFigure(label: string, choice: ThemeChoice, styles: ThemeStyles | un
 function Figure({ html }: { html: string }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (ref.current) void fillPaperTiles(ref.current)
+    if (ref.current) void fillPaperTiles(ref.current).then(() => releaseUnusedPaperTiles())
   }, [html])
   return <div ref={ref} className="sc-figure" dangerouslySetInnerHTML={{ __html: html }} />
 }
@@ -76,7 +76,11 @@ function SpaceCell({ mode }: { mode: 'light' | 'dark' }) {
   )
 }
 
-export function Showcase({ choice, themeStyles, document: doc, solo }: ShowcaseProps) {
+export function Showcase(props: ShowcaseProps) {
+  const { solo } = props
+  const choice = useDeferredValue(props.choice)
+  const themeStyles = useDeferredValue(props.themeStyles)
+  const doc = useDeferredValue(props.document)
   const mode = useMemo(() => themeInputOf(choice).mode, [choice])
   const cells = useMemo(() => {
     const out: Partial<Record<GraphType, Record<string, string[]>>> = {}

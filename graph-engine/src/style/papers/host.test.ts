@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { inlinePaperTiles, setHrefs, tilePixels } from './host'
+import { inlinePaperTiles, releaseUnusedPaperTiles, setHrefs, tilePixels, unusedKeys } from './host'
 import { paperKey } from './generated'
 
 const KEY = paperKey('canvas', 3, 256, 1, '#e8dcc0')
@@ -116,6 +116,52 @@ describe('fillPaperTiles', () => {
       expect(images[0].href).toBe('blob:ok')
     } finally {
       create.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('releaseUnusedPaperTiles', () => {
+  const fakeImage = (key: string) => ({ key, href: '', getAttribute(n: string) { return n === 'data-paper-key' ? this.key : this.href }, setAttribute(_: string, v: string) { this.href = v } })
+  const rootOf = (...keys: string[]) => ({ querySelectorAll: () => keys.map(fakeImage) }) as unknown as ParentNode
+  const stubCanvas = () => {
+    vi.stubGlobal('ImageData', class { data: Uint8ClampedArray; constructor(data: Uint8ClampedArray) { this.data = data } })
+    vi.stubGlobal('OffscreenCanvas', class { getContext() { return { putImageData() {} } } convertToBlob() { return Promise.resolve(new Blob(['x'])) } })
+  }
+  it('unusedKeys lists cached keys not in use', () => {
+    expect(unusedKeys(['a', 'b', 'c'], new Set(['b']))).toEqual(['a', 'c'])
+  })
+  it('revokes and drops a key gone from the page, keeps one in use, never revokes a failed tile', async () => {
+    const { fillPaperTiles } = await import('./host')
+    const gone = paperKey('canvas', 21, 64, 1, '#e8dcc0')
+    const kept = paperKey('linen', 21, 64, 1, '#e8dcc0')
+    const failing = paperKey('canvas', 22, 64, 1, '#e8dcc0')
+    releaseUnusedPaperTiles(rootOf()) // start from an empty cache (earlier tests leave keys)
+    await new Promise((r) => setTimeout(r, 0))
+    stubCanvas()
+    let n = 0
+    const create = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:${++n}`)
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    try {
+      await fillPaperTiles(rootOf(gone, kept))
+      expect(create).toHaveBeenCalledTimes(2)
+      releaseUnusedPaperTiles(rootOf(kept))
+      await new Promise((r) => setTimeout(r, 0))
+      expect(revoke).toHaveBeenCalledTimes(1)
+      expect(revoke).toHaveBeenCalledWith('blob:1')
+      releaseUnusedPaperTiles(rootOf(kept))
+      await new Promise((r) => setTimeout(r, 0))
+      expect(revoke).toHaveBeenCalledTimes(1) // dropped, not revoked twice; the kept one stays
+      // a failed tile: its entry was forgotten on failure, so nothing reaches revoke
+      vi.stubGlobal('OffscreenCanvas', class { getContext() { return { putImageData() {} } } convertToBlob() { return Promise.reject(new Error('x')) } })
+      await fillPaperTiles(rootOf(failing))
+      releaseUnusedPaperTiles(rootOf())
+      await new Promise((r) => setTimeout(r, 0))
+      expect(revoke).toHaveBeenCalledTimes(2) // only the kept key (now gone too), never the failed one
+      expect(revoke).toHaveBeenLastCalledWith('blob:2')
+    } finally {
+      create.mockRestore()
+      revoke.mockRestore()
       vi.unstubAllGlobals()
     }
   })

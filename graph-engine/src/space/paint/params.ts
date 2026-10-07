@@ -346,7 +346,7 @@ const ROLE_FIELDS: [keyof PaintParams['roles']['block'], number, number, number]
 const KINDS = ['internal', 'silhouette', 'shadow']
 
 export const PARAM_SCHEMA: ParamSpec[] = [
-  { path: 'seed', label: 'Seed', group: 'General', min: 1, max: 999, step: 1 },
+  { path: 'seed', label: 'Paint seed', group: 'General', min: 1, max: 999, step: 1 },
   { path: 'light.worldFixed', label: 'Light fixed in the world', group: 'Light', min: 0, max: 1, step: 1 },
   { path: 'light.azimuth', label: 'Azimuth (°)', group: 'Light', min: -180, max: 180, step: 1 },
   { path: 'light.elevation', label: 'Elevation (°)', group: 'Light', min: -10, max: 90, step: 1 },
