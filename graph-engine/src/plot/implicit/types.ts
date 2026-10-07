@@ -1,7 +1,7 @@
 // Shared types of the interval quadtree (calc P3) and what is built on it: implicit curves and
 // regions. Pure data; nothing here evaluates anything.
 import type { Verdict } from '../../math/interval'
-import type { Vec2 } from '../../scene/types'
+import type { SceneObject, Vec2 } from '../../scene/types'
 
 // An axis-aligned rectangle of the plane, the cell of a subdivision: x0 < x1, y0 < y1, in world units. (Not
 // the sampler's Box in plot/sample/types.ts, which is the twin's xLo/xHi/yLo/yHi enclosure of a curve over a
@@ -59,6 +59,43 @@ export interface Subdivision {
   // of stop 'budget', one size, coarser than the leaf size asks, and the caller says the statement was drawn
   // coarsely.
   capped: boolean
+}
+
+// What a statement-level entry point (implicit.ts's sampleImplicit, regions.ts's sampleRegion) is told besides the statement: as P2's
+// CurveOptions, which the scene builder fills in the same way.
+export interface StatementOptions {
+  // the statement's index in the spec (the MarkId of what it draws)
+  statement: number
+  color: string | null
+  quality: 'full' | 'coarse'
+  // overrides the tuning's budget of the whole statement, for tests
+  budget?: { points: number; intervals: number }
+}
+
+// What an entry point answers, as P2's SampledCurve does (the scene builder says the notes from it):
+//  - `objects`: a curve (an implicit curve: `curve`, its isolated points as `value` marks), or a `region` and its `boundary.<k>`
+//    curves; none if the view is bad (`badView`).
+//  - `capped`: drawn coarsely. The statement's budget ran out in subdividing, contouring or clipping, or the walk stopped at leaves
+//    too wide to draw a chord across: the picture is a coarser one, or has pieces of it missing, and the line says so.
+//  - `tested` and `defined`: as the curve sampler's. `tested` is that the statement's own domain (an implicit curve's `if` clause)
+//    holds at some point of the view, true where there is none, and always true of a region (its condition is its domain);
+//    `defined` that the statement is not undefined everywhere in the view: some point of a grid over it, some corner the contouring
+//    read or something drawn says it is defined (a grid can miss a stretch, so this errs toward defined). `tested && !defined` is
+//    "undefined everywhere in view".
+//  - `drawnInView`: some of what was drawn is in the picture (not only the overscan). `blankInView`: nothing is, and the picture
+//    was not resolved: a leaf of it was left out for want of the budget or because it was too coarse. (Nothing drawn and nothing
+//    left out is a statement that is not there: off screen, or empty.)
+//  - `leftOut`: leaves not drawn, for the budget or because they could not be cut (a few a statement is a pixel each).
+export interface Sampled {
+  objects: SceneObject[]
+  capped: boolean
+  stats: { points: number; intervals: number }
+  tested: boolean
+  defined: boolean
+  badView: boolean
+  drawnInView: boolean
+  blankInView: boolean
+  leftOut: number
 }
 
 // A piece of a contour inside one leaf: the straight stretch between two points of the zero set. Its ends are

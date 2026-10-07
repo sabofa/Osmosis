@@ -17,8 +17,15 @@ export interface ImplicitTuning {
   // Twin evaluations the subdivision may spend on one statement, counted from where it began. It is spent a
   // level at a time: the walk stops before the level it cannot pay for whole, and the cells it could not clear
   // at the last level it paid for are the leaves, all of one size, coarser than leafPx; the statement says it
-  // was drawn coarsely.
+  // was drawn coarsely. This is the subdivision's share of `statement`, not more spend on top of it: the entry points
+  // (implicit.ts, regions.ts) give the walk the lesser of this and STATEMENT.subdivisionShare of the statement's intervals.
   budget: { intervals: number }
+  // THE STATEMENT'S BUDGET, one for the whole statement: the subdivision, the contouring and the clipping of its leaves all spend it,
+  // on one counter, points (scalar evaluations) and intervals (twin evaluations) each against its own. Past it the leaves not yet
+  // reached are left out and the statement says it was drawn coarsely; before that, the walk is held to the leaves the points
+  // budget can contour (STATEMENT.pointsPerLeaf), so that a statement too dear for FULL is drawn on bigger leaves, whole, and not
+  // cut short.
+  statement: { points: number; intervals: number }
 }
 
 // The budgets are set against what the subdivision costs on the views that are common and dear, measured at
@@ -37,10 +44,56 @@ export interface ImplicitTuning {
 // 596917 at FULL, exp(x^2) - exp(x^2) + x - y 1.2 million), and is drawn at the coarser size the budget pays for,
 // all of it, and says so. A cell costs 0.2 to 2.4 us, so the whole of FULL's budget is under half a second.
 // The corpus pins these (task 7).
-export const FULL: ImplicitTuning = { leafPx: 1, overscan: 0.25, budget: { intervals: 200000 } }
+//
+// THE STATEMENT'S BUDGET (task 4) is the whole spend of a statement, the subdivision above and what is built on its leaves, and it is set against
+// what the stages cost together on the same views ([-10, 10]^2, 800 px; points / twin evaluations, FULL then COARSE; the contouring
+// and clipping of the leaves of the quadtree above, for each statement):
+//   y = tan(x)                    732945 / 135857    174843 / 30518     (the chase for a pole, in every period)
+//   y < tan(x)                    647254 / 157238    157148 / 35555     (as a region: the same chords, and the fill up to each pole)
+//   sin(x) = cos(y)               370650 /  74997    102413 / 17189     (a lattice of nodes: the critical points of H)
+//   sin(x) < cos(y)               291450 /  94419     81522 / 21975
+//   x^2 - y^2 = 1                  75126 /  15701     20790 /  3845
+//   y > 1/x                       130023 /  21777     28618 /  6713
+//   xy > 1                         30600 /  10131      8704 /  2491
+//   1 < x^2 + y^2 < 4              12360 /   4981      3536 /  1253
+//   x^2 + y^2 < 4 and y > 0         4541 /   2465      1317 /   613
+//   x^2 + y^2 = 4 if y > 0         10424 /   2811      2952 /   739
+// 1,200,000 points is 1.6 times the dearest at FULL (the curve y = tan x), 300,000 1.7 times the dearest at COARSE (also y = tan x); 400,000
+// twin evaluations (of which the subdivision may spend half, the 200000 above) is 2.5 times the dearest at FULL, 100,000 2.8 times at
+// COARSE. A statement that costs more is a crowd: the walk is held to the leaves the budget can contour (STATEMENT.pointsPerLeaf and
+// intervalsPerLeaf), so it is drawn on bigger leaves, all of it, and says so (sin(10x) = cos(10y): capped at FULL after 0.46 million points
+// and 22 thousand twin evaluations, at COARSE after 0.10 million and 5 thousand; sin(x^2 + y^2) = 0.3 likewise).
+export const FULL: ImplicitTuning = { leafPx: 1, overscan: 0.25, budget: { intervals: 200000 }, statement: { points: 1200000, intervals: 400000 } }
 // COARSE draws the same curve on 4 px leaves, two halvings fewer: the cells along the curve are a quarter as
 // many, so it costs about a quarter of FULL, and its budget is a quarter of FULL's.
-export const COARSE: ImplicitTuning = { ...FULL, leafPx: 4, budget: { intervals: 50000 } }
+export const COARSE: ImplicitTuning = { ...FULL, leafPx: 4, budget: { intervals: 50000 }, statement: { points: 300000, intervals: 100000 } }
+
+// How the statement's budget is shared out between the stages (the entry points, implicit.ts and regions.ts).
+export const STATEMENT = {
+  // The subdivision may spend this fraction of the statement's twin evaluations, at most (and no more than ImplicitTuning.budget):
+  // the rest is for the contouring and the clipping of the leaves it makes (a twin evaluation of each comparison over each leaf, the
+  // chase for a pole, the checks of a piece).
+  subdivisionShare: 0.5,
+  // What contouring and clipping a leaf costs, in scalar evaluations, as the quadtree must reckon it before it walks: a circle costs
+  // about 10 a leaf, y - tan x about 19 (the chase for each pole), a region more by the comparisons that share its leaves. The walk
+  // is held to the leaves the points budget buys at this price; a statement that costs more than that a leaf is cut short by its own
+  // budget and says so, one that costs less is drawn at the size asked.
+  pointsPerLeaf: 24,
+  // And in twin evaluations: the contour's own for a leaf (a pole, an edge not proven continuous: 1.5 a leaf for y = tan x, the
+  // dearest of the common forms), which is paid besides the twin of each comparison over the leaf that a region asks (one more for each
+  // of its comparisons). The walk is held to the leaves the statement's twin evaluations that the subdivision may not take can pay at
+  // this price, and the twin of the leaves is not bought with what their contour needs.
+  intervalsPerLeaf: 3,
+  // The last of the budget that contouring is not given: cutting the leaves it reached costs points of its own, and a budget the contour
+  // spent whole would leave every leaf it did reach uncut and the picture blank.
+  reserve: 0.1,
+}
+
+// What a region's entry points sample to decide whether it is defined anywhere in the view (the same question the curve sampler's start
+// grid answers): H, or the condition, at this many points across the view on each axis. A grid cannot prove a statement undefined: it
+// can miss a stretch narrower than its spacing, so a statement is called undefined only when the grid, the corners the contouring read
+// and what was drawn all say so.
+export const GRID = { samples: 33 }
 
 // The parts of the subdivision that are not a quality knob, so not in ImplicitTuning but still numbers that
 // were chosen.
