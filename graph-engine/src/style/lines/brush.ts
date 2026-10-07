@@ -20,7 +20,7 @@ const NIB = -Math.PI / 6
 const PEAK = 1.3
 const WAVELENGTH = 55
 
-function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+function draw({ chain, width, settings, random, step, strength }: StrokeInput): Primitive[] {
   const { points: spine, closed } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.3 })
   const n = spine.length
   const lengths = cumulative(spine)
@@ -39,7 +39,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     const swell = closed ? 1 : Math.pow(Math.max(0, Math.sin(Math.PI * t)), exponent)
     return width * PEAK * nib * swell * (1 + 0.35 * settings.variation * pressure(t))
   })
-  return [{ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity }]
+  return [{ kind: 'shape', outline: ribbon(spine, half, closed), spine, opacity: settings.opacity * (strength ?? 1) }]
 }
 
 export const brush: LineType = {

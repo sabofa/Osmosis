@@ -13,7 +13,12 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 60
 
-function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+// The opacity of the line, and of the ink pooled at its ends, as a share of the line's own (a
+// medium's strength replaces the first; the pooled ends keep their share of it).
+const STROKE_FACTOR = 0.82
+const POOL_FACTOR = 0.3
+
+function draw({ chain, width, settings, random, step, strength }: StrokeInput): Primitive[] {
   const { points: line, closed, loop } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   // Markers write wide: the base weight, made felt-tip thick.
   const thick = width * 1.45 * (1 + 0.15 * settings.variation * random.range(-1, 1))
@@ -23,7 +28,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     start: line[0],
     pieces: smoothThrough(line, closed),
     width: thick,
-    opacity: settings.opacity * 0.82,
+    opacity: settings.opacity * (strength ?? STROKE_FACTOR),
     cap: 'round',
     join: 'round',
     blend: 'multiply',
@@ -40,7 +45,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
         { at: line[0], r: (thick / 2) * (1.08 + 0.2 * settings.variation * random.next()) },
         { at: line[n - 1], r: (thick / 2) * (1.08 + 0.2 * settings.variation * random.next()) },
       ],
-      opacity: settings.opacity * 0.3,
+      opacity: settings.opacity * (strength === undefined ? POOL_FACTOR : strength * (POOL_FACTOR / STROKE_FACTOR)),
     },
   ]
 }

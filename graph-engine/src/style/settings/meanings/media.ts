@@ -50,7 +50,7 @@ export const MEDIA_MEANINGS: Meanings = {
 
   'media.marker.streaks': {
     meaning:
-      'Not drawn yet: how much lighter and darker lines will run along a marker stroke, the felt tip laying its ink unevenly. 0 is an even, flat tone; the top of the range is strongly streaked. This is the only grain a marker has; its colour stays saturated and mid-lightness whatever this is.',
+      'Not drawn yet: how much lighter and darker lines will run along a marker stroke, the felt tip laying its ink unevenly. 0 is an even, flat tone; the top of the range is strongly streaked. This is the only grain a marker has; its colours stay saturated and mid-lightness, and its black lines near-black, whatever this is.',
     interactions: [],
   },
 

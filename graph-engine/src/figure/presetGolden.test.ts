@@ -9,7 +9,11 @@ import { PRESET_GOLDEN_EXAMPLES, PRESET_GOLDEN_PRESETS, presetGoldenKey, renderP
 //
 // History: first pinned at ebd7fc3 (light and dark were byte-equal then: the paper decided the
 // palette). Re-pinned on purpose when the presets took their colours from their medium, so they
-// follow the theme: the colours move, and a dark theme is no longer the light figure.
+// follow the theme: the colours move, and a dark theme is no longer the light figure. Re-pinned
+// again, the pencil's and the marker's twelve, when a medium's opacity came to REPLACE the line
+// type's own factor instead of multiplying it (their strokes are laid at the medium's strength),
+// and the marker's lines became a near-black (and near-white in a dark theme), and a marker no longer
+// multiplies its strokes over a dark page, where a light stroke would vanish. Ink's six did not move.
 
 const golden = GOLDEN as Record<string, string>
 

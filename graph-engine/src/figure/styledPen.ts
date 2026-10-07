@@ -1,6 +1,6 @@
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
-import { deepen, saturate } from '../style/color'
+import { deepen, saturate, toOklch } from '../style/color'
 import { LINES, type Primitive, type StrokeInput, type Texture } from '../style/lines'
 import type { MediumSettings } from '../style/media'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
@@ -31,7 +31,13 @@ import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './s
 // is being drawn (a stroke in the auxiliary layer is an auxiliary line, one in the marks layer is
 // a measure, a dot is a point, a label is a label, the givens table is the givens, a region's
 // area is a fill and its hatching its shading), and a colour that is not the role's own is an
-// author's, which the medium fits like any other. Each is laid at the medium's opacity (figure/medium.ts).
+// author's, which the medium fits like any other. Each is laid at the medium's opacity
+// (figure/medium.ts). For a stroke that opacity is the line type's STRENGTH: it replaces the
+// line type's own factor (a pencil pass's 0.8 to 0.95, a marker's 0.82, chalk's 0.85) instead of
+// multiplying it, so a medium's contrast floors hold for the stroke as drawn at the style's
+// default line opacity. The style's own line and fill opacity still multiply on top: that is the
+// author's dial, and no floor is promised below it. A point, a label and the marks the fill draws
+// itself (areas, dots, a wash's rim) take the medium's opacity as they are.
 //
 // Geometry is generated once, in the figure's own drawing coordinates; pan
 // and zoom transform the finished SVG, so the wobble never reshuffles.
@@ -173,6 +179,11 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
     return saturate(role, style.colour.saturation)
   }
 
+  // A marker's overlaps darken (multiply). That is how ink behaves on a light page; on a dark page a
+  // light stroke multiplied over it all but vanishes, so in a medium on a dark surface the strokes
+  // are laid normally (their own translucency still builds where they cross).
+  const darkPage = medium !== null && toOklch(medium.surface).l < 0.5
+
   // One primitive, as markup.
   const write = (primitive: Primitive, paint: string, opacity: number, identity: SvgAttrs): string => {
     switch (primitive.kind) {
@@ -186,7 +197,7 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
           'stroke-linejoin': primitive.join,
           'stroke-dasharray': primitive.dash ? primitive.dash.map(dp).join(' ') : null,
           opacity: Math.min(1, primitive.opacity * opacity),
-          style: primitive.blend ? `mix-blend-mode:${primitive.blend}` : null,
+          style: primitive.blend && !darkPage ? `mix-blend-mode:${primitive.blend}` : null,
           ...identity,
         })}/>`
       case 'shape':
@@ -198,7 +209,7 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
 
   // A chain through the line type. `key` is the element's identity plus
   // which piece of it this is — the random source's seed string.
-  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line, step?: number, extra: Pick<StrokeInput, 'cap' | 'dash'> = {}): Primitive[] =>
+  const drawChain = (chain: Chain, width: number, key: string, settings: LineSettings = style.line, step?: number, extra: Pick<StrokeInput, 'cap' | 'dash' | 'strength'> = {}): Primitive[] =>
     line.draw({ chain, width, settings, random: randomFor(key, style.seed), step, ...extra })
 
   // Textures a fill asks for (a wash's blotches, its soft rim), and the clip
@@ -235,7 +246,10 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
     const drawn = medium ? medium.paint(typeof attrs.stroke === 'string' ? attrs.stroke : theme.ink, role) : undefined
     const paint = drawn ? drawn.hex : (colour(attrs.stroke) ?? ink)
     const width = numberOf(attrs['stroke-width'], 1) * style.line.width
-    const opacity = numberOf(attrs.opacity, 1) * (drawn ? drawn.opacity : 1)
+    // The call's own opacity (a hidden edge is faded). A medium's opacity is the line type's stroke
+    // strength: it replaces the line type's own factor instead of multiplying it (`strength`).
+    const opacity = numberOf(attrs.opacity, 1)
+    const strength = drawn?.opacity
     const pattern = typeof attrs['stroke-dasharray'] === 'string' ? attrs['stroke-dasharray'].split(/[\s,]+/).map(Number).filter(Number.isFinite) : []
     const identity = identityOf(attrs)
     const linecap = attrs['stroke-linecap']
@@ -246,12 +260,12 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
       // dashes one by one.
       if (line.nativeDash) {
         const dash = pattern.length > 0 ? pattern.map((p) => p * Math.max(1, style.line.width)) : undefined
-        for (const primitive of drawChain(chain, width, `${id}#${c}`, style.line, undefined, { cap, dash })) layers[layer].push(write(primitive, paint, opacity, identity))
+        for (const primitive of drawChain(chain, width, `${id}#${c}`, style.line, undefined, { cap, dash, strength })) layers[layer].push(write(primitive, paint, opacity, identity))
         return
       }
       const parts = pattern.length > 0 ? dashes(chain, pattern) : [chain]
       parts.forEach((part, d) => {
-        for (const primitive of drawChain(part, width, `${id}#${c}.${d}`, style.line, undefined, { cap })) layers[layer].push(write(primitive, paint, opacity, identity))
+        for (const primitive of drawChain(part, width, `${id}#${c}.${d}`, style.line, undefined, { cap, strength })) layers[layer].push(write(primitive, paint, opacity, identity))
       })
     })
   }
@@ -280,7 +294,9 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
       // heavy as hatching.
       const shade = shading ? shading.hex : deepen(paint, SHADE_DEPTH)
       const identity = identityOf(attrs)
-      const opacity = style.fill.opacity * (shading ? shading.opacity : 1)
+      // Shading lines are drawn by the line type at the medium's strength, which replaces its own
+      // factor; the fill's opacity multiplies on top. Dots are the fill's own marks and take both.
+      const opacity = style.fill.opacity
       const areaOpacity = style.fill.opacity * AREA_WEIGHT * (tone ? tone.opacity : 1)
       const evenOdd = attrs['fill-rule'] === 'evenodd'
       const outline = regionChains(region)
@@ -312,11 +328,11 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
           }
           case 'lines':
             mark.chains.forEach((chain, c) => {
-              for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings, SHADING_STEP)) clipped.push(write(primitive, shade, opacity, identity))
+              for (const primitive of drawChain(chain, shadingWidth, `${id}/fill#${c}`, shadingSettings, SHADING_STEP, { strength: shading?.opacity })) clipped.push(write(primitive, shade, opacity, identity))
             })
             break
           case 'dots':
-            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', opacity, ...identity })}/>`)
+            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', opacity: opacity * (shading ? shading.opacity : 1), ...identity })}/>`)
             break
           case 'edge': {
             const edgeMarkup = cleanFill(region, {

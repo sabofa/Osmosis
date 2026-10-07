@@ -14,7 +14,12 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 30
 
-function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+// The opacity of a run of chalk, and of its dust, as a share of the line's own (a medium's strength
+// replaces the first; the dust keeps its share of it).
+const STROKE_FACTOR = 0.85
+const DUST_FACTOR = 0.7
+
+function draw({ chain, width, settings, random, step, strength }: StrokeInput): Primitive[] {
   const { points: line, closed } = handChain(chain, (step ?? sampleStep(width)) * 0.7, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.2 })
   const lengths = cumulative(line)
   const total = lengths[lengths.length - 1]
@@ -59,7 +64,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     start: run[0],
     pieces: smoothThrough(run, whole),
     width: width * (1.15 + 0.25 * random.next()),
-    opacity: settings.opacity * 0.85,
+    opacity: settings.opacity * (strength ?? STROKE_FACTOR),
     cap: 'round' as const,
     join: 'round' as const,
     ...(whole ? { closed: true } : {}),
@@ -83,7 +88,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
     const across = random.range(-0.28, 0.28) * width
     dots.push({ at: { x: p.x + normals[k].x * across, y: p.y + normals[k].y * across }, r: width * random.range(0.08, 0.22) })
   }
-  out.push({ kind: 'dots', dots, opacity: settings.opacity * 0.7 })
+  out.push({ kind: 'dots', dots, opacity: settings.opacity * (strength === undefined ? DUST_FACTOR : strength * (DUST_FACTOR / STROKE_FACTOR)) })
   return out
 }
 

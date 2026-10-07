@@ -83,25 +83,33 @@ export function pageNeutrals(theme: ThemeInput): Neutrals {
 // `colours` is the colour set the series, bad and accent are read from: the theme's own
 // (`theme.colours`) for a paper medium, its light-mode `theme.boardColours` for a board medium.
 export function baseColour(theme: ThemeInput, medium: MediumName, role: Role, neutrals: Neutrals, colours: ThemeColours): Hex {
+  return baseOf(theme, medium, role, neutrals, colours).hex
+}
+
+// The same, and whether the colour is one of the NEUTRALS: the role's own source gave it (the ink or
+// the muted a medium brings), and not an author's colour, a theme override or a series slot. A
+// medium whose neutrals sit outside the range it holds its coloured roles to (the marker's
+// near-black ink) uses this to fit only the neutral ones outside it.
+export function baseOf(theme: ThemeInput, medium: MediumName, role: Role, neutrals: Neutrals, colours: ThemeColours): { hex: Hex; neutral: boolean } {
   const own = normaliseHex(role.colour)
-  if (own !== null) return own
+  if (own !== null) return { hex: own, neutral: false }
   const override = normaliseHex(theme.media[medium]?.[role.key])
-  if (override !== null) return override
+  if (override !== null) return { hex: override, neutral: false }
   const series = colours.series
   if (role.slot !== undefined && Number.isFinite(role.slot) && series.length > 0) {
     const index = ((Math.floor(role.slot) % series.length) + series.length) % series.length
     const slot = normaliseHex(series[index])
-    if (slot !== null) return slot
+    if (slot !== null) return { hex: slot, neutral: false }
   }
   switch (ROLE_SOURCE[role.key]) {
     case 'muted':
-      return neutrals.muted
+      return { hex: neutrals.muted, neutral: true }
     case 'bad':
-      return colours.bad
+      return { hex: colours.bad, neutral: false }
     case 'accent':
-      return colours.accent
+      return { hex: colours.accent, neutral: false }
     default:
-      return neutrals.ink
+      return { hex: neutrals.ink, neutral: true }
   }
 }
 

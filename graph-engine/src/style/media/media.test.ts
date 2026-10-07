@@ -21,12 +21,19 @@ const FITTED: MediumName[] = ['ink', 'graphite', 'colouredPencil', 'marker', 'ch
 
 // The contrast each medium keeps against its own surface.
 const FLOOR: Partial<Record<MediumName, number>> = { ink: 7, graphite: 4.5, colouredPencil: 3, marker: 3, chalk: 4.5, whiteboard: 4.5 }
-// The OKLCH lightness range of the media that clamp it.
+// The OKLCH lightness range of the media that clamp it. (The marker's holds its COLOURED roles: its
+// neutral ink and muted are a near-black and a near-white, outside it: see `isMarkerNeutral`.)
 const RANGE: Partial<Record<MediumName, [number, number]> > = { marker: [0.45, 0.65], chalk: [0.8, 0.95], whiteboard: [0.35, 0.55] }
 // The chroma a saturated medium lifts a coloured base to (a neutral base stays neutral).
 const LIFT: Partial<Record<MediumName, number>> = { marker: 0.12, whiteboard: 0.1 }
 // The tolerance the brief gives for L and C.
 const TOLERANCE = 0.005
+
+// A role that takes the marker's own neutrals: one of the six that come from the ink, or auxiliary,
+// with no author's colour, no series slot and no theme override. It is held to the floor alone.
+const NEUTRAL_KEYS = ['line', 'hidden', 'label', 'measure', 'caption', 'givens', 'auxiliary']
+const isMarkerNeutral = (theme: ThemeInput, role: Role) =>
+  NEUTRAL_KEYS.includes(role.key) && role.colour === undefined && role.slot === undefined && theme.media.marker?.[role.key] === undefined
 
 const surfaceOf = (theme: ThemeInput, name: MediumName): Hex =>
   name === 'chalk' ? theme.boards.blackboard : name === 'whiteboard' ? theme.boards.whiteboard : theme.colours.paper
@@ -410,8 +417,9 @@ describe('every fitted medium, on 20 seeded random themes in both modes, for eve
             // A neutral base stays neutral.
             if (lift !== undefined && baseC <= 0.02) expect(oklch.c, tag).toBeLessThanOrEqual(baseC + TOLERANCE)
 
-            // The lightness range. Outside it only if nothing inside it meets the floor.
-            if (range !== undefined) {
+            // The lightness range. Outside it only if nothing inside it meets the floor. (The marker's
+            // neutrals are not held to it: they are a near-black and a near-white.)
+            if (range !== undefined && !(name === 'marker' && isMarkerNeutral(theme, role))) {
               const [lo, hi] = range
               if (oklch.l < lo - TOLERANCE || oklch.l > hi + TOLERANCE) {
                 outOfRange++
@@ -473,8 +481,10 @@ describe("when a medium's range and its contrast floor conflict, the floor wins"
     for (const key of ['line', 'auxiliary', 'highlight', 'point'] as const) {
       expect(drawn(MEDIA.marker.colour(theme, { key }, {}), '#8a8a8a'), key).toBeGreaterThanOrEqual(3)
     }
-    const line = toOklch(MEDIA.marker.colour(theme, { key: 'line' }, {}).hex)
-    expect(line.l).toBeLessThan(0.45 - TOLERANCE)
+    // The coloured roles leave the range (below it: nothing mid-toned reads on a mid-grey paper); the
+    // near-black neutral was never in it.
+    expect(toOklch(MEDIA.marker.colour(theme, { key: 'highlight' }, {}).hex).l).toBeLessThan(0.45 - TOLERANCE)
+    expect(toOklch(MEDIA.marker.colour(theme, { key: 'line' }, {}).hex).l).toBeLessThan(0.45 - TOLERANCE)
   })
 
   it('ink on a mid-grey paper cannot reach 7:1, so it takes the most contrast there is', () => {
@@ -786,16 +796,14 @@ describe('what is seen, on the default theme and the four built-ins in both mode
     }
   })
 
-  it("the marker's ink is the end of its range farthest from the paper and its muted 0.10 nearer, neutral greys", () => {
+  it("the marker's ink is a near-black on a light paper and a near-white on a dark one, and its muted 0.15 nearer the paper, neutral greys", () => {
     const light = defaultTheme('light')
     const dark = defaultTheme('dark')
     const l = (theme: ThemeInput, key: 'line' | 'auxiliary') => toOklch(MEDIA.marker.colour(theme, { key }, {}).hex)
-    expect(l(light, 'line').l).toBeCloseTo(0.45, 2)
-    expect(l(light, 'auxiliary').l).toBeCloseTo(0.55, 2)
-    expect(l(dark, 'line').l).toBeCloseTo(0.65, 2)
-    // On the default dark paper the muted marker keeps its floor, a little above 0.55 at most.
-    expect(l(dark, 'auxiliary').l).toBeGreaterThanOrEqual(0.55 - TOLERANCE)
-    expect(l(dark, 'auxiliary').l).toBeLessThan(0.65 - 0.05)
+    expect(l(light, 'line').l).toBeCloseTo(0.22, 2)
+    expect(l(light, 'auxiliary').l).toBeCloseTo(0.37, 2)
+    expect(l(dark, 'line').l).toBeCloseTo(0.92, 2)
+    expect(l(dark, 'auxiliary').l).toBeCloseTo(0.77, 2)
     for (const theme of [light, dark]) {
       for (const key of ['line', 'auxiliary'] as const) expect(l(theme, key).c, key).toBeLessThan(0.01)
     }
@@ -804,7 +812,26 @@ describe('what is seen, on the default theme and the four built-ins in both mode
     expect(MEDIA.marker.colour(recoloured, { key: 'line' }, {})).toEqual(MEDIA.marker.colour(light, { key: 'line' }, {}))
     expect(MEDIA.marker.colour(recoloured, { key: 'auxiliary' }, {})).toEqual(MEDIA.marker.colour(light, { key: 'auxiliary' }, {}))
     const darkPaper = resolveTheme({ mode: 'light', colours: { surface: '#101010' } })
-    expect(toOklch(MEDIA.marker.colour(darkPaper, { key: 'line' }, {}).hex).l).toBeCloseTo(0.65, 2)
+    expect(toOklch(MEDIA.marker.colour(darkPaper, { key: 'line' }, {}).hex).l).toBeCloseTo(0.92, 2)
+    // Every role that comes from the ink takes the same near-black, and the coloured roles keep the range.
+    for (const key of ['hidden', 'label', 'measure', 'caption', 'givens'] as const) expect(MEDIA.marker.colour(light, { key }, {}), key).toEqual(MEDIA.marker.colour(light, { key: 'line' }, {}))
+    for (const theme of [light, dark]) {
+      for (const key of ['point', 'highlight', 'fill', 'region', 'shading'] as const) {
+        const { l } = toOklch(MEDIA.marker.colour(theme, { key }, {}).hex)
+        expect(l, key).toBeGreaterThanOrEqual(0.45 - TOLERANCE)
+        expect(l, key).toBeLessThanOrEqual(0.65 + TOLERANCE)
+      }
+    }
+  })
+
+  it("an author's own colour, a series slot and a theme override are the marker's colours, not its neutrals: held to 0.45 to 0.65", () => {
+    const light = defaultTheme('light')
+    for (const role of [{ key: 'line', colour: '#202020' }, { key: 'line', slot: 0 }, { key: 'label', colour: '#ffffff' }] as Role[]) {
+      const { l } = toOklch(MEDIA.marker.colour(light, role, {}).hex)
+      expect(l, JSON.stringify(role)).toBeGreaterThanOrEqual(0.45 - TOLERANCE)
+    }
+    // A near-black an author typed is a mid marker, not the near-black the marker keeps for its lines.
+    expect(toOklch(MEDIA.marker.colour(light, { key: 'line', colour: '#202020' }, {}).hex).l).toBeGreaterThan(toOklch(MEDIA.marker.colour(light, { key: 'line' }, {}).hex).l + 0.1)
   })
 })
 
@@ -842,14 +869,16 @@ describe('on the default theme', () => {
 // the medium's opacity over its surface) and the marker got its own neutrals: graphite's auxiliary,
 // point, highlight and series 0 (darker, to keep 4.5:1 at 0.85); coloured pencil's point and highlight
 // (3:1 at 0.8); the whiteboard's auxiliary, highlight and series 0 (4.5:1 at 0.95); the marker's line
-// and auxiliary (its own neutral greys, 0.45 and 0.55 on a light paper, 0.65 and 0.55 on a dark one).
+// and auxiliary (its own neutral greys). Moved again in Task 5's rulings, when the marker's ink became a
+// near-black (L 0.22 on a light paper, 0.92 on a dark one) and its muted 0.15 nearer the paper: the
+// marker's line and auxiliary, in both modes.
 const PIN: Record<'light' | 'dark', Record<MediumName, string[]>> = {
   light: {
     clean: ['#17170f', '#6b6b5f', '#a34b3f', '#c65d22', '#b54e0a'],
     ink: ['#171710', '#57574d', '#8e4136', '#933c00', '#933c00'],
     graphite: ['#17170f', '#5d5d51', '#695a58', '#675a54', '#685a54'],
     colouredPencil: ['#22231c', '#797970', '#a96156', '#ba663d', '#ba673d'],
-    marker: ['#555555', '#717171', '#a34b3f', '#c65d22', '#b54e0a'],
+    marker: ['#1b1b1b', '#404040', '#a34b3f', '#c65d22', '#b54e0a'],
     chalk: ['#eeeeee', '#bebebe', '#e8ada3', '#efac8c', '#efac8d'],
     whiteboard: ['#3a3a3a', '#686868', '#a34b3f', '#b24b03', '#b24b03'],
   },
@@ -858,7 +887,7 @@ const PIN: Record<'light' | 'dark', Record<MediumName, string[]>> = {
     ink: ['#f2efe3', '#ada99a', '#ea9384', '#ed935c', '#ef955d'],
     graphite: ['#f2efe2', '#a09d8f', '#a79694', '#a89a92', '#b9aba3'],
     colouredPencil: ['#e1ded4', '#918e80', '#b2695d', '#c57848', '#d78958'],
-    marker: ['#8f8f8f', '#717171', '#c76a5c', '#d2722f', '#d2722f'],
+    marker: ['#e4e4e4', '#b4b4b4', '#c76a5c', '#d2722f', '#d2722f'],
     // The board media are the light default's: a board and what is drawn on it do not change with the mode.
     chalk: ['#eeeeee', '#bebebe', '#e8ada3', '#efac8c', '#efac8d'],
     whiteboard: ['#3a3a3a', '#686868', '#a34b3f', '#b24b03', '#b24b03'],

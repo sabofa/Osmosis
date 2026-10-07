@@ -10,6 +10,13 @@ import type { Look } from './tokens'
 // A look's COLOURS are its medium's (style/media/): the ink, pencil and marker follow the
 // theme (colour.ink and paper.tint are "theme"), and the medium fits each role's colour to the
 // theme's paper. A board look (blackboard, greenboard, whiteboard) brings its own surface.
+//
+// A medium also says how strongly it lays a stroke (its opacity), and that REPLACES the line
+// type's own factor (style/lines/types.ts, `strength`); `line.opacity` multiplies on top, as the
+// author's own dial. So the four looks that came with their medium (coloured pencil and the three
+// boards) leave it at 1, and the medium's contrast floors hold for what they draw. The ink,
+// pencil and marker keep the opacity they were given before there were media (pencil and marker
+// 0.85): that is the look's own choice to be lighter than its medium, and no floor is promised below it.
 
 export const PRESET_NAMES = ['clean', 'ink', 'pencil', 'marker', 'colouredPencil', 'blackboard', 'greenboard', 'whiteboard'] as const
 export type PresetName = (typeof PRESET_NAMES)[number]
@@ -73,7 +80,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // role's own colour, lettered by hand. The colours are the theme's, slightly
   // desaturated and held light (the colouredPencil medium).
   colouredPencil: {
-    line: { type: 'pencil', looseness: 0.3, wobble: 0.3, passes: 2, width: 1.2, variation: 0.3, taper: 0.4, grain: 0.45, opacity: 0.9 },
+    line: { type: 'pencil', looseness: 0.3, wobble: 0.3, passes: 2, width: 1.2, variation: 0.3, taper: 0.4, grain: 0.45, opacity: 1 },
     fill: { type: 'hatch', angle: 50, spacing: 5.5, opacity: 0.9, roughness: 0.5 },
     paper: { type: 'paper', tint: 'theme', texture: 0.5, grid: 24 },
     lettering: { face: 'hand', size: 1.15, tilt: 0.5 },
@@ -85,7 +92,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // drawn is chalk, an author's own colours too (the chalk medium), on the
   // board whatever the app's light or dark.
   blackboard: {
-    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 0.95 },
+    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 1 },
     fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
     paper: { type: 'blackboard', tint: 'theme', texture: 0.5, grid: 24 },
     lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
@@ -95,7 +102,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // The blackboard's look on a green board (the same chalk: it keeps its
   // contrast against both).
   greenboard: {
-    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 0.95 },
+    line: { type: 'chalk', looseness: 0.3, wobble: 0.3, passes: 1, width: 1.7, variation: 0.3, taper: 0.2, grain: 0.7, opacity: 1 },
     fill: { type: 'scribble', angle: 40, spacing: 9, opacity: 0.5, roughness: 0.6 },
     paper: { type: 'greenboard', tint: 'theme', texture: 0.5, grid: 24 },
     lettering: { face: 'hand', size: 1.3, tilt: 0.4 },
@@ -106,7 +113,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // chisel-tip outline and a back-and-forth fill-in), the marker line and the
   // scribble stand in for them (the design's named placeholders).
   whiteboard: {
-    line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.25, taper: 0, grain: 0.1, opacity: 0.95 },
+    line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.25, taper: 0, grain: 0.1, opacity: 1 },
     fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
     paper: { type: 'whiteboard', tint: 'theme', texture: 0.3, grid: 24 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },

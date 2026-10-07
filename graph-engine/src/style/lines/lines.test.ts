@@ -434,3 +434,58 @@ describe('the technical line', () => {
     expect(out[0].kind === 'stroke' && out[0].closed).toBe(true)
   })
 })
+
+// A medium's opacity is a line type's STROKE STRENGTH: it replaces the line type's own factor (a pencil
+// pass 0.8 to 0.95, a marker's 0.82, chalk's 0.85) rather than multiplying it, and `settings.opacity` still
+// multiplies on top. Without one, every line type draws exactly as it did.
+describe('a medium’s strength', () => {
+  const FACTOR: Record<LineType, number> = { technical: 1, ink: 1, brush: 1, pencil: Number.NaN, marker: 0.82, chalk: 0.85 }
+  const withStrength = (type: LineType, strength: number | undefined, overrides: Partial<LineSettings> = {}) =>
+    LINES[type].draw({ chain: ARC, width: WIDTH, settings: settingsFor(type, overrides), random: randomFor('s1/AB/0', 0), ...(strength === undefined ? {} : { strength }) })
+  const main = (out: Primitive[]) => out.filter((p) => p.kind !== 'dots')
+  const opacities = (out: Primitive[]) => main(out).map((p) => p.opacity)
+
+  for (const type of LINE_TYPES) {
+    it(`${type}: every stroke is drawn at the strength, times the line's own opacity, and no other factor`, () => {
+      for (const strength of [0.5, 0.85, 1]) {
+        for (const opacity of [1, 0.6]) {
+          for (const value of opacities(withStrength(type, strength, { opacity }))) expect(value, `${type} ${strength} x ${opacity}`).toBeCloseTo(strength * opacity, 12)
+        }
+      }
+    })
+
+    it(`${type}: draws exactly as before when it is given no strength, and keeps its own factor`, () => {
+      expect(withStrength(type, undefined)).toEqual(draw(type, ARC))
+      if (type !== 'pencil') for (const value of opacities(withStrength(type, undefined))) expect(value, type).toBeCloseTo(0.9 * FACTOR[type], 12)
+    })
+
+    it(`${type}: lies where it lay, whatever the strength: only the opacity moves`, () => {
+      const without = withStrength(type, undefined)
+      const faint = withStrength(type, 0.4)
+      expect(faint.map((p) => ({ ...p, opacity: 0 }))).toEqual(without.map((p) => ({ ...p, opacity: 0 })))
+    })
+  }
+
+  it('pencil: every pass is the strength, where its own passes vary between 0.8 and 0.95', () => {
+    const own = opacities(withStrength('pencil', undefined)).map((value) => value / 0.9)
+    expect(own).toHaveLength(3)
+    for (const value of own) {
+      expect(value).toBeGreaterThanOrEqual(0.8 - 1e-9)
+      expect(value).toBeLessThanOrEqual(0.95 + 1e-9)
+    }
+    expect(new Set(own).size).toBeGreaterThan(1)
+    expect(new Set(opacities(withStrength('pencil', 0.85))).size).toBe(1)
+  })
+
+  it('chalk and marker keep their secondary marks at the same share of the strength as of their own factor', () => {
+    const dust = (out: Primitive[]) => out.find((p) => p.kind === 'dots')!.opacity
+    // Chalk's dust is 0.7 against its run's 0.85; a marker's pooled ends 0.3 against its line's 0.82.
+    expect(dust(withStrength('chalk', undefined))).toBeCloseTo(0.9 * 0.7, 12)
+    expect(dust(withStrength('chalk', 0.9))).toBeCloseTo(0.9 * 0.9 * (0.7 / 0.85), 12)
+    expect(dust(withStrength('marker', undefined))).toBeCloseTo(0.9 * 0.3, 12)
+    expect(dust(withStrength('marker', 0.9))).toBeCloseTo(0.9 * 0.9 * (0.3 / 0.82), 12)
+    // A medium laid at the line type's own factor changes nothing at all.
+    expect(dust(withStrength('chalk', 0.85))).toBeCloseTo(dust(withStrength('chalk', undefined)), 12)
+    expect(dust(withStrength('marker', 0.82))).toBeCloseTo(dust(withStrength('marker', undefined)), 12)
+  })
+})

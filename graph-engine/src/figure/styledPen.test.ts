@@ -6,6 +6,7 @@ import { DARK_PALETTE, LIGHT_PALETTE, type Palette } from '../render/palette'
 import { EXAMPLES } from '../examples'
 import { toOklch } from '../style/color'
 import { MEDIA } from '../style/media'
+import { PRESETS } from '../style/presets'
 import { defaultTheme, fromColours } from '../style/theme/adapter'
 import { contrastRatio, drawnContrast } from '../style/theme/contrast'
 import type { MediumName, ThemeInput } from '../style/theme/types'
@@ -669,5 +670,154 @@ describe('a figure in a medium', () => {
     const svg = draw('@style-line: pencil', { body: LINE })
     expect(svg).toContain(`stroke="${cssColor(LIGHT_PALETTE.axis)}"`)
     expect(draw('@style-line: pencil', { body: LINE, palette: DARK_PALETTE })).toContain(`stroke="${cssColor(DARK_PALETTE.axis)}"`)
+  })
+
+  // A marker's ink multiplies where strokes cross. On a dark page a light stroke multiplied over it all but
+  // disappears, so a medium on a dark surface lays its strokes normally.
+  it('multiplies a marker’s overlaps on a light page only, so its lines are not lost on a dark one', () => {
+    const blended = (svg: string) => (svg.match(/mix-blend-mode:multiply/g) ?? []).length
+    for (const preset of ['marker', 'whiteboard']) expect(blended(draw(`@style: ${preset}`)), `${preset} light`).toBeGreaterThan(0)
+    expect(blended(draw('@style: marker', { palette: DARK_PALETTE })), 'marker dark').toBe(0)
+    // A dark tint under a light-theme marker is a dark page too.
+    expect(blended(draw('@style: marker\n@style-tint: 1d1d2b')), 'marker on a dark tint').toBe(0)
+    // Every stroke of the dark figure is still drawn, in light ink on the dark paper.
+    const svg = draw('@style: marker', { palette: DARK_PALETTE, body: LINE })
+    const strokes = [...layerOf(svg, 'primary').matchAll(/<path\b[^>]*fill="none"[^>]*stroke="(#[0-9a-f]{6})"/g)]
+    expect(strokes.length).toBeGreaterThan(0)
+    for (const [, hex] of strokes) expect(contrastRatio(hex, paperOf(svg))).toBeGreaterThanOrEqual(3)
+  })
+
+  // ---- the strength of a stroke ----
+  // A medium's opacity is the strength its strokes are laid at: it REPLACES the line type's own factor
+  // (pencil 0.8 to 0.95, marker 0.82, chalk 0.85) rather than multiplying it, and the style's own line
+  // opacity multiplies on top, as the author's dial.
+
+  // The strokes of one layer: the colour each is drawn in (a stroke's own, or the fill of a ribbon) and the
+  // opacity it carries (1 when it carries none). A chalk dust is not a stroke and is left out.
+  const strokesIn = (svg: string, layer: string): { hex: string; opacity: number }[] =>
+    [...layerOf(svg, layer).matchAll(/<(path|polygon)\b([^>]*)>/g)]
+      .filter((m) => m[1] === 'polygon' || /\bfill="none"/.test(m[2]))
+      .map((m) => ({
+        hex: /\b(?:stroke|fill)="(#[0-9a-f]{6})"/.exec(m[2].replace(/\bfill="none"/, ''))![1],
+        opacity: Number(/\bopacity="([0-9.]+)"/.exec(m[2])?.[1] ?? 1),
+      }))
+
+  const mediumOpacity = (name: MediumName, theme = defaultTheme('light')) => MEDIA[name].colour(theme, { key: 'line' }, {}).opacity
+
+  it('lays a stroke at the medium’s opacity alone: it replaces the line type’s own factor', () => {
+    for (const [preset, medium] of [
+      ['blackboard', 'chalk'],
+      ['greenboard', 'chalk'],
+      ['whiteboard', 'whiteboard'],
+      ['colouredPencil', 'colouredPencil'],
+      ['pencil', 'graphite'],
+      ['marker', 'marker'],
+      ['ink', 'ink'],
+    ] as const) {
+      // Line opacity 1: nothing but the medium on a stroke of the line role.
+      const strokes = strokesIn(draw(`@style: ${preset}\n@style-line-opacity: 1`, { body: LINE }), 'primary')
+      expect(strokes.length, preset).toBeGreaterThan(0)
+      for (const stroke of strokes) expect(stroke.opacity, preset).toBeCloseTo(mediumOpacity(medium), 3)
+    }
+  })
+
+  it('does not vary a pencil’s passes: each is the medium’s, where the pencil line used to give 0.8 to 0.95', () => {
+    const strokes = strokesIn(draw('@style: colouredPencil\n@style-passes: 3', { body: LINE }), 'primary')
+    expect(strokes).toHaveLength(3)
+    expect(new Set(strokes.map((stroke) => stroke.opacity)).size).toBe(1)
+  })
+
+  it('lets the style’s own line opacity multiply on top, and never anything else', () => {
+    for (const [preset, medium] of [['blackboard', 'chalk'], ['colouredPencil', 'colouredPencil'], ['marker', 'marker']] as const) {
+      for (const own of [0.5, 0.8]) {
+        for (const stroke of strokesIn(draw(`@style: ${preset}\n@style-line-opacity: ${own}`, { body: LINE }), 'primary')) {
+          expect(stroke.opacity, `${preset} ${own}`).toBeCloseTo(own * mediumOpacity(medium), 3)
+        }
+      }
+    }
+    // The presets that came with their medium leave their own opacity at 1; the ink, pencil and marker keep the
+    // opacity they had before there were media, which now multiplies on top (a lighter look than its medium).
+    for (const preset of ['colouredPencil', 'blackboard', 'greenboard', 'whiteboard', 'ink'] as const) expect(PRESETS[preset].line.opacity, preset).toBe(1)
+    expect(PRESETS.pencil.line.opacity).toBe(0.85)
+    expect(PRESETS.marker.line.opacity).toBe(0.85)
+  })
+
+  it('draws the strokes of an auxiliary line at the call’s fade times the medium’s opacity', () => {
+    const svg = draw('@style: blackboard', { body: ['@mode: figure', 'A = (0, 0)', 'B = (4, 0)', 'segment: A-B dashed'].join('\n') })
+    const faded = strokesIn(svg, 'auxiliary')
+    expect(faded.length).toBeGreaterThan(0)
+    // The figure fades auxiliary lines to 0.6 (render.ts), and a dash is a stroke of its own.
+    for (const stroke of faded) expect(stroke.opacity).toBeCloseTo(0.6 * mediumOpacity('chalk'), 3)
+  })
+
+  // The medium's floors, for the stroke as drawn: its colour at the opacity the stroke carries over the paper.
+  // On the default theme, the line role, with the style's line opacity at its default (1).
+  it('draws a pencil’s line at its effective opacity over the paper with graphite’s 4.5:1 floor, in both modes', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      const theme = defaultTheme(mode)
+      const svg = draw('@style: pencil\n@style-line-opacity: 1', { palette: palette(mode), theme, body: LINE })
+      const strokes = strokesIn(svg, 'primary')
+      expect(strokes.length).toBeGreaterThan(0)
+      for (const stroke of strokes) {
+        expect(stroke.opacity).toBeCloseTo(0.85, 3)
+        expect(drawnContrast(stroke.hex, paperOf(svg), stroke.opacity), `${mode} ${stroke.hex}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  it('keeps the pencil preset’s own, lighter line above the floor too (its colour has room)', () => {
+    const svg = draw('@style: pencil', { body: LINE })
+    for (const stroke of strokesIn(svg, 'primary')) {
+      expect(stroke.opacity).toBeCloseTo(0.85 * 0.85, 3)
+      expect(drawnContrast(stroke.hex, paperOf(svg), stroke.opacity)).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('keeps every medium’s floor for the line role, as drawn, at the default line opacity, in both modes', () => {
+    const FLOOR_OF: Record<string, number> = { ink: 7, graphite: 4.5, colouredPencil: 3, marker: 3, chalk: 4.5, whiteboard: 4.5 }
+    for (const [preset, medium] of [
+      ['ink', 'ink'],
+      ['pencil', 'graphite'],
+      ['colouredPencil', 'colouredPencil'],
+      ['marker', 'marker'],
+      ['blackboard', 'chalk'],
+      ['greenboard', 'chalk'],
+      ['whiteboard', 'whiteboard'],
+    ] as const) {
+      for (const mode of ['light', 'dark'] as const) {
+        const theme = defaultTheme(mode)
+        const svg = draw(`@style: ${preset}\n@style-line-opacity: 1`, { palette: palette(mode), theme, body: LINE })
+        for (const stroke of strokesIn(svg, 'primary')) {
+          expect(drawnContrast(stroke.hex, paperOf(svg), stroke.opacity), `${preset} ${mode} ${stroke.hex}@${stroke.opacity}`).toBeGreaterThanOrEqual(FLOOR_OF[medium] - 0.1)
+        }
+      }
+    }
+  })
+
+  // The marks a fill draws: shading lines are drawn by the line type at the medium's shading strength
+  // (replacing its factor) times the fill's opacity; dots and areas are the fill's own marks and take both.
+  it('lays a fill’s shading at the fill opacity times the medium’s, replacing the line type’s own factor', () => {
+    const body = EXAMPLES.find((e) => e.label === 'Square minus its circle')!.spec
+    const clipped = (svg: string) => [...svg.matchAll(/<g clip-path="[^"]*"[^>]*>([\s\S]*?)<\/g>/g)].flatMap((m) => [...m[1].matchAll(/<path\b([^>]*)>/g)].map((p) => p[1]))
+    const opacityOf = (attrs: string) => Number(/\bopacity="([0-9.]+)"/.exec(attrs)![1])
+    for (const [head, medium, fillOpacity] of [
+      ['@style: colouredPencil', 'colouredPencil', 0.9],
+      ['@style: colouredPencil\n@style-fill: stipple', 'colouredPencil', 0.9],
+      ['@style: blackboard', 'chalk', 0.5],
+    ] as const) {
+      const shading = MEDIA[medium].colour(defaultTheme('light'), { key: 'shading' }, {}).opacity
+      const marks = clipped(draw(head, { body }))
+      expect(marks.length, head).toBeGreaterThan(0)
+      // Strokes (hatch, scribble): the fill opacity times the medium's. (A chalk stroke's loose dust is a share of it.)
+      const strokes = marks.filter((attrs) => /\bfill="none"/.test(attrs))
+      for (const attrs of strokes) expect(opacityOf(attrs), head).toBeCloseTo(fillOpacity * shading, 3)
+      if (head.includes('stipple')) {
+        const dots = marks.filter((attrs) => /stroke="none"/.test(attrs))
+        expect(dots.length, head).toBeGreaterThan(0)
+        for (const attrs of dots) expect(opacityOf(attrs), head).toBeCloseTo(fillOpacity * shading, 3)
+      } else {
+        expect(strokes.length, head).toBeGreaterThan(0)
+      }
+    }
   })
 })

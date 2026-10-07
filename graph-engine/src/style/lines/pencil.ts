@@ -15,7 +15,11 @@ import type { LineType, Primitive, StrokeInput } from './types'
 
 const WAVELENGTH = 24
 
-function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+// One pass's opacity, as a share of the line's own: 0.8 to 0.95 by chance, unless a medium's strength
+// replaces it (every pass is then the medium's).
+const passOpacity = (strength: number | undefined, chance: number): number => strength ?? 0.8 + 0.15 * chance
+
+function draw({ chain, width, settings, random, step, strength }: StrokeInput): Primitive[] {
   const out: Primitive[] = []
   for (let pass = 0; pass < settings.passes; pass++) {
     const { points: line, closed, loop } = handChain(chain, step ?? sampleStep(width), width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.25 })
@@ -36,7 +40,9 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
       start: shifted[0],
       pieces: smoothThrough(shifted, closed),
       width: width * (0.7 + 0.2 * settings.variation * random.range(-1, 1)),
-      opacity: settings.opacity * (0.8 + 0.15 * random.next()),
+      // The pass's own opacity is drawn even when a medium's strength replaces it, so the random
+      // source keeps its sequence and a pencil's strokes lie where they did.
+      opacity: settings.opacity * passOpacity(strength, random.next()),
       cap: 'round',
       join: 'round',
       ...(closed ? { closed: true } : {}),

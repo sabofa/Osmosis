@@ -40,7 +40,7 @@ function extend(pieces: readonly Piece[], startBy: number, endBy: number): Piece
 // so clean with one other setting changed — graph paper, say — keeps clean's
 // round ends and its native "9 7" dashes rather than turning square and being
 // re-cut. A loop closes on itself.
-function draw({ chain, width, settings, random, cap, dash }: StrokeInput): Primitive[] {
+function draw({ chain, width, settings, random, cap, dash, strength }: StrokeInput): Primitive[] {
   const pieces = runOn(chain, width, settings.looseness, random)
   return [
     {
@@ -48,7 +48,7 @@ function draw({ chain, width, settings, random, cap, dash }: StrokeInput): Primi
       start: chainStart({ pieces, closed: chain.closed }),
       pieces,
       width,
-      opacity: settings.opacity,
+      opacity: settings.opacity * (strength ?? 1),
       ...(cap ? { cap } : {}),
       ...(dash && dash.length > 0 ? { dash } : {}),
       ...(chain.closed ? { closed: true } : {}),

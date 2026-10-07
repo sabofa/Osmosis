@@ -42,7 +42,7 @@ const TIP = 0.04
 // have points to sit on (shading lines pass a coarser `step` of their own).
 const FINE_STEP = 3
 
-function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[] {
+function draw({ chain, width, settings, random, step, strength }: StrokeInput): Primitive[] {
   const stepSize = step ?? FINE_STEP
   const { points: spine, closed, loop } = handChain(chain, stepSize, width, settings.looseness, settings.wobble, random, { wavelength: WAVELENGTH, budget: 0.35 })
   const n = spine.length
@@ -73,7 +73,7 @@ function draw({ chain, width, settings, random, step }: StrokeInput): Primitive[
   })
   const left = middle.map((h, i) => h * (1 + EDGE * settings.variation * edgeLeft(at(i))))
   const right = middle.map((h, i) => h * (1 + EDGE * settings.variation * edgeRight(at(i))))
-  return [{ kind: 'shape', outline: ribbon2(spine, left, right, closed), spine, opacity: settings.opacity }]
+  return [{ kind: 'shape', outline: ribbon2(spine, left, right, closed), spine, opacity: settings.opacity * (strength ?? 1) }]
 }
 
 export const ink: LineType = {

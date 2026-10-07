@@ -32,6 +32,13 @@ export interface StrokeInput {
   // A dash pattern, given only to a line type that dashes natively
   // (LineType.nativeDash); every other type is handed its dashes one by one.
   dash?: readonly number[]
+  // The opacity of ONE stroke of the medium the line is drawn in (above 0, up to 1). It REPLACES
+  // the line type's own factor (pencil 0.8 to 0.95, marker 0.82, chalk 0.85; technical, ink and
+  // brush have none, which is 1): the medium already says how strongly it lays a stroke, so the
+  // two are not multiplied. `settings.opacity` still multiplies on top, as the author's own
+  // dial. A line type's secondary marks keep their share of the main stroke (chalk's dust,
+  // a marker's pooled ends). Absent: the line type's own factor, exactly as before.
+  strength?: number
 }
 
 export type Primitive =
