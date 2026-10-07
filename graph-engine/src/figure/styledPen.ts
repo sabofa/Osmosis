@@ -12,7 +12,7 @@ import { FACES, tiltFor } from '../style/lettering'
 import { PAPERS } from '../style/papers'
 import type { RoleKey, ThemeInput } from '../style/theme/types'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
-import { figureMedium } from './medium'
+import { figureMedium, paperColour } from './medium'
 import { notationElements } from './notation'
 import { cleanFill, regionChains, strokeChains, type FigurePen, type FillRegion } from './pen'
 import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './svg'
@@ -38,6 +38,12 @@ import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './s
 // default line opacity. The style's own line and fill opacity still multiply on top: that is the
 // author's dial, and no floor is promised below it. A point, a label and the marks the fill draws
 // itself (areas, dots, a wash's rim) take the medium's opacity as they are.
+//
+// THE BACKDROP EXEMPTION. The medium's contrast floors are promised to what a reader has to read: lines,
+// auxiliary and hidden lines, labels, points, measures and the givens table, each as drawn (its colour at
+// the opacity it carries, over the page). Fills and their shading (hatching, scribbles, stipple, a wash's
+// rim), chalk's loose dust and a marker's pooled ends are BACKDROP TEXTURE: they are thinner and fainter
+// than a line by design, so that they sit behind the figure, and carry no floor.
 //
 // Geometry is generated once, in the figure's own drawing coordinates; pan
 // and zoom transform the finished SVG, so the wobble never reshuffles.
@@ -159,7 +165,9 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
   const line = LINES[style.line.type]
   const texture: Texture | null = line.texture(style.line)
   const ink = style.colour.ink === 'theme' ? theme.ink : style.colour.ink
-  const tint = style.paper.tint === 'theme' ? theme.background : style.paper.tint
+  // The paper's tint: a tint the style names, else the theme's board when the paper is one (whatever the
+  // medium: a board is the same colour in the clean medium), else the host's own page colour.
+  const tint = paperColour(style, palette, themeInput) ?? theme.background
   let paperMarkup = ''
   let paperDefs: string[] = []
 
@@ -246,9 +254,12 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
     const drawn = medium ? medium.paint(typeof attrs.stroke === 'string' ? attrs.stroke : theme.ink, role) : undefined
     const paint = drawn ? drawn.hex : (colour(attrs.stroke) ?? ink)
     const width = numberOf(attrs['stroke-width'], 1) * style.line.width
-    // The call's own opacity (a hidden edge is faded). A medium's opacity is the line type's stroke
-    // strength: it replaces the line type's own factor instead of multiplying it (`strength`).
-    const opacity = numberOf(attrs.opacity, 1)
+    // The call's own opacity: render.ts fades a hidden or auxiliary line to 0.6. Clean keeps that fade, as
+    // it always did. In a medium the fade is dropped: the muted colour and the dashes already mark such a line
+    // as secondary, and laid under the medium's opacity as well it would sit below its contrast floor. A
+    // medium's opacity is the line type's stroke strength: it replaces the line type's own factor instead of
+    // multiplying it (`strength`).
+    const opacity = drawn ? 1 : numberOf(attrs.opacity, 1)
     const strength = drawn?.opacity
     const pattern = typeof attrs['stroke-dasharray'] === 'string' ? attrs['stroke-dasharray'].split(/[\s,]+/).map(Number).filter(Number.isFinite) : []
     const identity = identityOf(attrs)
@@ -294,8 +305,10 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
       // heavy as hatching.
       const shade = shading ? shading.hex : deepen(paint, SHADE_DEPTH)
       const identity = identityOf(attrs)
-      // Shading lines are drawn by the line type at the medium's strength, which replaces its own
-      // factor; the fill's opacity multiplies on top. Dots are the fill's own marks and take both.
+      // Shading lines are drawn by the line type at the medium's strength, which replaces its own factor;
+      // the line's own opacity (shadingSettings keeps it) and then the fill's opacity multiply on top, so a
+      // shading line is fill opacity x line opacity x the medium's. Dots are the fill's own marks and take the
+      // fill's opacity and the medium's (not the line's).
       const opacity = style.fill.opacity
       const areaOpacity = style.fill.opacity * AREA_WEIGHT * (tone ? tone.opacity : 1)
       const evenOdd = attrs['fill-rule'] === 'evenodd'

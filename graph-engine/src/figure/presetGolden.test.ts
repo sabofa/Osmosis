@@ -13,7 +13,10 @@ import { PRESET_GOLDEN_EXAMPLES, PRESET_GOLDEN_PRESETS, presetGoldenKey, renderP
 // again, the pencil's and the marker's twelve, when a medium's opacity came to REPLACE the line
 // type's own factor instead of multiplying it (their strokes are laid at the medium's strength),
 // and the marker's lines became a near-black (and near-white in a dark theme), and a marker no longer
-// multiplies its strokes over a dark page, where a light stroke would vanish. Ink's six did not move.
+// multiplies its strokes over a dark page, where a light stroke would vanish. Re-pinned a third time (Task 5,
+// fix round 1): a medium drops the figure's 0.6 fade on hidden and auxiliary lines (ink's givens table and cube
+// section, which have dashed lines, and every pencil and marker one), and the pencil and the marker leave their
+// line opacity at 1 (the medium carries their 0.85). Ink's square minus its circle has no auxiliary line and held.
 
 const golden = GOLDEN as Record<string, string>
 

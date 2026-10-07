@@ -55,7 +55,8 @@ describe('presets', () => {
     expect(PRESETS.ink.lettering.face).toBe('math')
     expect(PRESETS.ink.colour.saturation).toBe(0.9)
 
-    expect(PRESETS.pencil.line).toMatchObject({ type: 'pencil', looseness: 0.3, passes: 2, grain: 0.6, opacity: 0.85 })
+    // Opacity 1 since the media: the medium carries the pencil's strength (0.85), and the contrast floors hold at the default.
+    expect(PRESETS.pencil.line).toMatchObject({ type: 'pencil', looseness: 0.3, passes: 2, grain: 0.6, opacity: 1 })
     expect(PRESETS.pencil.fill.type).toBe('hatch')
     expect(PRESETS.pencil.paper.type).toBe('rough-paper')
     expect(PRESETS.pencil.lettering.face).toBe('hand')
@@ -84,7 +85,9 @@ describe('presets', () => {
   })
 
   // The ink, pencil and marker take their colours from their medium, so they follow the theme: what
-  // they say about lines, fills and lettering is what it was (colour.ink and paper.tint were the hexes).
+  // they say about lines, fills and lettering is what it was (colour.ink and paper.tint were the hexes),
+  // except the line opacity of the pencil and the marker, which is 1 now: the medium carries their 0.85 (see
+  // the header of presets.ts), so that its contrast floors hold at the default (a ruling of Task 5).
   it('keep every line, fill and lettering value of the first looks, and take their colours from the theme through a medium', () => {
     expect(PRESETS.ink).toMatchObject({
       line: { type: 'ink', looseness: 0.25, wobble: 0.3, passes: 1, width: 1.7, variation: 0.75, taper: 0.8, grain: 0, opacity: 1 },
@@ -93,13 +96,13 @@ describe('presets', () => {
       lettering: { face: 'math', size: 1.05, tilt: 0 },
     })
     expect(PRESETS.pencil).toMatchObject({
-      line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
+      line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 1 },
       fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.5 },
       paper: { type: 'rough-paper', texture: 0.6, grid: 24 },
       lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
     })
     expect(PRESETS.marker).toMatchObject({
-      line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 0.85 },
+      line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 1 },
       fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
       paper: { type: 'ruled', texture: 0.2, grid: 26 },
       lettering: { face: 'hand', size: 1.25, tilt: 0.4 },

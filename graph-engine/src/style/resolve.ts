@@ -58,17 +58,18 @@ const GROUPS = ['line', 'fill', 'paper', 'lettering', 'colour'] as const
 // the figure as the figure, so the graph type's built-in defaults (style/typeDefaults.ts)
 // sit below both. Any other number of layers resolves the same way: the last is the
 // figure, and the ones before it, applied in order, are the document.
-export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[]): Style {
-  return toStyle(resolveFigureSettings(layers))
+export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[], theme?: ThemeStyles): Style {
+  return toStyle(resolveFigureSettings(layers, theme))
 }
 
 // Every setting of the stack for a figure, not only its figure styles: the same resolution
 // resolveStyle makes. A renderer reads the rest from here: the settings of the figure's
-// medium (media.<name>.<key>), which a "@style-set" or a theme may have set.
-export function resolveFigureSettings(layers: readonly (StyleLayer | null | undefined)[]): ResolvedSettings {
+// medium (media.<name>.<key>), which a "@style-set" or a theme may have set. `theme` is the
+// theme's style set (`themeStylesOf`), the stack's theme layers: left out, there are none.
+export function resolveFigureSettings(layers: readonly (StyleLayer | null | undefined)[], theme?: ThemeStyles): ResolvedSettings {
   const given = layers.filter((layer): layer is StyleLayer => !!layer).map(layerFromStyleLayer)
   const figure = given.pop()
-  return resolveSettings({ document: collapseLayers(given), figure }, 'figure2d')
+  return resolveSettings({ document: collapseLayers(given), figure, ...(theme !== undefined ? { theme } : {}) }, 'figure2d')
 }
 
 // Whether a resolved style is clean — the look the renderer draws through its

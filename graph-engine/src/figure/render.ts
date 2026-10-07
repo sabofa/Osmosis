@@ -85,10 +85,10 @@ import { shortestPath, type SurfacePath } from './shortestPath'
 import { ellipsePoint, type SvgAttrs } from './svg'
 import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
 import { styledPen } from './styledPen'
-import { figureMedium, figureMediumSettings } from './medium'
+import { figureMedium, figureMediumSettings, mediumTheme, paperColour } from './medium'
 import type { Piece } from '../style/path'
 import type { MediumSettings } from '../style/media'
-import { checkLayer, isClean, resolveStyle, type StyleLayer } from '../style/resolve'
+import { checkLayer, isClean, resolveStyle, themeStylesOf, type StyleLayer } from '../style/resolve'
 import type { ThemeInput } from '../style/theme/types'
 import type { Style } from '../style/tokens'
 
@@ -2110,14 +2110,18 @@ export function figureLabelObstacles(statements: Statement[], config: GraphConfi
 //
 // `theme` is the theme a style's MEDIUM colours from (style/theme/): every colour of a figure
 // that is not clean is its medium's. There is no "no theme": a figure drawn without one is
-// drawn in the default theme for the palette's mode. Clean ignores it.
+// drawn in the default theme for the HOST palette's mode. The theme's own style set (its
+// settings for all graph types and for this one, the media's included) is the stack's theme
+// layers. Clean ignores the theme's colours.
 export function renderFigure(statements: Statement[], config: GraphConfig, palette: Palette, baseStyle?: StyleLayer, theme?: ThemeInput): FigureResult {
   const base = baseStyle ? checkLayer(baseStyle) : { layer: {}, errors: [] }
-  const style = resolveStyle([base.layer, config.style])
+  const themeStyles = theme ? themeStylesOf(theme) : undefined
+  const style = resolveStyle([base.layer, config.style], themeStyles)
   const clean = isClean(style)
-  const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style])
-  const drawn = clean ? palette : paperPalette(style, palette, theme, settings)
-  const pen = choosePen(style, drawn, theme, settings)
+  const given = clean ? undefined : mediumTheme(palette, theme)
+  const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style], themeStyles)
+  const drawn = clean ? palette : paperPalette(style, palette, given, settings)
+  const pen = choosePen(style, drawn, given, settings)
   const { viewBox, errors } = drawFigure(statements, config, drawn, pen, clean ? 1 : style.lettering.size)
   pen.paper(viewBox)
   return { svg: pen.svg(viewBox), errors: [...base.errors.map((message) => ({ line: 0, message })), ...errors] }
@@ -2136,9 +2140,11 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
 function paperPalette(style: Style, palette: Palette, theme?: ThemeInput, settings?: MediumSettings): Palette {
   const medium = figureMedium(style, palette, theme, settings)
   if (medium) return medium.palette()
-  if (style.paper.type === 'none' || style.paper.tint === 'theme') return palette
+  // The paper's colour: a tint, or the theme's board when the paper is one (whatever the medium).
+  const paper = paperColour(style, palette, theme)
+  if (style.paper.type === 'none' || paper === null) return palette
   const light = (hex: string) => toOklch(hex).l >= 0.6
-  const paperIsLight = light(style.paper.tint)
+  const paperIsLight = light(paper)
   if (paperIsLight === light(cssColor(palette.background))) return palette
   return paperIsLight ? LIGHT_PALETTE : DARK_PALETTE
 }

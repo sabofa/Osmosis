@@ -13,10 +13,16 @@ import type { Look } from './tokens'
 //
 // A medium also says how strongly it lays a stroke (its opacity), and that REPLACES the line
 // type's own factor (style/lines/types.ts, `strength`); `line.opacity` multiplies on top, as the
-// author's own dial. So the four looks that came with their medium (coloured pencil and the three
-// boards) leave it at 1, and the medium's contrast floors hold for what they draw. The ink,
-// pencil and marker keep the opacity they were given before there were media (pencil and marker
-// 0.85): that is the look's own choice to be lighter than its medium, and no floor is promised below it.
+// author's own dial. So every look that has a medium leaves `line.opacity` at 1, and the medium's
+// contrast floors hold for what the look draws: lines, auxiliary and hidden lines, labels, points,
+// measures and the givens table. (The pencil and the marker had 0.85 before there were media; the
+// medium carries that strength now.) A look MAY go below its medium with a lower value, and then no
+// floor is promised below it.
+//
+// THE BACKDROP EXEMPTION. The floors are not promised to the figure's backdrop: fills and their
+// shading (hatching, scribbles, stipple, a wash's rim), chalk's loose dust and a marker's pooled ends
+// are thinner and fainter than a line by design, so that they sit behind it. `fill.opacity` is the
+// look's own dial for them.
 
 export const PRESET_NAMES = ['clean', 'ink', 'pencil', 'marker', 'colouredPencil', 'blackboard', 'greenboard', 'whiteboard'] as const
 export type PresetName = (typeof PRESET_NAMES)[number]
@@ -58,7 +64,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // translucent, so two of them at 1.25 still read lighter than ink), in the
   // greys of graphite (a hint of each role's hue, never saturated).
   pencil: {
-    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 0.85 },
+    line: { type: 'pencil', looseness: 0.3, wobble: 0.35, passes: 2, width: 1.25, variation: 0.3, taper: 0.4, grain: 0.6, opacity: 1 },
     fill: { type: 'hatch', angle: 55, spacing: 6.5, opacity: 0.9, roughness: 0.5 },
     paper: { type: 'rough-paper', tint: 'theme', texture: 0.6, grid: 24 },
     lettering: { face: 'hand', size: 1.2, tilt: 0.5 },
@@ -68,7 +74,7 @@ export const PRESETS: Record<PresetName, Look> = {
   // A felt-tip on a ruled notebook page: saturated marker, scribbled shading,
   // hand lettering a size up (markers write big).
   marker: {
-    line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 0.85 },
+    line: { type: 'marker', looseness: 0.2, wobble: 0.15, passes: 1, width: 1.8, variation: 0.2, taper: 0, grain: 0.1, opacity: 1 },
     fill: { type: 'scribble', angle: 35, spacing: 9, opacity: 0.45, roughness: 0.6 },
     paper: { type: 'ruled', tint: 'theme', texture: 0.2, grid: 26 },
     lettering: { face: 'hand', size: 1.25, tilt: 0.4 },
