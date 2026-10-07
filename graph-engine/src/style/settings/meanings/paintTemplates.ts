@@ -108,7 +108,6 @@ function width(role: RoleName): Meaning {
     return {
       meaning:
         'The weight of line marks (curves, axes, contours), in screen pixels at the standard framing. ' + IS.line + ' Each mark\'s own line weight scales it, from half to three times, and heavier lines read as bolder, more drawn data.',
-      unit: 'px',
       interactions: [],
     }
   }
@@ -116,7 +115,6 @@ function width(role: RoleName): Meaning {
     return {
       meaning:
         'The base width of edge strokes, in screen pixels at the standard framing. ' + IS.edge + ' A hard edge is drawn at 0.7 of it and a firm one at 0.475, while the wide strokes that drag across a soft edge to blend it are 2.6 times it and the bridging strokes on a lost edge 1.8 times.',
-      unit: 'px',
       interactions: [roleAt(role, 'bristles')],
     }
   }
@@ -124,7 +122,6 @@ function width(role: RoleName): Meaning {
     return {
       meaning:
         'How thick each highlight dab is, in screen pixels at the standard framing: the width of one short, fat touch. ' + IS.dab + ' Wider dabs read as bolder, flatter highlights; narrower ones as small crisp glints, and a dab grows with the zoom.',
-      unit: 'px',
       interactions: [roleAt(role, 'bristles'), 'paint.particles.zoomStrokeScale'],
     }
   }
@@ -134,7 +131,6 @@ function width(role: RoleName): Meaning {
       (isIn(LIT, role) ? ' They run about 16% wider in the light and 14% narrower in shadow.' : '') +
       (role === 'block' ? ' On the bare table they are 2.3 times as wide.' : '') +
       (role === 'glaze' ? ' On a translucent sheet they are twice as wide.' : ''),
-    unit: 'px',
     interactions: [roleAt(role, 'bristles'), 'paint.particles.zoomStrokeScale'],
   }
 }
@@ -144,7 +140,6 @@ function length(role: RoleName): Meaning {
     return {
       meaning:
         'The length of the pieces line marks are cut into, in screen pixels. Between 8 and 21 it sets the length; every value from 21 up gives pieces of 21, and every value under 8 gives pieces of 8. Each piece follows the line closely, so shorter pieces hug a tight curve a little better; the cuts themselves do not show, and a line is crisp and exact whatever this is, so it has little visible effect.',
-      unit: 'px',
       interactions: [],
     }
   }
@@ -152,14 +147,12 @@ function length(role: RoleName): Meaning {
     return {
       meaning:
         'How long edge strokes run, in screen pixels at the standard framing. A crisp (hard or firm) stroke follows its edge for up to three times this; the short pulls across a soft edge and the bridging strokes on a lost one are roughly three quarters to nine tenths of it.',
-      unit: 'px',
       interactions: [roleAt(role, 'width')],
     }
   }
   if (role === 'dab') {
     return {
       meaning: 'How long each highlight dab is, in screen pixels at the standard framing. Dabs are short, so this is only a little more than their width: longer turns a dab into a short stroke.',
-      unit: 'px',
       interactions: [roleAt(role, 'width')],
     }
   }
@@ -170,7 +163,6 @@ function length(role: RoleName): Meaning {
       (role === 'block' ? ' On the bare table they are 25% longer.' : '') +
       (role === 'form' ? ' They also stop where the shadow begins and where the surface turns away, so many end short of this.' : '') +
       (role === 'glaze' ? ' On a translucent sheet they are twice as long.' : ''),
-    unit: 'px',
     interactions: [roleAt(role, 'width')],
   }
 }

@@ -82,6 +82,9 @@ function readNumber(spec: SettingSpec, raw: unknown, name: string): number {
   if (text === null) throw new Error(`${name} must be a number ${range}, got ${show(raw)}`)
   const n = Number(text)
   if (text === '' || !Number.isFinite(n)) throw new Error(`${name} must be a number ${range}, got "${text}"`)
+  // A setting that counts something whole (a seed, a switch, bristles) is refused when it is not, as a
+  // figure style's whole-number setting is (parseTokenValue): never rounded.
+  if (spec.integer === true && !Number.isInteger(n)) throw new Error(`${name} must be a whole number ${range}, got "${text}"`)
   if (n < (spec.min ?? Number.NEGATIVE_INFINITY) || n > (spec.max ?? Number.POSITIVE_INFINITY)) {
     throw new Error(`${name} must be a number ${range}, got "${text}"`)
   }

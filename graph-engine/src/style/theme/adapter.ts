@@ -76,11 +76,17 @@ function coloursOfPalette(palette: PaletteLike): PaletteColours {
 // (builtinStyles.ts). An empty set, and a preset that is not a built-in, bring no styles
 // (undefined), so a theme with nothing to say keeps the key it has always had.
 export type StylesFor = (presetId: string) => unknown
-export const stylesForPreset: StylesFor = (presetId) => {
-  if (!Object.prototype.hasOwnProperty.call(BUILTIN_THEME_STYLES, presetId)) return undefined
-  const styles = BUILTIN_THEME_STYLES[presetId]
-  return Object.keys(styles).length === 0 ? undefined : styles
+
+// A `StylesFor` that reads a table of style sets by preset id (the built-in one, below; a test's own).
+export function stylesFromTable(table: Readonly<Record<string, unknown>>): StylesFor {
+  return (presetId) => {
+    if (!Object.prototype.hasOwnProperty.call(table, presetId)) return undefined
+    const styles = table[presetId]
+    return typeof styles === 'object' && styles !== null && Object.keys(styles).length === 0 ? undefined : styles
+  }
 }
+
+export const stylesForPreset: StylesFor = stylesFromTable(BUILTIN_THEME_STYLES)
 
 // The single colours a source gives, as '#rrggbb', leaving out anything that
 // is not a colour (it is treated as missing, so a bad value never breaks a graph).

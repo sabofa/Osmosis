@@ -16,13 +16,11 @@ export const MEDIA_MEANINGS: Meanings = {
   'media.ink.chroma': {
     meaning:
       "Not drawn yet: how much of the theme colour's strength an ink will keep, as a multiplier. 0 turns every ink to a neutral black-grey; 1 keeps the theme colour's own chroma; above 1 is a more vivid ink than the theme gave, as far as the colours can go. The ink is then darkened or lightened until it keeps its contrast with the paper, so strong colour never costs legibility.",
-    unit: '×',
     interactions: ['media.ink.contrast'],
   },
   'media.ink.contrast': {
     meaning:
       'Not drawn yet: the contrast an ink will keep with the paper, measured on a stroke as drawn. Higher pushes the ink toward the deepest black on a light paper (the brightest on a dark one): denser, more dramatic ink; the lowest values allow a mid-dark, lighter ink. A colour that already meets the bar is left where it is.',
-    unit: ': 1',
     interactions: ['media.ink.chroma'],
   },
   'media.ink.edge': {
@@ -34,7 +32,6 @@ export const MEDIA_MEANINGS: Meanings = {
   'media.graphite.hint': {
     meaning:
       'Not drawn yet: how much colour a graphite grey will be allowed to carry, as a cap on chroma. 0 is a dead neutral grey; a little leaves a red role a warm grey and a blue one a cool grey; at the top of the range the grey starts to read as tinted rather than grey. Graphite is never saturated, whatever the theme colour. The grey is then fitted so a stroke keeps legible contrast with the paper.',
-    unit: 'chroma',
     interactions: [],
   },
   'media.graphite.grain': {
@@ -46,7 +43,6 @@ export const MEDIA_MEANINGS: Meanings = {
   'media.colouredPencil.chroma': {
     meaning:
       "Not drawn yet: how much of the theme colour's strength a coloured pencil will keep, as a multiplier: a waxy, slightly desaturated version of the theme colour. 0 is a grey pencil, 1 the theme colour's own strength, above 1 more vivid. The pencil is also held a little lighter than ink (a twentieth of lightness toward the paper), so it reads paler, then fitted so a stroke stays legible against the paper.",
-    unit: '×',
     interactions: [],
   },
 
@@ -59,7 +55,6 @@ export const MEDIA_MEANINGS: Meanings = {
   'media.chalk.chroma': {
     meaning:
       "Not drawn yet: how much of the theme colour's strength chalk will keep, as a multiplier within a narrow range. Chalk is always a light, dusty version of its colour, so a red comes out a pastel chalk red. Lower is a paler, greyer chalk; higher is a more vivid pastel, within the narrow range chalk allows.",
-    unit: '×',
     interactions: [],
   },
 

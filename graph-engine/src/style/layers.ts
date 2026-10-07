@@ -3,12 +3,14 @@ import { isPresetName, PRESETS } from './presets'
 import { REGISTRY } from './settings/registry'
 import type { SettingValue } from './settings/types'
 import { stylePathOf } from './settings/values'
+import { TYPE_DEFAULTS } from './typeDefaults'
 import type { StyleLayer } from './resolve'
 import type { GraphType, MediumName } from './theme/types'
 import { readToken, TOKENS, type Style, type Token } from './tokens'
 
 export { toPaintParams } from './settings/paintParams'
 export { BUILTIN_THEME_STYLES } from './theme/builtinStyles'
+export { TYPE_DEFAULTS } from './typeDefaults'
 export type { SettingValue } from './settings/types'
 
 // The six-layer settings stack.
@@ -50,7 +52,8 @@ export interface ThemeStyles {
 }
 
 export interface StyleStack {
-  // Built-in per-type defaults (TYPE_DEFAULTS below, empty to start).
+  // The graph types' defaults. Left out, they are the built-in ones (TYPE_DEFAULTS,
+  // style/typeDefaults.ts, empty to start); given, they stand in for them, so `{}` is none.
   typeDefaults?: Partial<Record<GraphType, SettingsLayer>>
   // From ThemeInput.styles (`themeStylesOf`, style/resolve.ts).
   theme?: ThemeStyles
@@ -61,22 +64,20 @@ export interface StyleStack {
 // Every registry path, with its value.
 export type ResolvedSettings = ReadonlyMap<string, SettingValue>
 
-// What each graph type changes from the registry's defaults. Empty to start: the types
-// that draw today look as the registry says, and a type that needs its own default adds
-// it here.
-export const TYPE_DEFAULTS: Readonly<Partial<Record<GraphType, SettingsLayer>>> = Object.freeze({})
-
 // Each figure-style token with its registry path.
 const STYLE_TOKENS: readonly (readonly [Token, string])[] = TOKENS.map((token) => [token, stylePathOf(token)] as const)
 
 const DEFAULTS: ReadonlyMap<string, SettingValue> = new Map(REGISTRY.map((spec) => [spec.path, spec.default]))
+
+// The settings a preset replaces: every figure style but the seed.
+const PRESET_PATHS: ReadonlySet<string> = new Set(STYLE_TOKENS.filter(([token]) => token.group !== 'seed').map(([, path]) => path))
 
 function applyLayer(values: Map<string, SettingValue>, layer: SettingsLayer | null | undefined): void {
   if (!layer) return
   if (layer.preset !== undefined && isPresetName(layer.preset)) {
     const look = PRESETS[layer.preset]
     for (const [token, path] of STYLE_TOKENS) {
-      if (token.group !== 'seed') values.set(path, readToken(look, token) as SettingValue)
+      if (PRESET_PATHS.has(path)) values.set(path, readToken(look, token) as SettingValue)
     }
   }
   for (const [path, value] of Object.entries(layer.set ?? {})) {
@@ -84,17 +85,33 @@ function applyLayer(values: Map<string, SettingValue>, layer: SettingsLayer | nu
   }
 }
 
-// The fold under `resolveSettings`: the registry's defaults, then each layer in order,
-// each overriding only what it sets. `resolveStyle` (style/resolve.ts) folds its own
-// list of layers through it.
-export function resolveLayers(layers: readonly (SettingsLayer | null | undefined)[]): ResolvedSettings {
+// Every setting of the registry for one graph type: the registry's defaults, then the six layers in
+// order, each overriding only what it sets.
+export function resolveSettings(stack: StyleStack, graphType: GraphType): ResolvedSettings {
   const values = new Map(DEFAULTS)
-  for (const layer of layers) applyLayer(values, layer)
+  const typeDefaults = stack.typeDefaults ?? TYPE_DEFAULTS
+  for (const layer of [typeDefaults[graphType], stack.theme?.all, stack.theme?.byType?.[graphType], stack.document, stack.figure]) applyLayer(values, layer)
   return values
 }
 
-export function resolveSettings(stack: StyleStack, graphType: GraphType): ResolvedSettings {
-  return resolveLayers([stack.typeDefaults?.[graphType], stack.theme?.all, stack.theme?.byType?.[graphType], stack.document, stack.figure])
+// Several layers as one, applied in order: the one layer resolves exactly as the layers would, one
+// after the other. It is how a list of layers (resolveStyle's [the host's base style, the figure's])
+// becomes the stack's document layer. A preset replaces the figure styles of the layers before it
+// (not their seed, nor anything that is not a figure style), as in resolveSettings.
+export function collapseLayers(layers: readonly (SettingsLayer | null | undefined)[]): SettingsLayer | undefined {
+  let merged: SettingsLayer | undefined
+  for (const layer of layers) {
+    if (!layer) continue
+    const preset = layer.preset !== undefined && isPresetName(layer.preset) ? layer.preset : undefined
+    if (merged === undefined) {
+      merged = { ...(preset !== undefined ? { preset } : {}), set: { ...layer.set } }
+      continue
+    }
+    const before = Object.entries(merged.set ?? {}).filter(([path]) => preset === undefined || !PRESET_PATHS.has(path))
+    const own = preset ?? merged.preset
+    merged = { ...(own !== undefined ? { preset: own } : {}), set: { ...Object.fromEntries(before), ...layer.set } }
+  }
+  return merged
 }
 
 // The figure styles' Style: the style.* settings, in the order and shape resolveStyle

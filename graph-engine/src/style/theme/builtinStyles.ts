@@ -18,9 +18,13 @@ import type { ThemeStyles } from '../layers'
 //
 // An empty set says nothing, and the adapter keeps `styles` undefined for it
 // (`stylesForPreset`), so a theme with nothing to say keeps the key it has always had.
-export const BUILTIN_THEME_STYLES: Record<string, ThemeStyles> = {
-  'builtin:slate': {},
-  'builtin:forest': {},
-  'builtin:ember': {},
-  'builtin:plum': {},
-}
+//
+// The table is frozen, and so is each set in it: nothing at run time (a test, a lab) changes a
+// built-in theme. A test that needs a built-in theme with a style set hands the adapter its own
+// table (`stylesFromTable`) or its own `StylesFor`.
+export const BUILTIN_THEME_STYLES: Readonly<Record<string, ThemeStyles>> = Object.freeze({
+  'builtin:slate': Object.freeze({}),
+  'builtin:forest': Object.freeze({}),
+  'builtin:ember': Object.freeze({}),
+  'builtin:plum': Object.freeze({}),
+})

@@ -13,8 +13,11 @@
 // A setting added to any of those tables joins the registry on its own; what it MEANS is
 // then the one thing missing, and registry.test.ts fails until it is written in meanings/.
 //
-// The prose, `meaning` and `interactions`, lives in meanings/*.ts, keyed by path. It is what
-// the settings guide (docs/styles/GUIDE.md) is generated from.
+// This is the TABLE only: path, label, group, type, range, step, whole-number flag, default,
+// choices, unit and where it applies. The prose, `meaning` and `interactions`, lives in
+// meanings/*.ts, keyed by path, and is joined to the table in guide.ts; nothing here imports it
+// (proseBoundary.test.ts holds that), so a renderer that reads the registry does not bundle 86 KB of
+// prose. It is what the settings guide (docs/styles/GUIDE.md) and the Style Lab are made from.
 
 import { CURVE_SCHEMA, DEFAULT_PAINT_PARAMS, PARAM_SCHEMA, getParam } from '../../space/paint/params'
 import { MEDIA } from '../media'
@@ -22,13 +25,10 @@ import { PRESETS } from '../presets'
 import { BOARD_BASES, BOARD_TILT } from '../theme/derive'
 import { BOARD_NAMES, GRAPH_TYPES, MEDIUM_NAMES, type GraphType, type MediumName } from '../theme/types'
 import { readToken, TOKENS, type Token } from '../tokens'
-import { BOARD_MEANINGS } from './meanings/boards'
-import { MEDIA_MEANINGS } from './meanings/media'
-import { PAINT_MEANINGS } from './meanings/paint'
-import { STYLE_MEANINGS } from './meanings/style'
-import type { Meaning, SettingSpec } from './types'
+import type { SettingSpec } from './types'
+import { UNITS } from './units'
 
-export type { Meaning, SettingKind, SettingSpec, SettingValue } from './types'
+export type { GuideEntry, Meaning, SettingKind, SettingSpec, SettingValue } from './types'
 
 // Where the settings of each engine apply.
 //   The figure styles belong to the two figure types. The generic groups (paper, colour,
@@ -44,20 +44,8 @@ const applies = (graphTypes: readonly GraphType[], media: readonly MediumName[] 
   media: media === 'all' ? 'all' : [...media],
 })
 
-const MEANINGS: ReadonlyMap<string, Meaning> = new Map(
-  [STYLE_MEANINGS, PAINT_MEANINGS, MEDIA_MEANINGS, BOARD_MEANINGS].flatMap((table) => Object.entries(table))
-)
-
-// A spec's prose half. A missing meaning is empty and not an error: registry.test.ts is what
-// refuses it, so a setting added elsewhere never breaks the engines that import this table.
-function prose(path: string): Pick<SettingSpec, 'meaning' | 'interactions' | 'unit'> {
-  const found = MEANINGS.get(path)
-  return {
-    meaning: found?.meaning ?? '',
-    interactions: [...(found?.interactions ?? [])],
-    ...(found?.unit !== undefined ? { unit: found.unit } : {}),
-  }
-}
+// What a number counts, where it counts something (units.ts); nothing for a setting with none.
+const unitOf = (path: string): Pick<SettingSpec, 'unit'> => (Object.hasOwn(UNITS, path) ? { unit: UNITS[path] } : {})
 
 const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
 
@@ -68,12 +56,12 @@ const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(
 function styleSpec(token: Token): SettingSpec {
   const path = token.group === 'seed' ? 'style.seed' : `style.${token.group}.${token.key}`
   const appliesTo = applies(GENERIC_GROUPS.includes(token.group) ? DRAWN : FIGURES, 'all')
-  const base = { path, label: token.label, group: token.group === 'seed' ? 'General' : capitalised(token.group), ...prose(path), appliesTo }
+  const base = { path, label: token.label, group: token.group === 'seed' ? 'General' : capitalised(token.group), ...unitOf(path), appliesTo }
   // A style starts as clean (resolveStyle) with seed 0, so that is every token's default.
   const initial = token.group === 'seed' ? 0 : readToken(PRESETS.clean, token)
   switch (token.kind) {
     case 'number':
-      return { ...base, type: 'number', min: token.min, max: token.max, step: token.step, default: initial as number }
+      return { ...base, type: 'number', min: token.min, max: token.max, step: token.step, ...(token.integer ? { integer: true } : {}), default: initial as number }
     case 'choice':
       return { ...base, type: 'choice', choices: [...token.choices], default: initial as string }
     case 'colour':
@@ -99,6 +87,18 @@ export interface ExtraPaintSetting {
   max?: number
   step?: number
 }
+// The painter's settings that are whole by what they count, by path under paint. (A degree or a
+// pixel on a slider that moves by 1, like light.azimuth, is not: 22.5 is a fine azimuth.) The
+// seed, the two switches, the load's run of strokes, and the bristles of each stroke role.
+export const WHOLE_PAINT_SETTINGS: readonly string[] = Object.freeze([
+  'seed',
+  'light.worldFixed',
+  'light.shadows',
+  'mix.loadMin',
+  'mix.loadMax',
+  ...Object.keys(DEFAULT_PAINT_PARAMS.roles).map((role) => `roles.${role}.bristles`),
+])
+
 export const EXTRA_PAINT_SETTINGS: readonly ExtraPaintSetting[] = Object.freeze([
   // PaintParams.canvas.weave is typed 'duck' | 'linen', and there is no list of them to read.
   { path: 'canvas.weave', label: 'Canvas weave', group: 'Impasto & canvas', choices: ['duck', 'linen'] },
@@ -117,8 +117,9 @@ function paintSpecs(): SettingSpec[] {
       min: schema.min,
       max: schema.max,
       step: schema.step,
+      ...(WHOLE_PAINT_SETTINGS.includes(schema.path) ? { integer: true } : {}),
       default: getParam(DEFAULT_PAINT_PARAMS, schema.path),
-      ...prose(path),
+      ...unitOf(path),
       appliesTo: applies(['space'], 'all'),
     }
   })
@@ -135,14 +136,14 @@ function paintSpecs(): SettingSpec[] {
       min: schema.yMin,
       max: schema.yMax,
       default: points.map(([x, y]) => [x, y]),
-      ...prose(path),
+      ...unitOf(path),
       appliesTo: applies(['space'], 'all'),
     }
   })
   const extras = EXTRA_PAINT_SETTINGS.map((extra): SettingSpec => {
     const path = `paint.${extra.path}`
     const initial = getParam(DEFAULT_PAINT_PARAMS, extra.path) as unknown as string | number
-    const base = { path, label: extra.label, group: extra.group, ...prose(path), appliesTo: applies(['space'], 'all') }
+    const base = { path, label: extra.label, group: extra.group, ...unitOf(path), appliesTo: applies(['space'], 'all') }
     return extra.choices !== undefined
       ? { ...base, type: 'choice', choices: [...extra.choices], default: initial }
       : { ...base, type: 'number', min: extra.min, max: extra.max, step: extra.step, default: initial }
@@ -167,7 +168,7 @@ function mediaSpecs(): SettingSpec[] {
         max: setting.max,
         step: setting.step,
         default: setting.default,
-        ...prose(path),
+        ...unitOf(path),
         appliesTo: applies(GRAPH_TYPES, [name]),
       }
     })
@@ -196,7 +197,7 @@ function boardSpecs(): SettingSpec[] {
     max: 1,
     step: 0.05,
     default: BOARD_TILT,
-    ...prose('board.tilt'),
+    ...unitOf('board.tilt'),
     appliesTo: applies(GRAPH_TYPES, ['chalk', 'whiteboard']),
   }
   const caps = BOARD_NAMES.map((name): SettingSpec => {
@@ -210,7 +211,7 @@ function boardSpecs(): SettingSpec[] {
       max: 0.12,
       step: 0.001,
       default: BOARD_BASES[name].maxChroma,
-      ...prose(path),
+      ...unitOf(path),
       appliesTo: applies(GRAPH_TYPES, BOARD_MEDIA[name]),
     }
   })
@@ -221,23 +222,8 @@ function boardSpecs(): SettingSpec[] {
 // The registry
 // ---------------------------------------------------------------------------
 
-// Interactions run both ways: when a setting names another, the other names it back. The meanings
-// write each pair once, and this adds the reverse link, so the guide never shows a one-way pair. A name
-// that is not a setting is left as it is (registry.test.ts refuses it).
-function linked(specs: SettingSpec[]): SettingSpec[] {
-  const byPath = new Map(specs.map((spec) => [spec.path, spec]))
-  for (const spec of specs) {
-    for (const other of [...spec.interactions]) {
-      const target = byPath.get(other)
-      if (target !== undefined && !target.interactions.includes(spec.path)) target.interactions.push(spec.path)
-    }
-  }
-  return specs
-}
-
 // A spec nobody can edit: the registry is shared by every engine and the guide.
 function frozen(spec: SettingSpec): SettingSpec {
-  Object.freeze(spec.interactions)
   Object.freeze(spec.appliesTo.graphTypes)
   if (Array.isArray(spec.appliesTo.media)) Object.freeze(spec.appliesTo.media)
   Object.freeze(spec.appliesTo)
@@ -249,7 +235,7 @@ function frozen(spec: SettingSpec): SettingSpec {
   return Object.freeze(spec)
 }
 
-export const REGISTRY: readonly SettingSpec[] = Object.freeze(linked([...TOKENS.map(styleSpec), ...paintSpecs(), ...mediaSpecs(), ...boardSpecs()]).map(frozen))
+export const REGISTRY: readonly SettingSpec[] = Object.freeze([...TOKENS.map(styleSpec), ...paintSpecs(), ...mediaSpecs(), ...boardSpecs()].map(frozen))
 
 const BY_PATH: ReadonlyMap<string, SettingSpec> = new Map(REGISTRY.map((spec) => [spec.path, spec]))
 

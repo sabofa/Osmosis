@@ -4,6 +4,7 @@ import { renderFigure } from '../figure/render'
 import { LIGHT_PALETTE } from '../render/palette'
 import {
   BUILTIN_THEME_STYLES,
+  collapseLayers,
   layerFromStyleLayer,
   mediumSettingsOf,
   resolveSettings,
@@ -18,7 +19,7 @@ import { PRESET_NAMES, PRESETS } from './presets'
 import { applyStyleDirective, applyStyleSet, checkLayer, checkSettingsLayer, checkThemeStyles, isClean, resolveStyle, themeStylesOf, type StyleLayer } from './resolve'
 import { REGISTRY, settingAt } from './settings/registry'
 import { findSetting, nearestPaths } from './settings/values'
-import { fromOsmosisTheme, resolveTheme, stylesForPreset } from './theme/adapter'
+import { fromOsmosisTheme, resolveTheme, stylesForPreset, stylesFromTable } from './theme/adapter'
 import { BUILTIN_THEME_IDS } from './theme/defaults'
 import { GRAPH_TYPES, MEDIUM_NAMES } from './theme/types'
 
@@ -276,21 +277,50 @@ describe('the built-in themes’ style sets', () => {
     }
   })
 
-  it('come with the theme: an empty set says nothing, and a set with something in it is the theme’s styles', () => {
-    expect(stylesForPreset('builtin:slate')).toBeUndefined()
+  it('are frozen, the table and each set in it: nothing at run time changes a built-in theme', () => {
+    expect(Object.isFrozen(BUILTIN_THEME_STYLES)).toBe(true)
+    for (const [id, styles] of Object.entries(BUILTIN_THEME_STYLES)) expect(Object.isFrozen(styles), id).toBe(true)
+    expect(() => {
+      ;(BUILTIN_THEME_STYLES as Record<string, unknown>)['builtin:slate'] = { all: {} }
+    }).toThrow(TypeError)
+    expect(() => {
+      ;(BUILTIN_THEME_STYLES as Record<string, unknown>)['builtin:test-added'] = { all: {} }
+    }).toThrow(TypeError)
+    expect(() => {
+      ;(BUILTIN_THEME_STYLES['builtin:slate'] as Record<string, unknown>).all = { set: {} }
+    }).toThrow(TypeError)
+    expect(BUILTIN_THEME_STYLES['builtin:test-added']).toBeUndefined()
+    expect(BUILTIN_THEME_STYLES['builtin:slate']).toEqual({})
+  })
+
+  it('come with the theme: an empty set says nothing', () => {
+    for (const id of BUILTIN_THEME_IDS) {
+      expect(stylesForPreset(id), id).toBeUndefined()
+      expect(fromOsmosisTheme(LIGHT_PALETTE, 'light', { id }).styles, id).toBeUndefined()
+    }
     expect(stylesForPreset('custom:mine')).toBeUndefined()
     expect(stylesForPreset('constructor')).toBeUndefined()
-    expect(fromOsmosisTheme(LIGHT_PALETTE, 'light', { id: 'builtin:slate' }).styles).toBeUndefined()
+    expect(stylesForPreset('__proto__')).toBeUndefined()
+  })
+
+  it('come with the theme: a set with something in it is the theme’s styles, supplied through the adapter’s own hook', () => {
     const tuned = { all: { set: { [LOOSE]: 0.2 } } }
-    BUILTIN_THEME_STYLES['builtin:test-tuned'] = tuned
-    try {
-      expect(stylesForPreset('builtin:test-tuned')).toBe(tuned)
-      const theme = fromOsmosisTheme(LIGHT_PALETTE, 'light', { id: 'builtin:test-tuned' })
+    // A table of the test's own, through the table reader the built-in ones use...
+    const fromTable = stylesFromTable({ 'builtin:test-tuned': tuned, 'builtin:test-empty': {}, 'builtin:test-null': null })
+    expect(fromTable('builtin:test-tuned')).toBe(tuned)
+    expect(fromTable('builtin:test-empty')).toBeUndefined()
+    expect(fromTable('builtin:test-null')).toBeNull()
+    expect(fromTable('builtin:test-missing')).toBeUndefined()
+    expect(fromTable('constructor')).toBeUndefined()
+    // ...or through a StylesFor of its own.
+    for (const stylesFor of [fromTable, (id: string) => (id === 'builtin:test-tuned' ? tuned : undefined)]) {
+      const theme = fromOsmosisTheme(LIGHT_PALETTE, 'light', { id: 'builtin:test-tuned' }, stylesFor)
       expect(theme.styles).toEqual(tuned)
       expect(themeStylesOf(theme)).toEqual(tuned)
-    } finally {
-      delete BUILTIN_THEME_STYLES['builtin:test-tuned']
+      expect(resolveSettings({ theme: themeStylesOf(theme) }, 'space').get(LOOSE)).toBe(0.2)
     }
+    // The built-in table is as it was.
+    expect(fromOsmosisTheme(LIGHT_PALETTE, 'light', { id: 'builtin:test-tuned' }).styles).toBeUndefined()
   })
 })
 
@@ -363,7 +393,7 @@ describe('resolveStyle on the stack', () => {
     { seed: 3 },
   ]
 
-  it('gives exactly what it always gave, for every one and two layers, and for three', () => {
+  it('gives exactly what it always gave, for every list of one, two and three layers it was tested with', () => {
     const same = (layers: (StyleLayer | null | undefined)[]) => {
       const now = resolveStyle(layers)
       const before = previousResolveStyle(layers)
@@ -387,6 +417,20 @@ describe('resolveStyle on the stack', () => {
         }
         expect(resolveStyle([base, figure]), JSON.stringify([base, figure])).toEqual(toStyle(resolveSettings(stack, 'figure2d')))
       }
+    }
+  })
+
+  it('goes through the stack for figure2d: the last layer is the figure, the ones before it the document', () => {
+    const LIST: StyleLayer[] = [
+      { preset: 'pencil', line: { looseness: 0.5 }, seed: 3, set: { [SOFT]: 0.3 } },
+      { preset: 'ink', paper: { type: 'graph' } },
+      { line: { wobble: 0.2 }, set: { [SOFT]: 0.6 } },
+    ]
+    for (const n of [0, 1, 2, 3]) {
+      const layers = LIST.slice(0, n)
+      const settings = layers.map(layerFromStyleLayer)
+      const figure = settings.pop()
+      expect(resolveStyle(layers), String(n)).toEqual(toStyle(resolveSettings({ document: collapseLayers(settings), figure }, 'figure2d')))
     }
   })
 
@@ -548,6 +592,39 @@ describe('@style-set', () => {
       expect(setMessage('media.chalk.chroma 0.9')).toBe('@style-set media.chalk.chroma must be a number from 0.5 to 0.7, got "0.9"')
     })
 
+    it('a whole-number setting is refused when it is not whole, never rounded, and a measure on a slider that moves by 1 is not one', () => {
+      for (const text of ['paint.seed 3.5', 'paint.light.worldFixed 0.5', 'paint.light.shadows 0.5', 'paint.mix.loadMin 2.5', 'paint.mix.loadMax 9.25', 'paint.roles.block.bristles 7.5', 'paint.roles.line.bristles 4.1']) {
+        const layer: StyleLayer = {}
+        expect(() => applyStyleSet(layer, text), text).toThrow(/must be a whole number from -?[0-9.]+ to -?[0-9.]+, got/)
+        expect(layer, text).toEqual({})
+      }
+      expect(setMessage('paint.seed 3.5')).toBe('@style-set paint.seed must be a whole number from 1 to 999, got "3.5"')
+      expect(setMessage('paint.roles.dab.bristles 5.5')).toBe('@style-set paint.roles.dab.bristles must be a whole number from 1 to 24, got "5.5"')
+      // The same words as a figure style's whole-number setting.
+      expect(setMessage('style.line.passes 2.5')).toBe('@style-set style.line.passes must be a whole number from 1 to 3, got "2.5"')
+      expect(messageOf(() => applyStyleDirective({}, 'style-passes', '2.5'))).toBe('@style-passes must be a whole number from 1 to 3, got "2.5"')
+      // A whole number out of range is the range's refusal.
+      expect(setMessage('paint.seed 1000')).toBe('@style-set paint.seed must be a number from 1 to 999, got "1000"')
+      expect(setMessage('paint.roles.block.bristles 0')).toBe('@style-set paint.roles.block.bristles must be a number from 1 to 24, got "0"')
+      // A whole number, written as one, is taken: 3, 3.0 and 3e0.
+      const layer: StyleLayer = {}
+      for (const text of ['paint.seed 3', 'paint.seed 3.0', 'paint.roles.block.bristles 7', 'paint.light.worldFixed 0', 'paint.mix.loadMax 8']) applyStyleSet(layer, text)
+      expect(layer.set).toEqual({ 'paint.seed': 3, 'paint.roles.block.bristles': 7, 'paint.light.worldFixed': 0, 'paint.mix.loadMax': 8 })
+      // A measure that moves by 1 on its slider is not whole: 22.5 degrees is a fine azimuth.
+      const measures: StyleLayer = {}
+      for (const text of ['paint.light.azimuth 22.5', 'paint.light.elevation 38.5', 'paint.detect.dabMinPx 12.5', 'paint.roles.block.length 46.5', 'paint.environment.hue 250.5', 'paint.particles.targetPer10kPx 90.5']) {
+        applyStyleSet(measures, text)
+      }
+      expect(measures.set).toEqual({
+        'paint.light.azimuth': 22.5,
+        'paint.light.elevation': 38.5,
+        'paint.detect.dabMinPx': 12.5,
+        'paint.roles.block.length': 46.5,
+        'paint.environment.hue': 250.5,
+        'paint.particles.targetPer10kPx': 90.5,
+      })
+    })
+
     it('takes the ends of the range', () => {
       const layer: StyleLayer = {}
       applyStyleSet(layer, 'style.line.looseness 1')
@@ -660,6 +737,15 @@ describe('a base style with settings in it', () => {
     ])
   })
 
+  it('refuses a whole-number setting that is not whole, in a base style, and takes a measure that is not', () => {
+    const { layer, errors } = checkLayer({ set: { 'paint.seed': 3.5, 'paint.roles.form.bristles': 6.5, 'paint.light.azimuth': 22.5, 'paint.mix.loadMin': 4 } } as never)
+    expect(errors).toEqual([
+      'The base style\'s set paint.seed must be a whole number from 1 to 999, got "3.5"',
+      'The base style\'s set paint.roles.form.bristles must be a whole number from 1 to 24, got "6.5"',
+    ])
+    expect(layer).toEqual({ set: { 'paint.light.azimuth': 22.5, 'paint.mix.loadMin': 4 } })
+  })
+
   it('refuses a set that is not an object, and a value that is not a value', () => {
     expect(checkLayer({ set: 3 } as never).errors).toEqual(["The base style's set must be an object of registry paths and values, got 3"])
     expect(checkLayer({ set: ['a'] } as never).errors).toHaveLength(1)
@@ -697,6 +783,19 @@ describe('checking a theme’s style set', () => {
     ])
   })
 
+  it('refuses a whole-number setting that is not whole, in a theme’s style set, and takes a measure that is not', () => {
+    const { styles, errors } = checkThemeStyles({
+      all: { set: { 'paint.seed': 2.5, 'paint.light.azimuth': 22.5 } },
+      byType: { space: { set: { 'paint.roles.dab.bristles': 5.5, 'paint.roles.dab.bristles2': 5 } } },
+    })
+    expect(styles).toEqual({ all: { set: { 'paint.light.azimuth': 22.5 } }, byType: { space: { set: {} } } })
+    expect(errors).toEqual([
+      'The theme\'s styles.all\'s set paint.seed must be a whole number from 1 to 999, got "2.5"',
+      'The theme\'s styles.byType.space\'s set paint.roles.dab.bristles must be a whole number from 1 to 24, got "5.5"',
+      expect.stringMatching(/^The theme's styles\.byType\.space's set has no setting "paint\.roles\.dab\.bristles2"/),
+    ])
+  })
+
   it('takes nothing, null and undefined as an empty set, and refuses what is not a set', () => {
     for (const none of [undefined, null]) expect(checkThemeStyles(none)).toEqual({ styles: {}, errors: [] })
     for (const bad of [3, 'ink', ['all']]) {
@@ -712,5 +811,56 @@ describe('checking a theme’s style set', () => {
     expect(themeStylesOf({ styles: 'ink' })).toEqual({})
     const theme = resolveTheme({ styles: { all: { seed: 3 } } })
     expect(themeStylesOf(theme)).toEqual({ all: {} })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Several layers as one
+// ---------------------------------------------------------------------------
+
+describe('collapseLayers', () => {
+  const LIBRARY: (SettingsLayer | null | undefined)[] = [
+    undefined,
+    null,
+    {},
+    { preset: 'pencil' },
+    { preset: 'ink', set: { [LOOSE]: 0.4, 'style.seed': 5, [SOFT]: 0.3 } },
+    { preset: 'marker', set: { 'style.paper.type': 'graph', [CHROMA]: 0.7 } },
+    { preset: 'clean' },
+    { preset: 'crayon' },
+    { set: { [LOOSE]: 0.1, 'style.line.type': 'brush', 'style.seed': 9 } },
+    { set: { [SOFT]: 0.6, 'paint.canvas.weave': 'duck', 'board.tilt': 0.8 } },
+    { preset: 'pencil', set: { 'style.fill.type': 'crosshatch', 'paint.curves.value': [[0, 0], [0.5, 0.7], [1, 1]] } },
+  ]
+
+  it('resolves, as the one layer, exactly as the layers would one after the other', () => {
+    // The stack applies its layers one after the other: the graph type's defaults, the theme's, the document's.
+    const sequential = (a: SettingsLayer | null | undefined, b: SettingsLayer | null | undefined, c: SettingsLayer | null | undefined) =>
+      resolveSettings({ typeDefaults: { space: a ?? undefined }, theme: { all: b ?? undefined }, document: c ?? undefined }, 'space')
+    const collapsed = (layers: (SettingsLayer | null | undefined)[]) => resolveSettings({ figure: collapseLayers(layers) }, 'space')
+    for (const a of LIBRARY) {
+      expect(collapsed([a]), JSON.stringify([a])).toEqual(sequential(a, undefined, undefined))
+      for (const b of LIBRARY) {
+        expect(collapsed([a, b]), JSON.stringify([a, b])).toEqual(sequential(a, b, undefined))
+        for (const c of LIBRARY) expect(collapsed([a, b, c]), JSON.stringify([a, b, c])).toEqual(sequential(a, b, c))
+      }
+    }
+  })
+
+  it('is nothing for no layers, and keeps the seed and the other settings a later preset does not reset', () => {
+    expect(collapseLayers([])).toBeUndefined()
+    expect(collapseLayers([undefined, null])).toBeUndefined()
+    const merged = collapseLayers([{ preset: 'ink', set: { 'style.seed': 5, [LOOSE]: 0.4, [SOFT]: 0.3 } }, { preset: 'pencil' }])!
+    expect(merged.preset).toBe('pencil')
+    expect(merged.set).toEqual({ 'style.seed': 5, [SOFT]: 0.3 })
+  })
+
+  it('does not change the layers it is given, or share their settings', () => {
+    const a: SettingsLayer = { preset: 'ink', set: { [LOOSE]: 0.4 } }
+    const b: SettingsLayer = { set: { [SOFT]: 0.3 } }
+    const snapshot = JSON.stringify([a, b])
+    const merged = collapseLayers([a, b])!
+    merged.set![LOOSE] = 0.9
+    expect(JSON.stringify([a, b])).toBe(snapshot)
   })
 })

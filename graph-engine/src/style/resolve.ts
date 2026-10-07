@@ -1,4 +1,4 @@
-import { layerFromStyleLayer, resolveLayers, toStyle, type SettingsLayer, type ThemeStyles } from './layers'
+import { collapseLayers, layerFromStyleLayer, resolveSettings, toStyle, type SettingsLayer, type ThemeStyles } from './layers'
 import { isPresetName, PRESET_NAMES, PRESETS, type PresetName } from './presets'
 import type { SettingSpec, SettingValue } from './settings/types'
 import { findSetting, noSuchSetting, parseTokenValue, readSettingValue, tokenAt } from './settings/values'
@@ -55,9 +55,13 @@ const GROUPS = ['line', 'fill', 'paper', 'lettering', 'colour'] as const
 // The figure styles of the layers, base first: the stack's style.* settings for a
 // figure (graph type figure2d). With the two layers of a rendered figure, [the host's
 // base style, the figure's own], that is the stack with the base as the document and
-// the figure as the figure; resolveStyle also folds any other number of layers.
+// the figure as the figure, so the graph type's built-in defaults (style/typeDefaults.ts)
+// sit below both. Any other number of layers resolves the same way: the last is the
+// figure, and the ones before it, applied in order, are the document.
 export function resolveStyle(layers: readonly (StyleLayer | null | undefined)[]): Style {
-  return toStyle(resolveLayers(layers.map((layer) => (layer ? layerFromStyleLayer(layer) : undefined))))
+  const given = layers.filter((layer): layer is StyleLayer => !!layer).map(layerFromStyleLayer)
+  const figure = given.pop()
+  return toStyle(resolveSettings({ document: collapseLayers(given), figure }, 'figure2d'))
 }
 
 // Whether a resolved style is clean — the look the renderer draws through its

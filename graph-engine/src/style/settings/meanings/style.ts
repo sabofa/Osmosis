@@ -32,7 +32,6 @@ export const STYLE_MEANINGS: Meanings = {
   'style.line.width': {
     meaning:
       "A multiplier on every stroke weight the figure asks for, so 1 is the figure's own weight. Hatch and scribble lines are drawn at 1.1 times it, and the dashes of a hidden line grow with it (above 1) so that a thick marker line still reads as dashes. Everything the hand does, the end misses and the wobble, scales with it.",
-    unit: '×',
     interactions: ['style.line.looseness', 'style.line.wobble', 'style.line.opacity'],
   },
   'style.line.variation': {
@@ -64,13 +63,11 @@ export const STYLE_MEANINGS: Meanings = {
   'style.fill.angle': {
     meaning:
       "The direction of hatch and scribble lines, in degrees anticlockwise from horizontal (a small positive angle rises from lower left to upper right). Crosshatch lays its second family a quarter turn further round. Flat, stipple, wash and none have no direction and ignore it. At roughness 0 hatching is anchored to the page, so two regions that touch hatch as one set of lines at the same angle. Above 0, each line leans off the angle a little, the family is no longer anchored, and a scribble drifts across the region.",
-    unit: '°',
     interactions: ['style.fill.type', 'style.fill.roughness'],
   },
   'style.fill.spacing': {
     meaning:
       "The gap between hatch or scribble lines or stipple dots, in drawing units (a figure is fitted into 640 of them). Smaller packs the marks tighter, so the shading reads darker; larger opens it out, lighter. A large region caps how much shading it will hold and opens the spacing out to fit, so on a big region very small values stop getting darker. It also sets how wide a wash's darker rim is (0.7 times the spacing, never under 3). Flat ignores it.",
-    unit: 'drawing units',
     interactions: ['style.fill.type', 'style.fill.opacity', 'style.fill.roughness'],
   },
   'style.fill.opacity': {
@@ -102,7 +99,6 @@ export const STYLE_MEANINGS: Meanings = {
   'style.paper.grid': {
     meaning:
       "The spacing of the grid, dots or ruled lines, in drawing units. Smaller is a finer grid. Graph and rough-graph put a heavier line every fifth square, dotted puts one dot per square, and ruled sets its lines this far apart. Clean, paper, rough-paper, canvas and none ignore it.",
-    unit: 'drawing units',
     interactions: ['style.paper.type'],
   },
 
@@ -114,7 +110,6 @@ export const STYLE_MEANINGS: Meanings = {
   'style.lettering.size': {
     meaning:
       "A multiplier on the size of every label (points, measures, angle captions). Labels are laid out at that size, so a bigger hand keeps its distance from the lines instead of crowding them. 1 is the normal size. The givens table keeps its own size and only changes face.",
-    unit: '×',
     interactions: ['style.lettering.face'],
   },
   'style.lettering.tilt': {
@@ -131,7 +126,6 @@ export const STYLE_MEANINGS: Meanings = {
   'style.colour.saturation': {
     meaning:
       "Scales the colour strength of everything the figure draws, ink, fills, the paper tint and an author's own colours, holding each one's lightness and hue. 0 is greyscale at the same lightness, 1 changes nothing, above 1 is vivid (a colour pushed out of range loses chroma and does not clip, so hue stays honest).",
-    unit: '×',
     interactions: ['style.colour.ink', 'style.paper.tint'],
   },
 

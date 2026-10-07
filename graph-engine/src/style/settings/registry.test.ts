@@ -5,11 +5,9 @@ import { PRESETS } from '../presets'
 import { BOARD_BASES, BOARD_TILT } from '../theme/derive'
 import { BOARD_NAMES, GRAPH_TYPES, MEDIUM_NAMES } from '../theme/types'
 import { readToken, TOKENS } from '../tokens'
-import { BOARD_MEANINGS } from './meanings/boards'
-import { MEDIA_MEANINGS } from './meanings/media'
-import { PAINT_MEANINGS } from './meanings/paint'
-import { STYLE_MEANINGS } from './meanings/style'
-import { EXTRA_PAINT_SETTINGS, REGISTRY, settingAt } from './registry'
+import { GUIDE, guideAt, MEANING_TABLES } from './guide'
+import { EXTRA_PAINT_SETTINGS, REGISTRY, settingAt, WHOLE_PAINT_SETTINGS } from './registry'
+import { UNITS } from './units'
 
 // The paths the sources imply, written out here by the brief's rules and not read back from the registry.
 const tokenPath = (token: (typeof TOKENS)[number]) => (token.group === 'seed' ? 'style.seed' : `style.${token.group}.${token.key}`)
@@ -167,7 +165,7 @@ describe('no painter setting is missing', () => {
 
 describe('every entry says what it means', () => {
   it('has a meaning of at least 20 characters that is not just the label', () => {
-    for (const spec of REGISTRY) {
+    for (const spec of GUIDE) {
       expect(spec.meaning.length, spec.path).toBeGreaterThanOrEqual(20)
       expect(spec.meaning, spec.path).not.toBe(spec.label)
       expect(spec.meaning, spec.path).not.toBe(spec.path)
@@ -180,7 +178,7 @@ describe('every entry says what it means', () => {
 
   it('opens with a first sentence that stands alone in at most 200 characters', () => {
     const bad: string[] = []
-    for (const spec of REGISTRY) {
+    for (const spec of GUIDE) {
       const first = firstSentence(spec.meaning)
       const long = first.length > 200
       const short = first.length < 20
@@ -193,15 +191,15 @@ describe('every entry says what it means', () => {
   })
 
   it('quotes no default as a number in the prose (the registry carries it, and a copy goes stale)', () => {
-    for (const spec of REGISTRY) expect(spec.meaning, spec.path).not.toMatch(/\bdefaults?\s*(?:is|are|of|at|=|:)?\s*\(?-?\d/i)
+    for (const spec of GUIDE) expect(spec.meaning, spec.path).not.toMatch(/\bdefaults?\s*(?:is|are|of|at|=|:)?\s*\(?-?\d/i)
   })
 
   // Nothing draws a medium or a board yet. The task that wires one removes its paths from this check.
-  const NOT_DRAWN_YET = REGISTRY.filter((spec) => spec.path.startsWith('media.') || spec.path.startsWith('board.')).map((spec) => spec.path)
+  const NOT_DRAWN_YET = GUIDE.filter((spec) => spec.path.startsWith('media.') || spec.path.startsWith('board.')).map((spec) => spec.path)
 
   it('says "Not drawn yet:" in the first sentence of every medium and board setting, and of no other', () => {
     expect(NOT_DRAWN_YET).toHaveLength(13)
-    for (const spec of REGISTRY) {
+    for (const spec of GUIDE) {
       const says = firstSentence(spec.meaning).startsWith('Not drawn yet:')
       expect(says, spec.path).toBe(NOT_DRAWN_YET.includes(spec.path))
     }
@@ -209,13 +207,13 @@ describe('every entry says what it means', () => {
 
   it('is written in painter terms, with no code words outside the setting paths it quotes', () => {
     const CODE = /\b(shader|uniform|glsl|webgl|g-buffer|gbuffer|smoothstep|clamp|clamped|float|function|variable|boolean|null|undefined|array|callback|vertex|framebuffer|gpu|cpu|enum|struct|param|params)\b/i
-    for (const spec of REGISTRY) {
+    for (const spec of GUIDE) {
       expect(spec.meaning.replace(/`[^`]*`/g, ''), spec.path).not.toMatch(CODE)
     }
   })
 
   it('has no setting that applies to nothing', () => {
-    for (const spec of REGISTRY) {
+    for (const spec of GUIDE) {
       expect(spec.appliesTo.graphTypes.length, spec.path).toBeGreaterThanOrEqual(1)
       for (const type of spec.appliesTo.graphTypes) expect(GRAPH_TYPES, spec.path).toContain(type)
       if (spec.appliesTo.media !== 'all') {
@@ -226,41 +224,41 @@ describe('every entry says what it means', () => {
   })
 
   it('names only real paths in its interactions, never itself, never twice', () => {
-    for (const spec of REGISTRY) {
-      for (const other of spec.interactions) expect(settingAt(other), `${spec.path} -> ${other}`).toBeDefined()
+    for (const spec of GUIDE) {
+      for (const other of spec.interactions) expect(guideAt(other), `${spec.path} -> ${other}`).toBeDefined()
       expect(spec.interactions, spec.path).not.toContain(spec.path)
       expect(new Set(spec.interactions).size, spec.path).toBe(spec.interactions.length)
     }
   })
 
   it('makes every interaction run both ways', () => {
-    for (const spec of REGISTRY) {
-      for (const other of spec.interactions) expect(settingAt(other)!.interactions, `${other} should name ${spec.path}`).toContain(spec.path)
+    for (const spec of GUIDE) {
+      for (const other of spec.interactions) expect(guideAt(other)!.interactions, `${other} should name ${spec.path}`).toContain(spec.path)
     }
   })
 
   it('has no interaction between two settings the code keeps independent', () => {
     // the sky and bounce LIGHTS lift values; the sky and bounce TINTS colour them: no code joins the two
-    expect(settingAt('paint.light.bounce')!.interactions).not.toContain('paint.curve.bounceTint')
-    expect(settingAt('paint.light.sky')!.interactions).not.toContain('paint.curve.skyTint')
-    expect(settingAt('paint.curve.bounceTint')!.interactions).not.toContain('paint.light.bounce')
-    expect(settingAt('paint.curve.skyTint')!.interactions).not.toContain('paint.light.sky')
+    expect(guideAt('paint.light.bounce')!.interactions).not.toContain('paint.curve.bounceTint')
+    expect(guideAt('paint.light.sky')!.interactions).not.toContain('paint.curve.skyTint')
+    expect(guideAt('paint.curve.bounceTint')!.interactions).not.toContain('paint.light.bounce')
+    expect(guideAt('paint.curve.skyTint')!.interactions).not.toContain('paint.light.sky')
   })
 
   it('has no interaction between settings that only add, or that never touch', () => {
     // a faint boundary can still stop a stroke: the contrast floor and the stop level are independent
-    expect(settingAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.stopAt')
-    expect(settingAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.bleedAt')
+    expect(guideAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.stopAt')
+    expect(guideAt('paint.detect.edgeMinContrast')!.interactions).not.toContain('paint.edges.bleedAt')
     // the mix's hue turns and the planes' hue steps add on top of the capped swing: they do not cap each other
     for (const path of ['paint.mix.hueMin', 'paint.mix.hueMax', 'paint.curve.planeStepA', 'paint.curve.planeStepB', 'paint.curves.hAdjust']) {
-      expect(settingAt('paint.curve.shiftMax')!.interactions, path).not.toContain(path)
-      expect(settingAt(path)!.interactions, path).not.toContain('paint.curve.shiftMax')
+      expect(guideAt('paint.curve.shiftMax')!.interactions, path).not.toContain(path)
+      expect(guideAt(path)!.interactions, path).not.toContain('paint.curve.shiftMax')
     }
   })
 
   it('says where the baked painting and the live path differ, in the settings where they do', () => {
     const both = (path: string, ...words: RegExp[]) => {
-      const text = settingAt(path)!.meaning
+      const text = guideAt(path)!.meaning
       for (const word of words) expect(text, `${path}: ${word}`).toMatch(word)
     }
     // (the baked painting is the default; the live path is baking off, or the light fixed to the camera)
@@ -275,24 +273,24 @@ describe('every entry says what it means', () => {
     both('paint.light.shadows', /live path/, /baked painting/, /no effect/)
     both('paint.canvas.texture', /canvas\.weave/)
     for (const path of ['paint.curve.devL', 'paint.curve.devC', 'paint.curve.devH']) both(path, /four times/, /jitter/)
-    expect(settingAt('paint.roles.line.load')!.meaning).not.toMatch(/heavier loaded start/)
-    expect(settingAt('paint.roles.block.load')!.meaning).toMatch(/heavier loaded start/)
+    expect(guideAt('paint.roles.line.load')!.meaning).not.toMatch(/heavier loaded start/)
+    expect(guideAt('paint.roles.block.load')!.meaning).toMatch(/heavier loaded start/)
   })
 
   it('names the interactions the review found missing', () => {
-    const shift = settingAt('paint.curve.shiftMax')!.interactions
+    const shift = guideAt('paint.curve.shiftMax')!.interactions
     for (const path of ['kWarm', 'kCool', 'warmHue', 'coolHue', 'tintWarm', 'tintCool', 'skyTint', 'bounceTint']) expect(shift, path).toContain(`paint.curve.${path}`)
-    const terminator = settingAt('paint.value.terminatorSoftness')!.interactions
+    const terminator = guideAt('paint.value.terminatorSoftness')!.interactions
     for (const weight of ['wContrast', 'wCurvature', 'wFocal', 'wLight', 'wDepth']) expect(terminator, weight).toContain(`paint.edges.${weight}.0`)
     for (const role of ['block', 'form', 'scumble', 'glaze', 'reflected']) {
-      expect(settingAt(`paint.roles.${role}.density`)!.interactions, role).toContain('paint.particles.zoomGrowMax')
+      expect(guideAt(`paint.roles.${role}.density`)!.interactions, role).toContain('paint.particles.zoomGrowMax')
     }
-    expect(settingAt('paint.particles.zoomGrowMax')!.interactions).toContain('paint.roles.block.density')
+    expect(guideAt('paint.particles.zoomGrowMax')!.interactions).toContain('paint.roles.block.density')
   })
 
   it('says the underpainting takes the block-in mix at half strength, in the two settings that move it', () => {
     for (const path of ['paint.mix.roleBlock', 'paint.mix.strength']) {
-      const text = settingAt(path)!.meaning
+      const text = guideAt(path)!.meaning
       expect(text, path).toMatch(/underpainting/)
       expect(text, path).toMatch(/half strength/)
     }
@@ -300,12 +298,13 @@ describe('every entry says what it means', () => {
 
   it('has no meaning or unit for a path the sources lack', () => {
     const known = new Set(REGISTRY.map((spec) => spec.path))
-    for (const [section, table] of Object.entries({ style: STYLE_MEANINGS, paint: PAINT_MEANINGS, media: MEDIA_MEANINGS, board: BOARD_MEANINGS })) {
+    for (const [section, table] of Object.entries(MEANING_TABLES)) {
       for (const path of Object.keys(table)) {
         expect(known.has(path), `${section}: ${path}`).toBe(true)
         expect(path.startsWith(`${section}.`), `${section}: ${path}`).toBe(true)
       }
     }
+    for (const path of Object.keys(UNITS)) expect(known.has(path), `unit: ${path}`).toBe(true)
   })
 
   it('names the role in a stroke role setting, and says it differently for each role', () => {
@@ -313,7 +312,7 @@ describe('every entry says what it means', () => {
     expect(fields).toHaveLength(10)
     for (const field of fields) {
       const texts = Object.keys(DEFAULT_PAINT_PARAMS.roles).map((role) => {
-        const spec = settingAt(`paint.roles.${role}.${field}`)!
+        const spec = guideAt(`paint.roles.${role}.${field}`)!
         expect(spec.meaning.toLowerCase(), spec.path).toContain(role)
         return spec.meaning
       })
@@ -325,7 +324,7 @@ describe('every entry says what it means', () => {
     const kinds = ['internal', 'silhouette', 'shadow']
     for (const weight of ['wContrast', 'wCurvature', 'wFocal', 'wLight', 'wDepth']) {
       const texts = kinds.map((kind, i) => {
-        const spec = settingAt(`paint.edges.${weight}.${i}`)!
+        const spec = guideAt(`paint.edges.${weight}.${i}`)!
         expect(spec.meaning.toLowerCase(), spec.path).toMatch(kind === 'internal' ? /plane|inside/ : new RegExp(kind))
         return spec.meaning
       })
@@ -451,7 +450,80 @@ describe('the registry is frozen', () => {
     expect(Object.isFrozen(REGISTRY)).toBe(true)
     for (const spec of REGISTRY) {
       expect(Object.isFrozen(spec), spec.path).toBe(true)
-      expect(Object.isFrozen(spec.interactions), spec.path).toBe(true)
+      expect(Object.isFrozen(spec.appliesTo), spec.path).toBe(true)
     }
+  })
+
+  it('freezes the guide, and its entries and their interactions', () => {
+    expect(Object.isFrozen(GUIDE)).toBe(true)
+    for (const entry of GUIDE) {
+      expect(Object.isFrozen(entry), entry.path).toBe(true)
+      expect(Object.isFrozen(entry.interactions), entry.path).toBe(true)
+    }
+  })
+})
+
+describe('whole-number settings are marked by what they count, not by their step', () => {
+  // The painter's settings that count something whole: a seed, two switches, the load's run of strokes and the
+  // bristles of each stroke role. The figure styles' are the tokens that say `integer`.
+  const PAINT_WHOLE = [
+    'paint.seed',
+    'paint.light.worldFixed',
+    'paint.light.shadows',
+    'paint.mix.loadMin',
+    'paint.mix.loadMax',
+    ...['block', 'form', 'scumble', 'glaze', 'reflected', 'dab', 'edge', 'line'].map((role) => `paint.roles.${role}.bristles`),
+  ]
+
+  it('flags exactly the figure styles’ whole-number tokens and the thirteen painter settings', () => {
+    const flagged = REGISTRY.filter((spec) => spec.integer === true).map((spec) => spec.path)
+    const tokens = TOKENS.filter((token) => token.kind === 'number' && token.integer === true).map(tokenPath)
+    expect(tokens).toEqual(['style.line.passes', 'style.seed'])
+    expect(PAINT_WHOLE).toHaveLength(13)
+    expect([...flagged].sort()).toEqual([...tokens, ...PAINT_WHOLE].sort())
+  })
+
+  it('flags only numbers, and never a setting that moves by 1 on its slider but is a measure', () => {
+    for (const spec of REGISTRY) if (spec.integer === true) expect(spec.type, spec.path).toBe('number')
+    // A step of 1 is the slider's, not the setting's: an azimuth of 22.5 degrees is a fine azimuth.
+    for (const path of ['paint.light.azimuth', 'paint.light.elevation', 'paint.environment.hue', 'paint.detect.dabMinPx', 'paint.roles.block.length', 'paint.particles.targetPer10kPx', 'style.fill.angle', 'style.paper.grid']) {
+      expect(settingAt(path)!.step, path).toBe(1)
+      expect(settingAt(path)!.integer, path).toBeUndefined()
+    }
+  })
+
+  it('gives every whole setting a whole range and a whole default', () => {
+    for (const spec of REGISTRY) {
+      if (spec.integer !== true) continue
+      expect(Number.isInteger(spec.min), spec.path).toBe(true)
+      expect(Number.isInteger(spec.max), spec.path).toBe(true)
+      expect(Number.isInteger(spec.default), spec.path).toBe(true)
+    }
+  })
+
+  it('names only painter settings the schema has', () => {
+    for (const path of WHOLE_PAINT_SETTINGS) expect(settingAt(`paint.${path}`), path).toBeDefined()
+    expect(WHOLE_PAINT_SETTINGS.map((path) => `paint.${path}`).sort()).toEqual([...PAINT_WHOLE].sort())
+  })
+})
+
+describe('units belong to the table', () => {
+  it('puts a unit on exactly the settings units.ts names, each a number', () => {
+    const withUnit = REGISTRY.filter((spec) => spec.unit !== undefined).map((spec) => spec.path)
+    expect([...withUnit].sort()).toEqual(Object.keys(UNITS).sort())
+    for (const path of withUnit) expect(settingAt(path)!.type, path).toBe('number')
+  })
+
+  it('gives each stroke role’s width and length pixels, and a few others their own', () => {
+    for (const role of ['block', 'form', 'scumble', 'glaze', 'reflected', 'dab', 'edge', 'line']) {
+      expect(settingAt(`paint.roles.${role}.width`)!.unit).toBe('px')
+      expect(settingAt(`paint.roles.${role}.length`)!.unit).toBe('px')
+      expect(settingAt(`paint.roles.${role}.bristles`)!.unit).toBeUndefined()
+    }
+    expect(settingAt('paint.light.azimuth')!.unit).toBe('°')
+    expect(settingAt('style.fill.spacing')!.unit).toBe('drawing units')
+    expect(settingAt('paint.value.terminatorSoftness')!.unit).toBe('N·L')
+    expect(settingAt('media.ink.contrast')!.unit).toBe(': 1')
+    expect(settingAt('style.line.looseness')!.unit).toBeUndefined()
   })
 })

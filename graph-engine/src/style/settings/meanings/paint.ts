@@ -45,13 +45,11 @@ const LITERAL: Meanings = {
   'paint.light.azimuth': {
     meaning:
       "Which way around the figure the key light comes from. With the light fixed in the world it is a compass bearing, measured about the vertical from the +x axis toward +y; with it fixed to the camera, positive is the viewer's left. Turning it swings the terminator and the cast shadow around the form, so the values change place.",
-    unit: '°',
     interactions: ['paint.light.elevation', 'paint.light.worldFixed'],
   },
   'paint.light.elevation': {
     meaning:
       'How high the key light stands above the table, in degrees: 0 is level with it, 90 straight overhead. A low light stretches the cast shadow far across the table and rakes across the form; a high light pulls the shadow in under the figure and lights its top. Below 0 the light comes from under the table.',
-    unit: '°',
     interactions: ['paint.light.azimuth', 'paint.light.shadows'],
   },
   'paint.light.intensity': {
@@ -84,7 +82,6 @@ const LITERAL: Meanings = {
   'paint.environment.hue': {
     meaning:
       'The colour of the surrounding light, as a hue in degrees on the colour wheel (a cool blue room light, at the default). It only shows where the environment has some colour and the object takes it in, and mostly in the dim parts, where ambient light is a large share of what lights the surface.',
-    unit: '°',
     interactions: ['paint.environment.chroma', 'paint.environment.absorption'],
   },
   'paint.environment.chroma': {
@@ -105,7 +102,6 @@ const LITERAL: Meanings = {
   'paint.environment.occlusionRadiusPx': {
     meaning:
       'How far from a contact the darkening reaches, in screen pixels. A small radius is a tight dark crease right at the contact; a large one is a broad, soft darkening round it. It has no effect while the occlusion is 0.',
-    unit: 'px',
     interactions: ['paint.environment.occlusion', 'paint.value.castContact'],
   },
 
@@ -113,7 +109,6 @@ const LITERAL: Meanings = {
   'paint.detect.formBandNL': {
     meaning:
       'How wide a band round the terminator gets form-turning strokes, in N·L (0 is the terminator; larger reaches farther toward the lamp and into the shadow). Wider puts the curved strokes that turn round the form over more of the figure; narrower confines them to a thin line at the terminator. Strokes never start in the deep core shadow.',
-    unit: 'N·L',
     interactions: ['paint.roles.form.density', 'paint.value.terminatorSoftness'],
   },
   'paint.detect.scumbleGradient': {
@@ -124,7 +119,6 @@ const LITERAL: Meanings = {
   'paint.detect.scumbleMinPx': {
     meaning:
       'How wide, in screen pixels, a gentle transition must be before it is scumbled. Raising it confines scumbling to broad, soft transitions and drops it from narrow ones; 0 scumbles any gentle transition however thin.',
-    unit: 'px',
     interactions: ['paint.detect.scumbleGradient'],
   },
   'paint.detect.dabTopFraction': {
@@ -135,7 +129,6 @@ const LITERAL: Meanings = {
   'paint.detect.dabMinPx': {
     meaning:
       'The least distance between two highlight dabs, in screen pixels. Larger spreads the dabs apart, so a broad highlight gets one dab where a small value would give several touches side by side.',
-    unit: 'px',
     interactions: ['paint.detect.dabTopFraction'],
   },
   'paint.detect.glazeBelow': {
@@ -156,7 +149,6 @@ const LITERAL: Meanings = {
   'paint.detect.edgeReachPx': {
     meaning:
       'How near an edge a stroke must be, in screen pixels, to take its behaviour from it: distinct at a hard edge, blended at a soft one, dissolving at a lost one. Larger lets edges shape the brushwork farther from them, so more of the picture responds to its edges; smaller confines the effect to strokes right on an edge. Live, the figure\'s own outline is an edge like any other; in the baked painting the outline is drawn per frame and is not part of the edge field the strokes read, though the creases, borders, terminator and plane boundaries are.',
-    unit: 'px',
     interactions: ['paint.detect.edgeMinContrast'],
   },
 
@@ -184,19 +176,16 @@ const LITERAL: Meanings = {
   'paint.value.lightTurn': {
     meaning:
       'Where, across the lit side, the half-tone turns into light, in N·L (0 at the terminator, 1 facing the lamp). Higher keeps the half-tone going farther and shrinks the light to a small area round the lamp-facing point; lower gives the light more of the form.',
-    unit: 'N·L',
     interactions: ['paint.value.lightSoftness', 'paint.light.intensity', 'paint.curves.lightResponse'],
   },
   'paint.value.lightSoftness': {
     meaning:
       'How wide the turn from half-tone to light is, in N·L. Wide is a smooth, classical gradation with no visible boundary; near 0 it is a distinct step, a boundary you can see. Wide, soft turns are also where scumble strokes appear.',
-    unit: 'N·L',
     interactions: ['paint.value.lightTurn', 'paint.detect.scumbleGradient'],
   },
   'paint.value.terminatorSoftness': {
     meaning:
       "How wide the edge between the light and the form shadow, the terminator, is, in N·L, centred on N·L = 0. At the default it is crisper than the other two turns; wider is a blurred, gentle gradient from light to shadow, and the brushwork follows: the edges at the terminator go soft, then lost (their hardness is scaled by 0.1 over the softness, to no less than a fifth, so past 0.5 every edge there is lost), and the underpainting's band widens. The change is greatest between 0.1 and 0.5.",
-    unit: 'N·L',
     interactions: [
       'paint.edges.lostBelow',
       'paint.edges.softBelow',
@@ -214,7 +203,6 @@ const LITERAL: Meanings = {
   'paint.value.coreWidth': {
     meaning:
       'How far into the shadow the core shadow, the darkest band, extends from the terminator, in N·L. Wider makes a broader band of deepest dark before the reflected light starts to lift it; narrower lets the reflected light begin right at the terminator. A softer terminator pushes the start of the lift out by the extra half-width of its edge, so the core stays as dark.',
-    unit: 'N·L',
     interactions: ['paint.value.corePlateau', 'paint.value.reflectedSoftness', 'paint.value.terminatorSoftness'],
   },
   'paint.value.corePlateau': {
@@ -230,7 +218,6 @@ const LITERAL: Meanings = {
   'paint.value.reflectedSoftness': {
     meaning:
       'How wide the transition from the core shadow to the reflected light is, in N·L: wide is a gentle lightening of the underside, narrow a distinct band of reflected light.',
-    unit: 'N·L',
     interactions: ['paint.value.coreWidth', 'paint.value.reflectedShare'],
   },
   'paint.value.castPlateau': {
@@ -283,13 +270,11 @@ const LITERAL: Meanings = {
   'paint.curve.warmHue': {
     meaning:
       'The hue the colour leans toward in the light, as degrees on the colour wheel (an orange-yellow at the default). The lean is relative to the local colour: a red moves toward its own warmer neighbour, not to this absolute hue, and the lean is capped by the maximum hue shift.',
-    unit: '°',
     interactions: ['paint.curve.kWarm', 'paint.curve.shiftMax', 'paint.curve.tintWarm'],
   },
   'paint.curve.coolHue': {
     meaning:
       'The hue the colour leans toward in the shadow, as degrees on the colour wheel (a blue-violet at the default). The lean is relative to the local colour: a terracotta moves toward its own cooler neighbour (a dark red), never all the way to this hue, and the lean is capped by the maximum hue shift.',
-    unit: '°',
     interactions: ['paint.curve.kCool', 'paint.curve.shiftMax', 'paint.curve.tintCool'],
   },
   'paint.curve.kWarm': {
@@ -305,7 +290,6 @@ const LITERAL: Meanings = {
   'paint.curve.shiftMax': {
     meaning:
       "The most, in degrees, that the warm and cool swing may turn a colour's hue, either side: a terracotta's shadow stays a dark red and never goes purple. It is also the limit every environment, sky, bounce and warm or cool tint is held to (this plus 3 degrees from the colour's own hue). It does not limit the colour distortion of the brush-load mix or the planes' hue steps, which add on top. 0 switches the warm and cool swing off.",
-    unit: '°',
     interactions: [
       'paint.curve.kWarm',
       'paint.curve.kCool',
@@ -322,25 +306,21 @@ const LITERAL: Meanings = {
   'paint.curve.accentHue': {
     meaning:
       "The hue the half-tones are nudged toward, as degrees on the colour wheel (a yellow at the default): a painter's half-tone accent, a slightly different colour in the middle values. It peaks around a value of 0.56 and fades out over a few tenths either side.",
-    unit: '°',
     interactions: ['paint.curve.accentMax'],
   },
   'paint.curve.accentMax': {
     meaning:
       'The most the half-tones may be turned toward the accent hue, in degrees either way. 0 removes the half-tone accent; larger gives the half-tones a more distinct colour of their own.',
-    unit: '°',
     interactions: ['paint.curve.accentHue'],
   },
   'paint.curve.planeStepA': {
     meaning:
       'The main hue step between planes, in degrees: every plane of the form gets a hue offset that depends on which way it faces. It runs up to this many either way, so neighbouring planes differ in hue and read as separate touches of paint. It adds on top of the warm and cool swing and is not capped by it; with both steps at 0 every plane has the same hue.',
-    unit: '°',
     interactions: ['paint.curve.planeStepB'],
   },
   'paint.curve.planeStepB': {
     meaning:
       'A second, finer hue step between planes, in degrees, added to the first: together they make neighbouring planes differ by roughly 8 to 20 degrees at the defaults. 0 leaves only the main step.',
-    unit: '°',
     interactions: ['paint.curve.planeStepA'],
   },
   'paint.curve.tintWarm': {
@@ -360,7 +340,6 @@ const LITERAL: Meanings = {
   },
   'paint.curve.skyHue': {
     meaning: 'The colour of the sky tint, as a hue in degrees (a blue at the default). It only shows where the sky tint is above 0.',
-    unit: '°',
     interactions: ['paint.curve.skyTint'],
   },
   'paint.curve.bounceTint': {
@@ -370,7 +349,6 @@ const LITERAL: Meanings = {
   },
   'paint.curve.bounceHue': {
     meaning: 'The colour of the bounce tint, as a hue in degrees (a warm orange at the default). It only shows where the bounce tint is above 0.',
-    unit: '°',
     interactions: ['paint.curve.bounceTint'],
   },
   'paint.curve.reflectedBounceMix': {
@@ -391,7 +369,6 @@ const LITERAL: Meanings = {
   'paint.curve.devH': {
     meaning:
       'A smooth wander in hue, so a colour drifts a little warmer or cooler from place to place. It comes in three parts: a wave along the value axis (about this many degrees either way, up to about twice that), a second smooth field across the surface that the strokes of the surface add (up to about twice again), and a small jitter of each stroke, so the strongest drift is roughly four times this before the jitter. 0 removes it. It is small by design; the brush-load mix is what varies hue strongly.',
-    unit: '°',
     interactions: [],
   },
   'paint.curve.colormapHue': {
@@ -409,25 +386,21 @@ const LITERAL: Meanings = {
   'paint.mix.hueMin': {
     meaning:
       'The smallest hue turn a paint load gets, in degrees. Each load is turned by an amount between this and the largest, one way or the other, and neighbouring loads tend to go opposite ways, so patches of the same colour differ gently. It adds on top of the capped warm and cool swing.',
-    unit: '°',
     interactions: ['paint.mix.hueMax', 'paint.mix.strength'],
   },
   'paint.mix.hueMax': {
     meaning:
       'The largest hue turn a paint load gets, in degrees. Larger gives a more obviously broken, varied colour, like loosely juxtaposed hues in a painting; with the smallest and this both at 0, only the small per-stroke jitter of about two degrees is left. Scaled by the strength and the role.',
-    unit: '°',
     interactions: ['paint.mix.hueMin', 'paint.mix.strength'],
   },
   'paint.mix.chromaMin': {
     meaning:
       "How dull a load may be, as a multiple of the colour's strength, at full strength of the mix: below 1 dulls, and 0.5 would be a load at most half as strong. Each load's colour strength is multiplied by a factor between this and the vivid limit, alternating dull and vivid from one load to the next. 1 never dulls a colour.",
-    unit: '×',
     interactions: ['paint.mix.chromaMax', 'paint.mix.chromaBias'],
   },
   'paint.mix.chromaMax': {
     meaning:
       "How vivid a load may be, as a multiple of the colour's strength, at full strength of the mix: above 1 intensifies. Widening this and the dull limit together gives a more broken, jewel-and-grey surface. 1 never makes a colour more vivid.",
-    unit: '×',
     interactions: ['paint.mix.chromaMin', 'paint.mix.chromaBias', 'paint.mix.strength'],
   },
   'paint.mix.valueHold': {
@@ -488,13 +461,11 @@ const LITERAL: Meanings = {
   'paint.mix.loadBreakPx': {
     meaning:
       'How far apart, in screen pixels, two consecutive strokes may be and still share a load: a painter reloads the brush when they move across the canvas. Larger lets one load run across a longer line or edge before it is remixed; smaller remixes after a short move. It acts on line marks and edge strokes (live, every edge stroke; in the baked painting, all but the view\'s own outline), measured on the screen live and in the world, at the reference scale, when baked.',
-    unit: 'px',
     interactions: ['paint.mix.loadMin', 'paint.mix.loadMax'],
   },
   'paint.mix.loadCell': {
     meaning:
       'The size of a patch of surface that shares one paint mix, in world units: strokes on a surface take their mix from the patch they start on, and neighbouring patches tend to go opposite ways. Small is a fine patchwork of different mixes; large is broad areas of one mix. The patch halves each time the zoom doubles, so the patchwork stays about a brush wide on the screen.',
-    unit: 'world units',
     interactions: [],
   },
   'paint.mix.colormapScale': {
@@ -592,13 +563,11 @@ const LITERAL: Meanings = {
   'paint.edges.planeCellDeg': {
     meaning:
       'How coarsely the form is divided into planes: the direction the surface faces is sorted into cells this many degrees across. Small cells give many small facets, more edges and more separate gradients (many gradients, not one); big cells give a few large planes and a blockier figure. In the baked painting the cells are in world directions, so the planes stay put as you orbit; on the live path they are the directions the surface faces in the view, and shift as it turns.',
-    unit: '°',
     interactions: ['paint.edges.planeMinPx', 'paint.edges.planeGradient'],
   },
   'paint.edges.planeMinPx': {
     meaning:
       'Planes smaller than this area, in screen pixels squared, are merged into the neighbouring plane of the same value family that they share most border with, so no tiny slivers of paint are left. Larger merges more, giving fewer, larger planes. In the baked painting (the default) a floor of 216 pixels squared (three triangles of the underpainting lattice) applies whatever is set, so values under that change nothing there; on the live path (baking off, or the light fixed to the camera) the setting is honoured as given, down to a single pixel.',
-    unit: 'px²',
     interactions: ['paint.edges.planeCellDeg'],
   },
   'paint.edges.planeGradient': {
@@ -611,13 +580,11 @@ const LITERAL: Meanings = {
   'paint.particles.maxPerUnit2': {
     meaning:
       'The most stroke anchors per unit of surface area (the anchors strokes grow from, spaced evenly and never clumped). It caps how finely the picture can be worked when zoomed in: once the screen asks for more strokes than there are anchors, the strokes grow bigger instead of multiplying. More anchors cost more time and memory and only show up close; at the standard framing this is about speed and not look.',
-    unit: 'per world unit²',
     interactions: ['paint.particles.targetPer10kPx', 'paint.particles.zoomGrowMax'],
   },
   'paint.particles.targetPer10kPx': {
     meaning:
       "How many strokes cover the picture: the target number for a role of full density, per 10,000 screen pixels (a square 100 pixels on a side). Higher is a denser, fuller cover and lower a sparser one with more underpainting showing between the strokes. It changes the number of strokes and not their size, except zoomed in, where the anchors run short and a higher target grows the strokes to cover, up to the growth cap. Each role's own density scales it.",
-    unit: 'per 10,000 px²',
     interactions: ['paint.particles.maxPerUnit2', 'paint.particles.zoomGrowMax', 'paint.particles.dragDensity'],
   },
   'paint.particles.fadeLo': {
@@ -633,7 +600,6 @@ const LITERAL: Meanings = {
   'paint.particles.zoomGrowMax': {
     meaning:
       'Zoomed in, the anchors run out and the strokes grow to keep covering the form. This is the most they may grow by, as a multiple of the size they were tuned at. Higher keeps a close-up well covered with bigger strokes; 1 never grows them, so the underpainting shows between the strokes.',
-    unit: '×',
     interactions: ['paint.particles.zoomStrokeScale', 'paint.particles.zoomBigMax', 'paint.particles.maxPerUnit2', 'paint.particles.targetPer10kPx'],
   },
   'paint.particles.zoomStrokeScale': {
@@ -644,7 +610,6 @@ const LITERAL: Meanings = {
   'paint.particles.zoomBigMax': {
     meaning:
       'The growth that keeps strokes covering the form and the brush that follows the zoom multiply, so this is a hard ceiling on the two together, as a multiple of the tuned size. A stroke six times as big is not a brush mark but a leaf; lower keeps strokes long and brushy and lets the underpainting carry the form, higher allows ever bigger brushes in extreme close-ups.',
-    unit: '×',
     interactions: ['paint.particles.zoomGrowMax', 'paint.particles.zoomStrokeScale'],
   },
   'paint.particles.dragDensity': {
@@ -674,13 +639,11 @@ const LITERAL: Meanings = {
   'paint.impasto.lightAzimuth': {
     meaning:
       'The direction the relief light rakes the paint from, in degrees on the screen, counter-clockwise from the right (90 is from the top, 180 from the left). Ridges facing the light brighten and the sides turned from it darken. The relief light stays on the screen as you orbit, because the canvas is the screen.',
-    unit: '°',
     interactions: ['paint.impasto.lightElevation', 'paint.impasto.strength'],
   },
   'paint.impasto.lightElevation': {
     meaning:
       'How high the relief light stands above the canvas, in degrees. Low is a raking light: long, strong shading on every ridge and a strong relief. High is almost straight on, and the relief flattens out until it nearly disappears.',
-    unit: '°',
     interactions: ['paint.impasto.strength', 'paint.impasto.lightAzimuth'],
   },
   'paint.canvas.texture': {
