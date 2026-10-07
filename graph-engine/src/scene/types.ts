@@ -126,8 +126,20 @@ export type SceneObject =
   // dashed, so it reads as "the curve approaches this" and not as part of the
   // curve.
   | { kind: 'line'; id?: MarkId; through: Vec2; direction: Vec2; extent: 'infinite' | 'ray'; role?: 'asymptote'; color?: string | null }
-  // Flat triangle list (groups of 3 points) for a filled inequality region.
-  | { kind: 'region'; triangles: Vec2[]; color?: string | null }
+  // A filled inequality region as its exact outline: rings of connected vertices,
+  // filled even-odd (a point is inside when a ray from it crosses the rings an odd
+  // number of times), so a ring in the middle of another is a hole in it and a ring
+  // in that hole is filled again. A ring's direction means nothing. `boundary` names
+  // the `curve` objects that are the stretches of the outline lying on the
+  // condition's own edges (dashed when the operator is strict): the fill and its
+  // boundary are one geometry. The renderer triangulates the outline itself
+  // (render/renderItems.ts); nothing here is a triangle.
+  | { kind: 'region'; id: MarkId; outline: Chain[]; boundary: MarkId[]; color?: string | null }
+  // Flat triangle list (groups of 3 points) for a filled inequality region: what
+  // the old marching-squares path emits (buildScene.ts's buildRegion and
+  // buildRegionChain), until the implicit/region quadtree replaces it with 'region'
+  // above and this kind goes.
+  | { kind: 'triangles'; triangles: Vec2[]; color?: string | null }
   // Not pre-evaluated like everything else here — fx/fy are the path's two
   // coordinates compiled through the shared kernel (math/compile.ts) over the
   // parameter, so the renderer can call them every frame to animate the point

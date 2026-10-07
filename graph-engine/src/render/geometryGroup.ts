@@ -218,6 +218,49 @@ function splitIntoDashChunks(from: Vec2, to: Vec2, period: number, dashLen: numb
   return chunks
 }
 
+// The straight pieces of a polyline's "on" dashes: one run of dash, gap, dash,
+// gap... laid along the whole polyline from its first vertex, carried across its
+// vertices (a dash that turns a corner is two pieces end to end), so the pattern
+// belongs to the curve and not to however finely it happens to be sampled. Each
+// piece is a [from, to] pair on one of the polyline's own segments, so it is drawn
+// as a straight quad exactly as a dashed segment's chunks are. A dash that starts
+// or ends on a vertex uses that vertex itself, so the pieces of one dash share
+// their end points. Past MAX_DASH_CHUNKS dashes it stops, as splitIntoDashChunks does.
+function splitPolylineIntoDashChunks(points: readonly Vec2[], period: number, dashLen: number): [Vec2, Vec2][] {
+  const gapLen = period - dashLen
+  if (dashLen <= 0 || gapLen < 0) return []
+  const chunks: [Vec2, Vec2][] = []
+  let on = true
+  let left = dashLen
+  let dashes = 1
+  for (let s = 0; s + 1 < points.length; s++) {
+    const from = points[s]
+    const to = points[s + 1]
+    const len = Math.hypot(to.x - from.x, to.y - from.y)
+    if (len === 0) continue
+    const pointAt = (d: number): Vec2 => (d === 0 ? from : { x: from.x + ((to.x - from.x) * d) / len, y: from.y + ((to.y - from.y) * d) / len })
+    let at = 0
+    while (at < len) {
+      if (left >= len - at) {
+        // what is left of this dash or gap outlasts the segment
+        if (on) chunks.push([pointAt(at), to])
+        left -= len - at
+        at = len
+      } else {
+        if (on) chunks.push([pointAt(at), pointAt(at + left)])
+        at += left
+        left = 0
+      }
+      if (left <= 0) {
+        on = !on
+        left = on ? dashLen : gapLen
+        if (on && ++dashes > MAX_DASH_CHUNKS) return chunks
+      }
+    }
+  }
+  return chunks
+}
+
 // Writes one quad (4 vertices, constant half-width) for a straight [from,
 // to] run at vertex index `vertIndex` into `pos`.
 function fillStraightQuad(pos: Float32Array, vertIndex: number, from: Vec2, to: Vec2, halfWidth: number): void {
@@ -256,6 +299,40 @@ function buildQuadIndices(quadCount: number): number[] {
   return indices
 }
 
+// Writes straight [from, to] chunks into `geometry` as constant-weight quads
+// (the segment, segments and dashed-curve kinds all draw this way), reusing the
+// buffers and rebuilding the index only when the chunk count changed.
+function writeQuadChunks(geometry: THREE.BufferGeometry, chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number): void {
+  const pos = growAttribute(geometry, 'position', chunks.length * 4, 3)
+  chunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth))
+  const expectedIndexCount = chunks.length * 6
+  if (geometry.index?.count !== expectedIndexCount) {
+    geometry.setIndex(buildQuadIndices(chunks.length))
+  }
+  finishIndexedUpdate(geometry, expectedIndexCount)
+}
+
+// A fresh mesh of constant-weight quads for the chunks, or null when there are none.
+function buildQuadMesh(chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number, color: number): THREE.Mesh | null {
+  if (chunks.length === 0) return null
+  const positions = new Float32Array(chunks.length * 4 * 3)
+  chunks.forEach(([from, to], i) => fillStraightQuad(positions, i * 4, from, to, halfWidth))
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setIndex(buildQuadIndices(chunks.length))
+  finishIndexedUpdate(geometry, chunks.length * 6)
+  return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }))
+}
+
+// The chunks a dashed curve is drawn as: its polyline cut into the pixel-sized
+// dashes and gaps a dashed segment has, at the constant LINE_WIDTH_PX weight of
+// one. The curvature taper is the pen of a plotted function; a dashed curve is a
+// boundary or a guide, and reads as a dashed segment does.
+function dashedCurveChunks(points: readonly Vec2[], pixelToWorld: (px: number) => number): [Vec2, Vec2][] {
+  const dashLen = pixelToWorld(DASH_SIZE_PX)
+  return splitPolylineIntoDashChunks(points, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
+}
+
 interface GeometryEntry {
   kind: GeometryItem['kind']
   dashed: boolean
@@ -276,7 +353,8 @@ export type GeometryPalette = Pick<Palette, 'curve' | 'segment' | 'region' | 'ba
 // Every kind here renders as a filled ribbon mesh rather than a raw WebGL
 // line — 'curve' with a curvature-driven taper (see computeCurveWidths, an
 // "artist line weight" effect), everything else at LINE_WIDTH_PX's constant
-// weight. This isn't just cosmetic: THREE.LineBasicMaterial's `linewidth`
+// weight — a dashed 'curve' too (see dashedCurveChunks). This isn't just
+// cosmetic: THREE.LineBasicMaterial's `linewidth`
 // is not honored by most browsers/platforms (a long-standing WebGL/ANGLE
 // limitation — every plain THREE.Line renders at 1px regardless of what
 // you ask for), so without this, segments/region boundaries would always
@@ -297,7 +375,7 @@ export class GeometryGroupManager {
     const next: GeometryEntry[] = []
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i]
-      const dashed = (obj.kind === 'segment' || obj.kind === 'segments') && !!obj.dashed
+      const dashed = (obj.kind === 'curve' || obj.kind === 'segment' || obj.kind === 'segments') && !!obj.dashed
       const prev = this.entries[i]
       if (prev && prev.kind === obj.kind && prev.dashed === dashed) {
         this.updateObject(prev.object3d, obj, palette, pixelToWorld)
@@ -326,47 +404,37 @@ export class GeometryGroupManager {
     const geometry = object3d.geometry
 
     if (obj.kind === 'curve') {
-      const n = obj.points.length
-      const widths = computeCurveWidths(obj.points, pixelToWorld)
-      const pos = growAttribute(geometry, 'position', n * 2, 3)
-      fillRibbonPositions(pos, obj.points, widths)
-      // Only rebuild the index buffer when the point count actually changed
-      // (an asymptote split, not a plain resample) — same buffer-reuse idea
-      // as growAttribute, applied to topology instead of positions.
-      const expectedIndexCount = Math.max(0, n - 1) * 6
-      if (geometry.index?.count !== expectedIndexCount) {
-        geometry.setIndex(buildRibbonIndices(n))
+      if (obj.dashed) {
+        writeQuadChunks(geometry, dashedCurveChunks(obj.points, pixelToWorld), pixelToWorld(LINE_WIDTH_PX) / 2)
+      } else {
+        const n = obj.points.length
+        const widths = computeCurveWidths(obj.points, pixelToWorld)
+        const pos = growAttribute(geometry, 'position', n * 2, 3)
+        fillRibbonPositions(pos, obj.points, widths)
+        // Only rebuild the index buffer when the point count actually changed
+        // (an asymptote split, not a plain resample) — same buffer-reuse idea
+        // as growAttribute, applied to topology instead of positions.
+        const expectedIndexCount = Math.max(0, n - 1) * 6
+        if (geometry.index?.count !== expectedIndexCount) {
+          geometry.setIndex(buildRibbonIndices(n))
+        }
+        finishIndexedUpdate(geometry, expectedIndexCount)
       }
-      finishIndexedUpdate(geometry, expectedIndexCount)
       material.color?.setHex(themedColor(obj.color, palette.curve, palette))
     } else if (obj.kind === 'segment') {
-      const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const chunks: [Vec2, Vec2][] = obj.dashed
         ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
         : [[obj.from, obj.to]]
-      const pos = growAttribute(geometry, 'position', chunks.length * 4, 3)
-      chunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth))
-      const expectedIndexCount = chunks.length * 6
-      if (geometry.index?.count !== expectedIndexCount) {
-        geometry.setIndex(buildQuadIndices(chunks.length))
-      }
-      finishIndexedUpdate(geometry, expectedIndexCount)
+      writeQuadChunks(geometry, chunks, pixelToWorld(LINE_WIDTH_PX) / 2)
       material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'segments') {
-      const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const dashPeriod = dashLen + pixelToWorld(GAP_SIZE_PX)
       const allChunks: [Vec2, Vec2][] = obj.dashed
         ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen))
         : obj.pairs
-      const pos = growAttribute(geometry, 'position', allChunks.length * 4, 3)
-      allChunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth))
-      const expectedIndexCount = allChunks.length * 6
-      if (geometry.index?.count !== expectedIndexCount) {
-        geometry.setIndex(buildQuadIndices(allChunks.length))
-      }
-      finishIndexedUpdate(geometry, expectedIndexCount)
+      writeQuadChunks(geometry, allChunks, pixelToWorld(LINE_WIDTH_PX) / 2)
       material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'region') {
       const n = obj.triangles.length
@@ -386,6 +454,9 @@ export class GeometryGroupManager {
     if (obj.kind === 'curve') {
       const n = obj.points.length
       if (n < 2) return null
+      if (obj.dashed) {
+        return buildQuadMesh(dashedCurveChunks(obj.points, pixelToWorld), pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.curve, palette))
+      }
       const widths = computeCurveWidths(obj.points, pixelToWorld)
       const positions = new Float32Array(n * 2 * 3)
       fillRibbonPositions(positions, obj.points, widths)
@@ -403,38 +474,20 @@ export class GeometryGroupManager {
     }
 
     if (obj.kind === 'segment') {
-      const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const chunks: [Vec2, Vec2][] = obj.dashed
         ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
         : [[obj.from, obj.to]]
-      if (chunks.length === 0) return null
-      const positions = new Float32Array(chunks.length * 4 * 3)
-      chunks.forEach(([from, to], i) => fillStraightQuad(positions, i * 4, from, to, halfWidth))
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      geometry.setIndex(buildQuadIndices(chunks.length))
-      finishIndexedUpdate(geometry, chunks.length * 6)
-      const color = themedColor(obj.color, palette.segment, palette)
-      return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }))
+      return buildQuadMesh(chunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette))
     }
 
     if (obj.kind === 'segments') {
-      const halfWidth = pixelToWorld(LINE_WIDTH_PX) / 2
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const dashPeriod = dashLen + pixelToWorld(GAP_SIZE_PX)
       const allChunks: [Vec2, Vec2][] = obj.dashed
         ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen))
         : obj.pairs
-      if (allChunks.length === 0) return null
-      const positions = new Float32Array(allChunks.length * 4 * 3)
-      allChunks.forEach(([from, to], i) => fillStraightQuad(positions, i * 4, from, to, halfWidth))
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      geometry.setIndex(buildQuadIndices(allChunks.length))
-      finishIndexedUpdate(geometry, allChunks.length * 6)
-      const color = themedColor(obj.color, palette.segment, palette)
-      return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }))
+      return buildQuadMesh(allChunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette))
     }
 
     if (obj.kind === 'region') {

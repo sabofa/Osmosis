@@ -269,6 +269,159 @@ describe('GeometryGroupManager', () => {
     expect(mesh.geometry.drawRange.count / 6).toBe(2) // exactly one quad per pair
   })
 
+  describe('a dashed curve', () => {
+    // The mesh's quads, each as its x and y extent; a dash of a curve is several quads end to end, one per
+    // stretch of polyline it covers, so a dash is a run of quads whose extents touch
+    function quadsOf(mesh: THREE.Mesh) {
+      const positions = mesh.geometry.getAttribute('position').array
+      const quadCount = mesh.geometry.drawRange.count / 6
+      const quads: { xs: number[]; ys: number[] }[] = []
+      for (let q = 0; q < quadCount; q++) {
+        const xs = [0, 1, 2, 3].map((v) => positions[(q * 4 + v) * 3])
+        const ys = [0, 1, 2, 3].map((v) => positions[(q * 4 + v) * 3 + 1])
+        quads.push({ xs, ys })
+      }
+      return quads
+    }
+
+    // the runs of consecutive quads along x: [start, end] of each dash
+    function dashesAlongX(mesh: THREE.Mesh): [number, number][] {
+      const spans = quadsOf(mesh)
+        .map((q) => [Math.min(...q.xs), Math.max(...q.xs)] as [number, number])
+        .sort((a, b) => a[0] - b[0])
+      const dashes: [number, number][] = []
+      for (const span of spans) {
+        const last = dashes[dashes.length - 1]
+        if (last && span[0] - last[1] < 1e-9) last[1] = Math.max(last[1], span[1])
+        else dashes.push([span[0], span[1]])
+      }
+      return dashes
+    }
+
+    const along = (n: number, length: number): Vec2[] => Array.from({ length: n }, (_, i) => ({ x: (length * i) / (n - 1), y: 0 }))
+
+    it('is drawn as dashes with gaps between them, not one solid ribbon', () => {
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points: along(101, 5), dashed: true, color: null }], palette, pixelToWorld)
+      const mesh = mgr.group.children[0] as THREE.Mesh
+      const dashes = dashesAlongX(mesh)
+      // 5 units at a 7 px dash and a 5 px gap, 0.01 units to a pixel: a period of 0.12, so a dash starts at each
+      // multiple of it up to 4.92 (42 of them), the last ending at 4.99, short of the end
+      expect(dashes).toHaveLength(42)
+      for (const [start, end] of dashes) expect(end - start).toBeCloseTo(0.07, 5)
+      for (let i = 0; i < dashes.length - 1; i++) expect(dashes[i + 1][0] - dashes[i][1]).toBeCloseTo(0.05, 5)
+      expect(dashes[0][0]).toBeCloseTo(0, 5)
+      // a set of quads, each of its own four vertices, at least one to a dash: not the solid curve's ribbon
+      // of two vertices a point, whose 100 segments are 600 indices that no gap interrupts
+      expect(mesh.geometry.drawRange.count % 6).toBe(0)
+      expect(quadsOf(mesh).length).toBeGreaterThanOrEqual(dashes.length)
+      const solid = new GeometryGroupManager()
+      solid.update([{ kind: 'curve', points: along(101, 5), color: null }], palette, pixelToWorld)
+      expect((solid.group.children[0] as THREE.Mesh).geometry.drawRange.count).toBe(100 * 6)
+    })
+
+    it('runs one dash and gap pattern along the whole polyline, whatever its vertex spacing', () => {
+      const few = new GeometryGroupManager()
+      few.update([{ kind: 'curve', points: along(2, 5), dashed: true, color: null }], palette, pixelToWorld)
+      const many = new GeometryGroupManager()
+      many.update([{ kind: 'curve', points: along(1001, 5), dashed: true, color: null }], palette, pixelToWorld)
+      const a = dashesAlongX(few.group.children[0] as THREE.Mesh)
+      const b = dashesAlongX(many.group.children[0] as THREE.Mesh)
+      expect(b).toHaveLength(a.length)
+      a.forEach(([start, end], i) => {
+        expect(b[i][0]).toBeCloseTo(start, 5)
+        expect(b[i][1]).toBeCloseTo(end, 5)
+      })
+    })
+
+    it('follows the curve round a bend and keeps the dash weight of a dashed segment', () => {
+      const mgr = new GeometryGroupManager()
+      // a quarter circle of radius 3 and then a straight run off it
+      const arc: Vec2[] = Array.from({ length: 121 }, (_, i) => ({ x: 3 * Math.cos((Math.PI / 2) * (i / 120)), y: 3 * Math.sin((Math.PI / 2) * (i / 120)) }))
+      const points = [...arc, { x: 0, y: 6 }, { x: -3, y: 6 }]
+      mgr.update([{ kind: 'curve', points, dashed: true, color: null }], palette, pixelToWorld)
+      const mesh = mgr.group.children[0] as THREE.Mesh
+      const halfWidth = pixelToWorld(2.5) / 2
+      const near = (x: number, y: number) => {
+        let best = Infinity
+        for (let i = 0; i + 1 < points.length; i++) {
+          const [a, b] = [points[i], points[i + 1]]
+          const dx = b.x - a.x
+          const dy = b.y - a.y
+          const lenSq = dx * dx + dy * dy
+          const t = Math.max(0, Math.min(1, lenSq === 0 ? 0 : ((x - a.x) * dx + (y - a.y) * dy) / lenSq))
+          best = Math.min(best, Math.hypot(x - (a.x + dx * t), y - (a.y + dy * t)))
+        }
+        return best
+      }
+      const quads = quadsOf(mesh)
+      expect(quads.length).toBeGreaterThan(10)
+      let drawn = 0
+      for (const q of quads) {
+        // every corner of every quad is within half the weight of the polyline, the weight of a dashed segment
+        q.xs.forEach((x, v) => expect(near(x, q.ys[v])).toBeLessThan(halfWidth + 1e-5))
+        expect(Math.hypot(q.xs[0] - q.xs[1], q.ys[0] - q.ys[1])).toBeCloseTo(2 * halfWidth, 5)
+        // a quad's length: from the middle of its start edge to the middle of its end edge
+        drawn += Math.hypot((q.xs[2] + q.xs[3] - q.xs[0] - q.xs[1]) / 2, (q.ys[2] + q.ys[3] - q.ys[0] - q.ys[1]) / 2)
+      }
+      // and the dashes cover 7 of every 12 px along the polyline, from its start, with the gaps between them left out
+      let length = 0
+      for (let i = 0; i + 1 < points.length; i++) length += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y)
+      const period = 0.12
+      const periods = Math.floor(length / period)
+      expect(drawn).toBeCloseTo(periods * 0.07 + Math.min(0.07, length - periods * period), 3)
+    })
+
+    it('reflects new points after an in-place update, and rebuilds when it becomes solid', () => {
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points: along(5, 1), dashed: true, color: null }], palette, pixelToWorld)
+      const before = mgr.group.children[0] as THREE.Mesh
+      // far from where it was, and much longer, so the buffers must grow and none of the old data may show
+      const moved: Vec2[] = Array.from({ length: 50 }, (_, i) => ({ x: 100 + i * 0.1, y: 100 }))
+      mgr.update([{ kind: 'curve', points: moved, dashed: true, color: null }], palette, pixelToWorld)
+      const after = mgr.group.children[0] as THREE.Mesh
+      expect(after).toBe(before)
+      for (const q of quadsOf(after)) {
+        for (const x of q.xs) expect(x).toBeGreaterThan(99.9)
+        for (const y of q.ys) expect(Math.abs(y - 100)).toBeLessThan(pixelToWorld(2.5))
+      }
+      mgr.update([{ kind: 'curve', points: moved, color: null }], palette, pixelToWorld)
+      expect(mgr.group.children[0]).not.toBe(before)
+      expect((mgr.group.children[0] as THREE.Mesh).geometry.drawRange.count).toBe((moved.length - 1) * 6)
+    })
+
+    it('bounds its dashes however long the curve is in world units, and makes fewer of them zoomed out', () => {
+      const far = along(2, 5000)
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points: far, dashed: true, color: null }], palette, pixelToWorld)
+      const dashes = dashesAlongX(mgr.group.children[0] as THREE.Mesh).length
+      // 5000 units is some 40,000 dashes at this zoom; the backstop (as for a segment) stops at 2000
+      expect(dashes).toBe(2000)
+      const zoomedOut = new GeometryGroupManager()
+      zoomedOut.update([{ kind: 'curve', points: far, dashed: true, color: null }], palette, (px) => px * 5)
+      expect(dashesAlongX(zoomedOut.group.children[0] as THREE.Mesh).length).toBeLessThan(dashes / 10)
+    })
+  })
+
+  // The legacy triangle region (the old marching-squares path) and a band both reach the renderer as this fill.
+  it('draws a triangle fill as the triangles given, behind the curves, translucent', () => {
+    const mgr = new GeometryGroupManager()
+    const triangles: Vec2[] = [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 3 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }]
+    mgr.update([{ kind: 'region', triangles, color: null }], palette, pixelToWorld)
+    const mesh = mgr.group.children[0] as THREE.Mesh
+    const positions = mesh.geometry.getAttribute('position').array
+    triangles.forEach((p, i) => {
+      expect(positions[i * 3]).toBe(p.x)
+      expect(positions[i * 3 + 1]).toBe(p.y)
+      expect(positions[i * 3 + 2]).toBeCloseTo(-0.05, 6)
+    })
+    expect(mesh.geometry.getAttribute('position').count).toBe(6)
+    expect(mesh.geometry.index).toBeNull()
+    const material = mesh.material as THREE.MeshBasicMaterial
+    expect(material.transparent).toBe(true)
+    expect(material.opacity).toBeCloseTo(0.18, 6)
+  })
+
   it('shrinks the draw range without needing to reallocate when the object count decreases', () => {
     const mgr = new GeometryGroupManager()
     mgr.update(

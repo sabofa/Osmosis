@@ -77,7 +77,7 @@ describe('sceneToSvg', () => {
       objects: [
         { kind: 'point', label: null, position: { x: 1, y: 1 } },
         { kind: 'segment', from: { x: 0, y: 0 }, to: { x: 3, y: 4 }, dashed: true },
-        { kind: 'region', triangles: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },
+        { kind: 'triangles', triangles: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },
       ],
       errors: [],
       regression: null,

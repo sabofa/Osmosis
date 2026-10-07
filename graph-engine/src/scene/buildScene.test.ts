@@ -234,8 +234,8 @@ describe('chained inequality regions', () => {
   it('fills exactly the intersection band for "7 < x < 12" — a point inside is covered, one outside is not', () => {
     const { scene } = build('7 < x < 12')
     expect(scene.errors).toEqual([])
-    const region = scene.objects.find((o) => o.kind === 'region')
-    if (region?.kind !== 'region') throw new Error('unreachable')
+    const region = scene.objects.find((o) => o.kind === 'triangles')
+    if (region?.kind !== 'triangles') throw new Error('unreachable')
     expect(region.triangles.length).toBeGreaterThan(0)
     // This would fail if the chain silently fell back to a single bound
     // (e.g. only "x < 12"), or to a union instead of an intersection,
@@ -247,8 +247,8 @@ describe('chained inequality regions', () => {
 
   it('fills an annulus for "1 <= x^2 + y^2 <= 4" — inside the ring is covered, the center and far outside are not', () => {
     const { scene } = build('1 <= x^2 + y^2 <= 4')
-    const region = scene.objects.find((o) => o.kind === 'region')
-    if (region?.kind !== 'region') throw new Error('unreachable')
+    const region = scene.objects.find((o) => o.kind === 'triangles')
+    if (region?.kind !== 'triangles') throw new Error('unreachable')
     // Off-axis probe points, deliberately not on x=0/y=0: the inner circle
     // (radius 1) passes exactly through grid corners on the axes at this
     // spec's bounds/resolution, which makes marching squares emit
@@ -697,7 +697,7 @@ function marksOf(scene: SceneOfResult) {
 }
 
 function regionTriangles(scene: SceneOfResult) {
-  return scene.objects.flatMap((o) => (o.kind === 'region' ? o.triangles : []))
+  return scene.objects.flatMap((o) => (o.kind === 'triangles' ? o.triangles : []))
 }
 
 function segmentPairs(scene: SceneOfResult) {

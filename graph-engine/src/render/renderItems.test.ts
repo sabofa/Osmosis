@@ -1,10 +1,56 @@
 import { describe, expect, it } from 'vitest'
 import { chainOf } from '../scene/chains'
-import type { SceneObject } from '../scene/types'
-import { toRenderItems } from './renderItems'
+import type { Chain, SceneObject, Vec2 } from '../scene/types'
+import { type GeometryItem, toRenderItems } from './renderItems'
 
 const bounds = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
 const id = (object: string) => ({ statement: 0, object })
+
+// A regular polygon whose area is exactly pi r^2: its circumradius is stretched to make it so. An annulus
+// of two of them then has the area 3 pi to rounding, so the triangulation is held to the figure the
+// contour says and not to the polygon's own deficit from the circle it approximates.
+function disc(cx: number, cy: number, r: number, options: { n?: number; clockwise?: boolean } = {}): Chain {
+  const n = options.n ?? 360
+  const circumradius = r * Math.sqrt((2 * Math.PI) / (n * Math.sin((2 * Math.PI) / n)))
+  const sense = options.clockwise ? -1 : 1
+  const points = Array.from({ length: n }, (_, i) => ({ x: cx + circumradius * Math.cos((sense * 2 * Math.PI * i) / n), y: cy + circumradius * Math.sin((sense * 2 * Math.PI * i) / n) }))
+  return chainOf(points, points.map((_, i) => i), true)
+}
+
+const region = (outline: Chain[], extra: { color?: string | null } = {}): SceneObject => ({ kind: 'region', id: id('region'), outline, boundary: [], ...extra })
+
+// The twice-signed area of each triangle, summed: positive when the triangles wind counter-clockwise (the
+// front face to the camera), and equal to the sum of absolute areas only when none of them is flipped.
+function areas(triangles: readonly Vec2[]): { signed: number; absolute: number } {
+  let signed = 0
+  let absolute = 0
+  for (let i = 0; i < triangles.length; i += 3) {
+    const a = ((triangles[i + 1].x - triangles[i].x) * (triangles[i + 2].y - triangles[i].y) - (triangles[i + 2].x - triangles[i].x) * (triangles[i + 1].y - triangles[i].y)) / 2
+    signed += a
+    absolute += Math.abs(a)
+  }
+  return { signed, absolute }
+}
+
+function covers(triangles: readonly Vec2[], p: Vec2): boolean {
+  for (let i = 0; i < triangles.length; i += 3) {
+    const [a, b, c] = [triangles[i], triangles[i + 1], triangles[i + 2]]
+    const d1 = (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
+    const d2 = (p.x - c.x) * (b.y - c.y) - (b.x - c.x) * (p.y - c.y)
+    const d3 = (p.x - a.x) * (c.y - a.y) - (c.x - a.x) * (p.y - a.y)
+    if (!((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) return true
+  }
+  return false
+}
+
+// The one triangle fill an outline becomes.
+function fillOf(object: SceneObject): Extract<GeometryItem, { kind: 'region' }> {
+  const { geometry } = toRenderItems([object], bounds)
+  expect(geometry).toHaveLength(1)
+  const item = geometry[0]
+  if (item.kind !== 'region') throw new Error('expected a region fill')
+  return item
+}
 
 describe('toRenderItems', () => {
   it('draws each chain of a curve as its own ribbon, closing closed chains', () => {
@@ -61,5 +107,158 @@ describe('toRenderItems', () => {
     const { geometry, misc } = toRenderItems([mark], bounds)
     expect(geometry).toHaveLength(0)
     expect(misc).toEqual([mark])
+  })
+
+  describe('dashed curves', () => {
+    it('carries a curve\'s dashed flag onto each ribbon it becomes', () => {
+      const curve: SceneObject = {
+        kind: 'curve', id: id('boundary.0'), breaks: [], dashed: true, color: 'red',
+        chains: [chainOf([{ x: 0, y: 0 }, { x: 1, y: 1 }], [0, 1]), chainOf([{ x: 2, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 1 }], [0, 1, 2], true)],
+      }
+      const { geometry } = toRenderItems([curve], bounds)
+      expect(geometry).toHaveLength(2)
+      for (const item of geometry) {
+        if (item.kind !== 'curve') throw new Error('expected a curve ribbon')
+        expect(item.dashed).toBe(true)
+        expect(item.color).toBe('red')
+      }
+    })
+    it('leaves a plain curve solid', () => {
+      const plain: SceneObject = { kind: 'curve', id: id('curve'), breaks: [], chains: [chainOf([{ x: 0, y: 0 }, { x: 1, y: 1 }], [0, 1])] }
+      const explicit: SceneObject = { kind: 'curve', id: id('curve'), breaks: [], dashed: false, chains: [chainOf([{ x: 0, y: 0 }, { x: 1, y: 1 }], [0, 1])] }
+      for (const object of [plain, explicit]) {
+        const [item] = toRenderItems([object], bounds).geometry
+        if (item.kind !== 'curve') throw new Error('expected a curve ribbon')
+        expect(item.dashed).toBeFalsy()
+      }
+    })
+  })
+
+  describe('region outlines', () => {
+    it('triangulates an annulus to the area 3 pi, whichever way either ring runs', () => {
+      for (const [outerClockwise, clockwise] of [[false, true], [false, false], [true, true], [true, false]]) {
+        const fill = fillOf(region([disc(0, 0, 2, { clockwise: outerClockwise }), disc(0, 0, 1, { clockwise })]))
+        expect(fill.triangles.length % 3).toBe(0)
+        const { signed, absolute } = areas(fill.triangles)
+        expect(Math.abs(absolute - 3 * Math.PI) / (3 * Math.PI)).toBeLessThan(1e-9)
+        // every triangle faces the camera, and none overlaps another or covers the hole
+        expect(Math.abs(signed - absolute) / absolute).toBeLessThan(1e-12)
+        expect(covers(fill.triangles, { x: 0, y: 0 })).toBe(false)
+        expect(covers(fill.triangles, { x: 0.5, y: 0.5 })).toBe(false)
+        expect(covers(fill.triangles, { x: 1.5, y: 0.2 })).toBe(true)
+        expect(covers(fill.triangles, { x: 2.5, y: 0 })).toBe(false)
+      }
+    })
+
+    it('fills a ring in a hole in a ring by even-odd depth, whatever order the rings come in', () => {
+      const outer = disc(0, 0, 3)
+      const hole = disc(0, 0, 2)
+      const island = disc(0, 0, 1)
+      // and with the rings running either way: the direction of a ring means nothing to an even-odd fill
+      const mixed = [disc(0, 0, 3, { clockwise: true }), disc(0, 0, 2), disc(0, 0, 1, { clockwise: true })]
+      for (const outline of [[outer, hole, island], [island, hole, outer], [hole, island, outer], mixed]) {
+        const fill = fillOf(region(outline))
+        const { signed, absolute } = areas(fill.triangles)
+        // 9 pi - 4 pi + pi
+        expect(Math.abs(absolute - 6 * Math.PI) / (6 * Math.PI)).toBeLessThan(1e-9)
+        expect(Math.abs(signed - absolute) / absolute).toBeLessThan(1e-12)
+        expect(covers(fill.triangles, { x: 0.3, y: 0.2 })).toBe(true)
+        expect(covers(fill.triangles, { x: 1.5, y: 0 })).toBe(false)
+        expect(covers(fill.triangles, { x: 2.5, y: 0 })).toBe(true)
+        expect(covers(fill.triangles, { x: 3.5, y: 0 })).toBe(false)
+      }
+    })
+
+    it('gives each hole to the ring that holds it, not to another that stands beside it', () => {
+      // a disc with a hole on the left, a bare disc on the right, and a small hole in a third, far away: the
+      // hole of the left disc must not be taken out of the right one, whose own area would then be wrong
+      const outline = [disc(-5, 0, 2), disc(5, 0, 2), disc(-5, 0, 1), disc(0, 6, 1.5), disc(0, 6, 0.5)]
+      const fill = fillOf(region(outline))
+      // (4 - 1) pi + 4 pi + (2.25 - 0.25) pi
+      const expected = 9 * Math.PI
+      expect(Math.abs(areas(fill.triangles).absolute - expected) / expected).toBeLessThan(1e-9)
+      expect(covers(fill.triangles, { x: -5, y: 0 })).toBe(false)
+      expect(covers(fill.triangles, { x: 5, y: 0 })).toBe(true)
+      expect(covers(fill.triangles, { x: 0, y: 6 })).toBe(false)
+      expect(covers(fill.triangles, { x: 0, y: 7 })).toBe(true)
+    })
+
+    it('nests hundreds of rings correctly: a square with a lattice of square holes, each with an island in it', () => {
+      const square = (cx: number, cy: number, half: number, clockwise = false): Chain => {
+        const corners = [{ x: cx - half, y: cy - half }, { x: cx + half, y: cy - half }, { x: cx + half, y: cy + half }, { x: cx - half, y: cy + half }]
+        if (clockwise) corners.reverse()
+        return chainOf(corners, [0, 1, 2, 3], true)
+      }
+      const outline: Chain[] = [square(0, 0, 10)]
+      for (let i = 0; i < 20; i++) {
+        for (let j = 0; j < 20; j++) outline.push(square(-9.5 + i, -9.5 + j, 0.3, (i + j) % 2 === 0), square(-9.5 + i, -9.5 + j, 0.1))
+      }
+      // a shuffle that is the same every time, so no ring's holder comes before it by luck
+      let seed = 12345
+      const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+      for (let k = outline.length - 1; k > 0; k--) {
+        const m = Math.floor(next() * (k + 1))
+        ;[outline[k], outline[m]] = [outline[m], outline[k]]
+      }
+      const fill = fillOf(region(outline))
+      // 400 - 400 * 0.36 + 400 * 0.04
+      expect(Math.abs(areas(fill.triangles).absolute - 272) / 272).toBeLessThan(1e-9)
+      expect(covers(fill.triangles, { x: 0.5, y: 0.5 })).toBe(true)
+      expect(covers(fill.triangles, { x: 0.7, y: 0.5 })).toBe(false)
+      expect(covers(fill.triangles, { x: 0, y: 0 })).toBe(true)
+    })
+
+    it('keeps a hole that touches its ring at a vertex a hole of it', () => {
+      const outer = chainOf([{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }], [0, 1, 2, 3], true)
+      // a diamond whose first vertex lies on the outer ring's right edge, where a ray cast to the right from it
+      // crosses nothing and would call it outside: only the vertices it does not share with the ring decide
+      const diamond = chainOf([{ x: 4, y: 2 }, { x: 3, y: 3 }, { x: 2, y: 2 }, { x: 3, y: 1 }], [0, 1, 2, 3], true)
+      const fill = fillOf(region([outer, diamond]))
+      expect(areas(fill.triangles).absolute).toBeCloseTo(14, 12)
+      expect(covers(fill.triangles, { x: 3, y: 2 })).toBe(false)
+      expect(covers(fill.triangles, { x: 1, y: 2 })).toBe(true)
+    })
+
+    it('leaves out a ring with a vertex that is not a number, and fills the others', () => {
+      const bad = chainOf([{ x: 0, y: 0 }, { x: Number.NaN, y: 1 }, { x: 1, y: 0 }], [0, 1, 2], true)
+      const fill = fillOf(region([disc(0, 0, 1), bad]))
+      expect(Math.abs(areas(fill.triangles).absolute - Math.PI) / Math.PI).toBeLessThan(1e-9)
+    })
+
+    it('fills a single ring, an L shape, as it stands', () => {
+      const l = chainOf([{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 2 }, { x: 0, y: 2 }], [0, 1, 2, 3, 4, 5], true)
+      const fill = fillOf(region([l]))
+      expect(areas(fill.triangles).absolute).toBeCloseTo(3, 12)
+      expect(covers(fill.triangles, { x: 1.5, y: 1.5 })).toBe(false)
+      expect(covers(fill.triangles, { x: 1.5, y: 0.5 })).toBe(true)
+    })
+
+    it('carries the colour onto the fill, and draws nothing for an empty outline or a ring of two vertices', () => {
+      expect(fillOf(region([disc(0, 0, 1)], { color: 'teal' })).color).toBe('teal')
+      const two = chainOf([{ x: 0, y: 0 }, { x: 1, y: 1 }], [0, 1], true)
+      expect(toRenderItems([region([])], bounds).geometry).toHaveLength(0)
+      expect(toRenderItems([region([two])], bounds).geometry).toHaveLength(0)
+      // the two-vertex ring does not make the ring it lies in a hole or break its fill
+      const fill = fillOf(region([disc(0, 0, 1), two]))
+      expect(Math.abs(areas(fill.triangles).absolute - Math.PI) / Math.PI).toBeLessThan(1e-9)
+    })
+
+    it('does not draw a region\'s boundary: the boundary curves are objects of their own', () => {
+      const outline = [disc(0, 0, 1)]
+      const withBoundary: SceneObject = { kind: 'region', id: id('region'), outline, boundary: [id('boundary.0')] }
+      const { geometry, misc } = toRenderItems([withBoundary], bounds)
+      expect(geometry.map((g) => g.kind)).toEqual(['region'])
+      expect(misc).toEqual([])
+    })
+  })
+
+  describe('the legacy triangle region', () => {
+    it('is still drawn as its triangles, with its colour', () => {
+      const triangles = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]
+      const legacy: SceneObject = { kind: 'triangles', triangles, color: 'green' }
+      const { geometry, misc } = toRenderItems([legacy], bounds)
+      expect(misc).toEqual([])
+      expect(geometry).toEqual([{ kind: 'region', triangles, color: 'green' }])
+    })
   })
 })

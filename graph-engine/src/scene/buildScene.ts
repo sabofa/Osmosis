@@ -312,7 +312,7 @@ function buildRegion(statement: Statement & { kind: 'region' }, bounds: Bounds, 
   const { triangles, boundarySegments } = filterTraced(traced.triangles, traced.boundarySegments, keepAt)
   const dashed = statement.op === '<' || statement.op === '>'
   const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'region', triangles, color: statement.color })
+  if (triangles.length > 0) objects.push({ kind: 'triangles', triangles, color: statement.color })
   if (boundarySegments.length > 0) {
     const pairs: [Vec2, Vec2][] = boundarySegments.map(([from, to]) => [from, to])
     objects.push({ kind: 'segments', pairs, dashed, color: statement.color })
@@ -350,7 +350,7 @@ function buildRegionChain(statement: Statement & { kind: 'regionChain' }, bounds
   const traced = traceImplicitRegion(f, bounds, resolution)
   const { triangles, boundarySegments } = filterTraced(traced.triangles, traced.boundarySegments, keepAt)
   const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'region', triangles, color: statement.color })
+  if (triangles.length > 0) objects.push({ kind: 'triangles', triangles, color: statement.color })
 
   if (boundarySegments.length > 0) {
     // Strictness can differ per side (e.g. "-2 <= x < 5"), so each traced
