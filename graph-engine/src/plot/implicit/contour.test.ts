@@ -718,12 +718,10 @@ describe('implicit curves: the acceptance cases', () => {
     // The lines cross at (pi/2 + pi j, pi n) for j + n even. They run along the diagonals of the leaves, so the corners never show four sign
     // changes; the critical points do. Each node is an X: the curve passes through it and four arms meet there, and each line runs straight
     // through every node it meets, from one edge of the root to the other, so no cell of the lattice is outlined.
-    const nodes = (onGridLine: boolean) => {
+    const nodes = () => {
       const out: Vec2[] = []
       for (let j = -3; j <= 3; j++) {
-        for (let n = -3; n <= 3; n++) {
-          if (Math.abs(j + n) % 2 === 0 && (onGridLine || n !== 0)) out.push({ x: Math.PI / 2 + Math.PI * j, y: Math.PI * n })
-        }
+        for (let n = -3; n <= 3; n++) if (Math.abs(j + n) % 2 === 0) out.push({ x: Math.PI / 2 + Math.PI * j, y: Math.PI * n })
       }
       return out
     }
@@ -734,8 +732,8 @@ describe('implicit curves: the acceptance cases', () => {
       expect(worstPx(t)).toBeLessThan(0.5)
       expect(firstCrossing(t.chains)).toBeNull()
       expect(t.capped).toBe(false)
-      expect(nodes(true).length).toBe(25)
-      for (const at of nodes(true)) {
+      expect(nodes().length).toBe(25)
+      for (const at of nodes()) {
         expect(curveDistPx(t.chains, at)).toBeLessThan(0.5)
         expect(arms(t.chains, nearestVertex(t.chains, at), 1e-12)).toBe(4)
       }
@@ -744,14 +742,18 @@ describe('implicit curves: the acceptance cases', () => {
       expect(t.chains.every((c) => !c.closed && isStraight(c))).toBe(true)
       expect(t.chains.length).toBe(19)
 
-      // the default view: the nodes of the x-axis (y = 0, a grid line, the edge of the leaves above and below) are not found from a critical
-      // point, which a leaf holds only inside it: they are drawn from the corners, within a px of the node (a known limit); the others are X
+      // The default view, the acceptance row's own: the nodes (pi/2 + 2 pi k, 0) are on y = 0, a grid line, on the edge of the leaf above and
+      // the leaf below. Each is solved once, in the box of the two leaves, and every one of the 25 is an X, the lines straight through them.
       const d = trace('sin(x) - cos(y)', { tuning })
       expect(worstPx(d)).toBeLessThan(0.5)
       expect(firstCrossing(d.chains)).toBeNull()
-      expect(nodes(false).length).toBe(22)
-      for (const at of nodes(false)) expect(arms(d.chains, nearestVertex(d.chains, at), 1e-12)).toBe(4)
-      for (const at of nodes(true)) expect(curveDistPx(d.chains, at)).toBeLessThan(2.5)
+      for (const at of nodes()) {
+        expect(curveDistPx(d.chains, at)).toBeLessThan(0.5)
+        expect(arms(d.chains, nearestVertex(d.chains, at), 1e-12)).toBe(4)
+      }
+      expect(d.contour.stats.critical).toBeGreaterThanOrEqual(25)
+      expect(d.chains.length).toBe(20)
+      expect(d.chains.every((c) => !c.closed && isStraight(c))).toBe(true)
     }
   })
 
@@ -1140,6 +1142,92 @@ describe('crossings the corners cannot show', () => {
   })
 })
 
+describe('crossings on a grid line', () => {
+  // y = 0 is a grid line of the default view, the edge of the leaf above and the leaf below: a node on it is solved once, in the box of the two
+  it('draws a node exactly on y = 0 as an X: (x - 1)^2 = y^2 and y^2 = (x - 2)^2 (x - 1) in the default view', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const lines = trace('(x - 1)^2 - y^2', { tuning })
+      expect(lines.contour.stats.critical).toBe(1)
+      expect(curveDistPx(lines.chains, { x: 1, y: 0 })).toBeLessThan(0.5)
+      expect(arms(lines.chains, nearestVertex(lines.chains, { x: 1, y: 0 }), 1e-12)).toBe(4)
+      // two straight lines, each whole through the node (not two V's)
+      expect(lines.chains.length).toBe(2)
+      expect(lines.chains.every((c) => !c.closed && isStraight(c))).toBe(true)
+      expect(firstCrossing(lines.chains)).toBeNull()
+      expect(worstPx(lines)).toBeLessThan(0.5)
+
+      // the loop and the branch of the curve meet at the node, which is passed twice by one chain; no pair of arms bounces
+      const loop = trace('y^2 - (x - 2)^2*(x - 1)', { tuning })
+      expect(loop.contour.stats.critical).toBe(1)
+      expect(curveDistPx(loop.chains, { x: 2, y: 0 })).toBeLessThan(0.5)
+      expect(arms(loop.chains, nearestVertex(loop.chains, { x: 2, y: 0 }), 1e-12)).toBe(4)
+      expect(firstCrossing(loop.chains)).toBeNull()
+      expect(worstPx(loop)).toBeLessThan(0.5)
+    }
+  })
+
+  it('draws a node on x = 0, and one at the corner of four leaves that is not a zero of the corners, as an X', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const vertical = trace('(y - 1)^2 - x^2', { tuning })
+      expect(vertical.contour.stats.critical).toBe(1)
+      expect(arms(vertical.chains, nearestVertex(vertical.chains, { x: 0, y: 1 }), 1e-12)).toBe(4)
+      expect(vertical.chains.length).toBe(2)
+      expect(vertical.chains.every((c) => isStraight(c))).toBe(true)
+
+      // x^2 = 4 y^2 at the origin, the corner of four leaves; none of the corners on the boundary of their box is zero
+      const corner = trace('x^2 - 4*y^2', { tuning })
+      expect(corner.contour.stats.critical).toBe(1)
+      expect(arms(corner.chains, { x: 0, y: 0 }, 1e-12)).toBe(4)
+      expect(corner.chains.length).toBe(2)
+      expect(corner.chains.every((c) => isStraight(c))).toBe(true)
+      expect(worstPx(corner)).toBeLessThan(0.5)
+    }
+  })
+
+  it('solves a node on the edge between two leaves once, and each leaf draws its own two arms from the one node, with no root on the shared edge', () => {
+    const a = leaf(0, 1, 0, 1)
+    const b = leaf(0, 1, -1, 0)
+    const r = contour('(x - 0.5)^2 - y^2', [a, b])
+    expect(r.stats.critical).toBe(1)
+    expect(r.stats.saddles).toBe(1)
+    expect(r.segments.length).toBe(4)
+    // one node object, at the grid line exactly
+    const node = r.segments[0].b
+    expect(node).toEqual({ x: 0.5, y: 0 })
+    expect(r.segments.every((s) => s.b === node)).toBe(true)
+    // the arms in a leaf are the ones that run into it, to roots on its own edges
+    const inside = (s: { a: Vec2 }, l: Leaf) => s.a.x >= l.x0 && s.a.x <= l.x1 && s.a.y >= l.y0 && s.a.y <= l.y1
+    expect(r.segments.filter((s) => s.a.y > 0).length).toBe(2)
+    expect(r.segments.filter((s) => s.a.y < 0).length).toBe(2)
+    for (const s of r.segments) expect(inside(s, s.a.y > 0 ? a : b)).toBe(true)
+    expect(pairs(r).sort()).toEqual(['0,-0.5-0.5,0', '0,0.5-0.5,0', '0.5,0-1,-0.5', '0.5,0-1,0.5'])
+    // and none of them runs along the shared edge
+    expect(r.segments.some((s) => s.a.y === 0 && s.b.y === 0)).toBe(false)
+  })
+
+  it('solves a node at the corner of four leaves once: each leaf draws the one arm that runs into it', () => {
+    const leaves = [leaf(-1, 0, -1, 0), leaf(0, 1, -1, 0), leaf(-1, 0, 0, 1), leaf(0, 1, 0, 1)]
+    const r = contour('x^2 - 4*y^2', leaves)
+    expect(r.stats.critical).toBe(1)
+    expect(r.segments.length).toBe(4)
+    const node = r.segments[0].b
+    expect(node).toEqual({ x: 0, y: 0 })
+    expect(r.segments.every((s) => s.b === node)).toBe(true)
+    // the arms y = +-x/2 end at (+-1, +-0.5): one in each quadrant
+    expect(pairs(r).sort()).toEqual(['-1,-0.5-0,0', '-1,0.5-0,0', '0,0-1,-0.5', '0,0-1,0.5'])
+    // a leaf that is missing from the box (the quadtree dropped it) leaves the node to the corners
+    const three = contour('x^2 - 4*y^2', leaves.slice(0, 3))
+    expect(three.stats.critical).toBe(0)
+  })
+
+  it('leaves a node to the corners where the box boundary has a corner that is exactly zero (y^2 = x^2 at the origin)', () => {
+    const t = trace('y^2 - x^2')
+    expect(t.contour.stats.critical).toBe(0)
+    expect(t.chains.length).toBe(2)
+    expect(arms(t.chains, { x: 0, y: 0 }, 1e-12)).toBe(4)
+  })
+})
+
 describe('Crossings: gaps, cuts and arms', () => {
   it('finds a root beside a pole on an edge that shows no sign change (1/x - y at y = 20: the pole at 0, the root at 0.05)', () => {
     const { cr, stats } = crossingsOf('1/x - y')
@@ -1196,6 +1284,36 @@ describe('Crossings: gaps, cuts and arms', () => {
     const low = ln.edge(ln.corner(-0.03, -14), ln.corner(0.03, -14), false)
     expect(low.roots.length).toBe(1)
     expect(Math.abs(low.roots[0].x - Math.exp(-14)) / Math.exp(-14)).toBeLessThan(1e-3)
+  })
+
+  it('does not look into a PARTIAL edge whose enclosure excludes zero: one twin evaluation, no root, and the leaf is told it holds a gap', () => {
+    // ln x - y on [0, h] at y = 0.5: the twin has [-inf, ln h - 0.5], below zero
+    const h = 30 / 1024
+    const { cr, counter } = crossingsOf('ln(x) - y')
+    const info = cr.edge(cr.corner(0, 0.5), cr.corner(h, 0.5), false)
+    expect(info.roots).toEqual([])
+    expect(info.gap).toBe(true)
+    expect(counter.intervals).toBe(1)
+    // an edge that is infinite at both ends lies on a pole line: no twin at all
+    const { cr: pole, counter: pc } = crossingsOf('1/x - y')
+    const line = pole.edge(pole.corner(0, 1), pole.corner(0, 2), false)
+    expect(line.roots).toEqual([])
+    expect(line.gap).toBe(true)
+    expect(pc.intervals).toBe(0)
+  })
+
+  it('spends a few twin evaluations a leaf on y = ln x and y = 1/x, not dozens: the discard rule stops at a stretch with no zero', () => {
+    // contour stage only; before the rule: 54,991 for ln x and 147,462 for 1/x at FULL, 15,672 and 39,036 at COARSE
+    const ln = trace('ln(x) - y')
+    expect(ln.spent.intervals).toBeLessThan(2500)
+    expect(ln.chains.length).toBe(1)
+    expect(Math.min(...allVertices(ln.chains).map((p) => p.y))).toBe(-15)
+    const lnc = trace('ln(x) - y', { tuning: COARSE })
+    expect(lnc.spent.intervals).toBeLessThan(700)
+    const inv = trace('1/x - y')
+    expect(inv.spent.intervals).toBeLessThan(10000)
+    expect(inv.chains.length).toBe(2)
+    expect(Math.max(...allVertices(inv.chains).map((p) => Math.abs(p.y)))).toBe(15)
   })
 
   it('keeps the roots put on an edge, in order from the end with the smaller (x, y), and says they are arms', () => {
@@ -1255,6 +1373,31 @@ describe('pieces on defined ground', () => {
     const integral = contour('integral(t = 0 to x, 2 * t) + y - 0.5', [leaf(0, 1, 0, 1, UNKNOWN)])
     expect(integral.segments.length).toBe(1)
     expect(integral.stats.chordsRejected).toBe(0)
+  })
+
+  it('draws no chord across an undefined strip where an integral term makes every twin enclosure UNKNOWN: H at the middle of the piece is defined', () => {
+    // The same two branches with + integral(t = 0 to x, 0 * t): H is the same, and the twin says nothing anywhere, so the quadtree clears no
+    // cell and runs out of budget: the leaves are 4.7 or 9.4 px, and a chord across one is long and slanted (its middle can miss the strip).
+    for (const [tuning, w] of [
+      [FULL, 30 / 1024],
+      [COARSE, 30 / 256],
+    ] as const) {
+      const c = w / 2
+      const r = w * 0.35
+      const text = `sqrt((x - ${c.toFixed(12)})^2 - ${(r * r).toFixed(12)}) - y + integral(t = 0 to x, 0 * t)`
+      const t = trace(text, { tuning })
+      expect(new Set(t.leaves.map((l) => l.verdict))).toEqual(new Set([UNKNOWN]))
+      expect(t.chains.length).toBe(2)
+      expect(t.contour.stats.chordsRejected).toBeGreaterThanOrEqual(1)
+      for (const ch of t.chains) {
+        for (const [a, b] of segmentsOf(ch)) expect(Math.min(a.x, b.x) <= c - r && Math.max(a.x, b.x) >= c + r).toBe(false)
+      }
+    }
+    // and a curve with an integral term and no strip is drawn whole, the piece check costing a point for each piece
+    const whole = trace('integral(t = 0 to x, 0 * t) + x^2 + y^2 - 25', { tuning: COARSE })
+    expect(whole.chains.length).toBe(1)
+    expect(whole.chains[0].closed).toBe(true)
+    expect(whole.contour.stats.chordsRejected).toBe(0)
   })
 
   it('draws no false zero edge: a parabola through two adjacent corners is not zero between them', () => {

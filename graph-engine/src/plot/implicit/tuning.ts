@@ -89,6 +89,10 @@ export const CONTOUR = {
   // The most twin evaluations the subdivision of one edge may spend; past it what is still undecided is a gap (an
   // edge that is undefined or unbounded all along is not subdivided to the bottom).
   gapEvals: 128,
+  // In a leaf whose twin is UNKNOWN (an integral term anywhere in H) a piece is drawn only if H is defined at this many points evenly along
+  // it: the twin cannot vouch for the piece's box, and H at its middle alone misses a strip off the middle (a chord across a coarse leaf is
+  // slanted). 7 sees a strip wider than an eighth of the piece; these are scalar points, a few a piece, in the few leaves that have no better test.
+  chordSamples: 7,
   // A leaf the quadtree stopped halving only because the budget ran out ('budget') is contoured only up to this many px
   // on a side: a leaf of 679 px (a starved quadtree) is not a place to draw a chord. The chords of the leaves allowed are
   // true at their ends and off the curve by about (leaf size)^2 / (8 radius): 0.2 px for a leaf of 18.75 px on a circle
@@ -106,6 +110,10 @@ export const CRITICAL = {
   steps: 8,
   // The iterate has converged when a step moves it less than this many px.
   convergedPx: 2 ** -10,
+  // A node that comes to rest within this many px of an edge of the leaf (or past it: a node on a grid line is on the edge of the leaf either
+  // side of it) is taken to be on it and put exactly there; the node is then solved once, in the box of the leaves that share that edge or
+  // corner. 2^-8 px is four times the step it converged by, and far from the half px it is certified at.
+  edgeTolPx: 2 ** -8,
   // The X is certified by H at this many px from its centre along the bisector of each pair of adjacent arms: the four
   // signs must alternate. Two branches that only pass near each other (xy = e) alternate at a radius only if sqrt(2 e)
   // is under it, so a certified X is within half a px of both curves, which is the bound the chains are held to.
