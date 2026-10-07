@@ -146,18 +146,33 @@ export function hitTest(items: readonly HitItem[], at: Vec, tolerance: number): 
   return best
 }
 
-// One hovered id and one selected id, single-select. Each call says whether
-// anything changed, so the caller redraws only when it must.
+// One hovered id and a set of selected ids. Each call says whether anything
+// changed, so the caller redraws only when it must.
+//
+// The selection rules (shift is "additive"):
+//   - a plain click on an item selects only that item;
+//   - shift + click on an item toggles it in the set;
+//   - a plain click on empty space clears the set;
+//   - shift + click on empty space does nothing, so a slip of the hand while
+//     building a selection does not lose it;
+//   - `clear()` empties it.
 export class PointerSelection {
   private _hovered: string | null = null
-  private _selected: string | null = null
+  private _selected: readonly string[] = []
 
   get hovered(): string | null {
     return this._hovered
   }
 
-  get selected(): string | null {
+  // In the order added. A new array on every change, so one handed out earlier
+  // is never altered under its holder.
+  get selected(): readonly string[] {
     return this._selected
+  }
+
+  // The one added last, null for an empty set.
+  get primary(): string | null {
+    return this._selected.length === 0 ? null : this._selected[this._selected.length - 1]
   }
 
   hover(id: string | null): boolean {
@@ -166,14 +181,21 @@ export class PointerSelection {
     return true
   }
 
-  // Select `id`, or clear the selection on null.
-  click(id: string | null): boolean {
-    if (id === this._selected) return false
-    this._selected = id
+  // A click on `id` (null: on empty space). `additive`: shift was held.
+  click(id: string | null, additive = false): boolean {
+    if (id === null) return additive ? false : this.clear()
+    if (additive) {
+      this._selected = this._selected.includes(id) ? this._selected.filter((x) => x !== id) : [...this._selected, id]
+      return true
+    }
+    if (this._selected.length === 1 && this._selected[0] === id) return false
+    this._selected = [id]
     return true
   }
 
   clear(): boolean {
-    return this.click(null)
+    if (this._selected.length === 0) return false
+    this._selected = []
+    return true
   }
 }

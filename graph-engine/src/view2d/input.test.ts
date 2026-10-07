@@ -15,8 +15,8 @@ function make() {
   return new GestureRecognizer({ screen: () => SCREEN })
 }
 
-function ptr(id: number, x: number, y: number, t: number, kind: PointerKind = 'mouse', button = 0): PointerSample {
-  return { id, x, y, t, kind, button }
+function ptr(id: number, x: number, y: number, t: number, kind: PointerKind = 'mouse', button = 0, shiftKey?: boolean): PointerSample {
+  return shiftKey === undefined ? { id, x, y, t, kind, button } : { id, x, y, t, kind, button, shiftKey }
 }
 
 const kinds = (intents: Intent[]) => intents.map((i) => i.kind)
@@ -29,7 +29,7 @@ describe('click or drag', () => {
       ...g.pointerMove(ptr(1, 103, 100, 10)),
       ...g.pointerUp(ptr(1, 103, 100, 20)),
     ]
-    expect(out).toEqual([{ kind: 'click', at: { x: 103, y: 100 }, pointer: 'mouse', t: 20 }])
+    expect(out).toEqual([{ kind: 'click', at: { x: 103, y: 100 }, pointer: 'mouse', additive: false, t: 20 }])
   })
 
   it('a 5 px move emits dragStart and a drag with dx = 5', () => {
@@ -107,7 +107,7 @@ describe('lost releases', () => {
     expect(g.pointerDown(ptr(1, 100, 100, 0, 'mouse', 2))).toEqual([])
     // The right button's release never arrives; the same id presses with the left button.
     expect(g.pointerDown(ptr(1, 120, 100, 10))).toEqual([])
-    expect(g.pointerUp(ptr(1, 120, 100, 20))).toEqual([{ kind: 'click', at: { x: 120, y: 100 }, pointer: 'mouse', t: 20 }])
+    expect(g.pointerUp(ptr(1, 120, 100, 20))).toEqual([{ kind: 'click', at: { x: 120, y: 100 }, pointer: 'mouse', additive: false, t: 20 }])
     // A buttonless move is a hover, not a drag, and hover works again.
     expect(g.pointerMove(ptr(1, 160, 100, 40))).toEqual([{ kind: 'hover', at: { x: 160, y: 100 }, pointer: 'mouse' }])
   })
@@ -119,7 +119,57 @@ describe('lost releases', () => {
     // The release never arrived; the next press for the same id closes the drag first.
     expect(g.pointerDown(ptr(1, 200, 100, 50))).toEqual([{ kind: 'dragEnd', t: 50 }])
     // The new press is clean: released in place it is a click, with no drag.
-    expect(g.pointerUp(ptr(1, 200, 100, 60))).toEqual([{ kind: 'click', at: { x: 200, y: 100 }, pointer: 'mouse', t: 60 }])
+    expect(g.pointerUp(ptr(1, 200, 100, 60))).toEqual([{ kind: 'click', at: { x: 200, y: 100 }, pointer: 'mouse', additive: false, t: 60 }])
+  })
+})
+
+describe('shift + click', () => {
+  it('a click is not additive unless shift is held at the release', () => {
+    const g = make()
+    g.pointerDown(ptr(1, 100, 100, 0))
+    expect(g.pointerUp(ptr(1, 100, 100, 10, 'mouse', 0, false))).toEqual([
+      { kind: 'click', at: { x: 100, y: 100 }, pointer: 'mouse', additive: false, t: 10 },
+    ])
+    g.pointerDown(ptr(1, 100, 100, 500))
+    expect(g.pointerUp(ptr(1, 100, 100, 510))).toEqual([
+      { kind: 'click', at: { x: 100, y: 100 }, pointer: 'mouse', additive: false, t: 510 },
+    ])
+  })
+
+  it('a click released with shift held is additive, whatever it was at the press', () => {
+    const g = make()
+    g.pointerDown(ptr(1, 100, 100, 0, 'mouse', 0, false))
+    expect(g.pointerUp(ptr(1, 100, 100, 10, 'mouse', 0, true))).toEqual([
+      { kind: 'click', at: { x: 100, y: 100 }, pointer: 'mouse', additive: true, t: 10 },
+    ])
+  })
+
+  it('a shift-drag still drags, and is no click', () => {
+    const g = make()
+    g.pointerDown(ptr(1, 100, 100, 0, 'mouse', 0, true))
+    const out = [...g.pointerMove(ptr(1, 140, 100, 10, 'mouse', 0, true)), ...g.pointerUp(ptr(1, 140, 100, 20, 'mouse', 0, true))]
+    expect(kinds(out)).toEqual(['dragStart', 'drag', 'dragEnd'])
+  })
+
+  it('two quick shift-clicks are two toggles, never a double-click reset', () => {
+    const g = make()
+    const shiftClick = (x: number, t: number) => [
+      ...g.pointerDown(ptr(1, x, 100, t, 'mouse', 0, true)),
+      ...g.pointerUp(ptr(1, x, 100, t + 10, 'mouse', 0, true)),
+    ]
+    expect(kinds(shiftClick(100, 0))).toEqual(['click'])
+    expect(kinds(shiftClick(101, 100))).toEqual(['click'])
+  })
+
+  it('a shift-click does not pair with a plain click before it, nor after it', () => {
+    const g = make()
+    const click = (t: number, shiftKey: boolean) => [
+      ...g.pointerDown(ptr(1, 100, 100, t, 'mouse', 0, shiftKey)),
+      ...g.pointerUp(ptr(1, 100, 100, t + 10, 'mouse', 0, shiftKey)),
+    ]
+    expect(kinds(click(0, false))).toEqual(['click'])
+    expect(kinds(click(100, true))).toEqual(['click'])
+    expect(kinds(click(200, false))).toEqual(['click'])
   })
 })
 

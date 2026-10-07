@@ -159,7 +159,8 @@ describe('PointerSelection', () => {
   it('starts with nothing hovered or selected', () => {
     const s = new PointerSelection()
     expect(s.hovered).toBeNull()
-    expect(s.selected).toBeNull()
+    expect(s.selected).toEqual([])
+    expect(s.primary).toBeNull()
   })
 
   it('hover reports whether it changed', () => {
@@ -171,33 +172,77 @@ describe('PointerSelection', () => {
     expect(s.hover(null)).toBe(false)
   })
 
-  it('click selects, a re-click of the same id changes nothing, another id replaces it', () => {
+  it('a plain click selects only that item; a re-click changes nothing; another replaces it', () => {
     const s = new PointerSelection()
     expect(s.click('a')).toBe(true)
-    expect(s.selected).toBe('a')
+    expect(s.selected).toEqual(['a'])
     expect(s.click('a')).toBe(false)
-    expect(s.selected).toBe('a')
+    expect(s.selected).toEqual(['a'])
     expect(s.click('b')).toBe(true)
-    expect(s.selected).toBe('b')
+    expect(s.selected).toEqual(['b'])
   })
 
-  it('click(null) and clear() clear the selection', () => {
+  it('a plain click on an item drops the others of a multi-selection', () => {
     const s = new PointerSelection()
     s.click('a')
-    expect(s.click(null)).toBe(true)
-    expect(s.selected).toBeNull()
-    expect(s.click(null)).toBe(false)
+    s.click('b', true)
+    expect(s.selected).toEqual(['a', 'b'])
+    expect(s.click('b')).toBe(true)
+    expect(s.selected).toEqual(['b'])
+    expect(s.click('b')).toBe(false)
+  })
+
+  it('shift + click adds an item, in the order added, and toggles it off again', () => {
+    const s = new PointerSelection()
+    expect(s.click('a', true)).toBe(true)
+    expect(s.click('b', true)).toBe(true)
+    expect(s.click('c', true)).toBe(true)
+    expect(s.selected).toEqual(['a', 'b', 'c'])
+    expect(s.primary).toBe('c')
+    expect(s.click('b', true)).toBe(true)
+    expect(s.selected).toEqual(['a', 'c'])
+    expect(s.click('b', true)).toBe(true)
+    expect(s.selected).toEqual(['a', 'c', 'b'])
+    expect(s.primary).toBe('b')
+    expect(s.click('b', true)).toBe(true)
+    expect(s.click('c', true)).toBe(true)
+    expect(s.primary).toBe('a')
+  })
+
+  it('a plain click on empty space clears the set; a shift + click on empty space does nothing', () => {
+    const s = new PointerSelection()
     s.click('a')
+    s.click('b', true)
+    expect(s.click(null, true)).toBe(false)
+    expect(s.selected).toEqual(['a', 'b'])
+    expect(s.click(null)).toBe(true)
+    expect(s.selected).toEqual([])
+    expect(s.click(null)).toBe(false)
+  })
+
+  it('clear() (Esc) empties the set and reports whether it changed', () => {
+    const s = new PointerSelection()
+    s.click('a')
+    s.click('b', true)
     expect(s.clear()).toBe(true)
-    expect(s.selected).toBeNull()
+    expect(s.selected).toEqual([])
+    expect(s.primary).toBeNull()
     expect(s.clear()).toBe(false)
+  })
+
+  it('the set reported is a snapshot: a later click does not change what was handed out', () => {
+    const s = new PointerSelection()
+    s.click('a')
+    const before = s.selected
+    s.click('b', true)
+    expect(before).toEqual(['a'])
   })
 
   it('hovering and selecting are independent', () => {
     const s = new PointerSelection()
     s.click('a')
     s.hover('b')
-    expect(s.selected).toBe('a')
+    expect(s.selected).toEqual(['a'])
     expect(s.hovered).toBe('b')
     s.clear()
     expect(s.hovered).toBe('b')

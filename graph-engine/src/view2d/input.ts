@@ -10,7 +10,8 @@
 //   - click or drag: a press released within CLICK_SLOP of where it began is a
 //     click; the first move past the slop starts a drag, and that first `drag`
 //     carries the whole displacement since the press, so nothing is lost;
-//   - double-click: two clicks close in time and place also emit `reset`;
+//   - double-click: two clicks close in time and place also emit `reset`
+//     (shift + clicks, which edit the selection, never count);
 //   - pinch: two touches give `pinch` (exact, not smoothed) and never a click;
 //     when one lifts, the other carries on as a fresh drag with no jump;
 //   - wheel: an exponential zoom at the pointer, steeper for a trackpad pinch
@@ -42,6 +43,9 @@ export interface PointerSample {
   t: number
   kind: PointerKind
   button: number
+  // Shift was held (at the release, for a click: shift + click adds to the
+  // selection). Absent counts as not held.
+  shiftKey?: boolean
 }
 
 export interface WheelSample {
@@ -65,7 +69,9 @@ export type Intent =
   | { kind: 'zoom'; at: Vec; factor: number; t: number } // smoothed (wheel, keys)
   | { kind: 'pinch'; at: Vec; factor: number; dx: number; dy: number; t: number } // exact (two fingers)
   | { kind: 'pan'; dx: number; dy: number; t: number } // smoothed (keys)
-  | { kind: 'click'; at: Vec; pointer: PointerKind; t: number }
+  // `additive`: shift was held at the release, so the click adds to (or takes
+  // from) the selection instead of replacing it.
+  | { kind: 'click'; at: Vec; pointer: PointerKind; additive: boolean; t: number }
   | { kind: 'hover'; at: Vec | null; pointer: PointerKind } // null: the pointer left
   | { kind: 'reset'; t: number }
   | { kind: 'clearSelection' }
@@ -279,7 +285,14 @@ export class GestureRecognizer {
     if (p.dragging) return [{ kind: 'dragEnd', t: s.t }]
     if (p.afterPinch || !mayClick) return []
 
-    const out: Intent[] = [{ kind: 'click', at: { x: s.x, y: s.y }, pointer: s.kind, t: s.t }]
+    const additive = s.shiftKey === true
+    const out: Intent[] = [{ kind: 'click', at: { x: s.x, y: s.y }, pointer: s.kind, additive, t: s.t }]
+    // Shift + click picks things to add and take away, quick ones in a row
+    // included; it is never half of a double-click, which resets the view.
+    if (additive) {
+      this.lastClick = null
+      return out
+    }
     const prev = this.lastClick
     if (prev && s.t - prev.t <= DOUBLE_CLICK_MS && Math.hypot(s.x - prev.x, s.y - prev.y) <= DOUBLE_CLICK_SLOP) {
       out.push({ kind: 'reset', t: s.t })
