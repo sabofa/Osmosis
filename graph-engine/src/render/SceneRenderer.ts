@@ -393,6 +393,7 @@ export class SceneRenderer {
         resized: this.resizedSinceBuild,
       })
       if (action !== 'skip') this.options.onViewChange?.()
+      else this.refreshPixelSizes()
       // The hover guide line's own length is drawn out to the *current*
       // camera bounds (see hover.ts's resolve) — but resolveHover only
       // otherwise runs from a pointermove handler, and a wheel zoom (the
@@ -620,6 +621,22 @@ export class SceneRenderer {
     this.miscEntries = next
   }
 
+  // A gesture frame that skips the rebuild still zooms: the existing point dots, rings, halos and their labels
+  // are re-sized for the new scale (a transform each, no rebuild), so they hold their pixel size instead of
+  // scaling with the picture until the next rebuild. Rays/angle marks bake their pixel sizes into geometry
+  // and ribbons are not touched: both may lag until the rebuild, which the spec accepts.
+  private refreshPixelSizes() {
+    for (const entry of this.miscEntries) {
+      if (entry.kind !== 'point' && entry.kind !== 'mark') continue
+      const group = entry.object3d as THREE.Group
+      this.applyPointSizes(group, entry.outline)
+      const label = group.children[2] as THREE.Sprite | undefined
+      const layout = label?.userData.layout as { worldPos: Vec2; direction: Vec2; maxOffset?: number | null } | undefined
+      if (label && layout) this.updateLabelSprite(label, layout.worldPos, layout.direction, layout.maxOffset)
+    }
+    this.needsRender = true
+  }
+
   // Everything these kinds' built geometry actually depends on: their own
   // spec inputs (endpoints/color/label/etc.) plus the current zoom (any
   // pixelToWorld-derived size — a ray's shaft width, an angle arc's radius —
@@ -761,6 +778,8 @@ export class SceneRenderer {
   // "keep it out of anything that needs a canvas to construct" reasoning as
   // geometryMarks.ts/hover.ts.
   private updateLabelSprite(sprite: THREE.Sprite, worldPos: Vec2, direction: Vec2 = DEFAULT_LABEL_DIRECTION, maxOffset?: number | null) {
+    // Remembered so a skipped gesture frame can re-lay the label out at the new zoom (refreshPixelSizes).
+    sprite.userData.layout = { worldPos, direction, maxOffset }
     const placement = clampedLabelPlacement(worldPos, direction, this.pixelToWorld(LABEL_OFFSET_PX), this.pixelToWorld(60), this.pixelToWorld(30), maxOffset)
     sprite.scale.set(placement.width, placement.height, 1)
     sprite.position.set(placement.position.x, placement.position.y, 0)
