@@ -42,7 +42,7 @@ describe('the guide is the registry with its prose', () => {
   })
 
   it('has every unit in the table, and the guide’s entry says the same', () => {
-    expect(Object.keys(UNITS)).toHaveLength(68)
+    expect(Object.keys(UNITS)).toHaveLength(69)
     for (const spec of REGISTRY) {
       expect(spec.unit, spec.path).toBe(UNITS[spec.path])
       expect(guideAt(spec.path)!.unit, spec.path).toBe(UNITS[spec.path])

@@ -83,8 +83,8 @@ export const STYLE_MEANINGS: Meanings = {
 
   'style.paper.type': {
     meaning:
-      "The sheet the figure is drawn on, laid under everything. none is transparent, for a page that has its own background. clean is flat colour. paper is good writing paper with a faint grain. rough-paper is cartridge paper, a coarse blotchy tooth with long pale fibres. canvas is woven cloth. graph is blue engineering grid paper with a heavier line every fifth. rough-graph is a grid ruled by hand on grainy paper. dotted is a dot grid. ruled is a notebook page with a red margin. blackboard, greenboard and whiteboard are the boards chalk and the whiteboard marker are drawn on, a flat sheet of the board's colour from the theme, the same in the app's light and dark. Only some of them read the texture (paper, rough-paper, canvas, rough-graph) and the grid (graph, rough-graph, dotted, ruled); the boards read neither yet.",
-    interactions: ['style.paper.tint', 'style.paper.texture', 'style.paper.grid'],
+      "The sheet the figure is drawn on, laid under everything. none is transparent, for a page that has its own background; clean is flat colour. Every other sheet is generated: a seeded tile of real structure (the same seed always makes the same sheet) in the paper's tint, with any rulings hand-drawn over it. paper is good writing paper with a faint tooth. rough-paper is cartridge paper, a coarse blotchy tooth with long pale fibres. canvas is woven cloth, and linen a finer, looser weave. kraft is brown wrapping paper, the tint drawn most of the way to brown. graph is blue engineering grid paper with a heavier line every fifth, and rough-graph is the same grid ruled by a rougher hand. dotted is a dot grid. ruled is a notebook page with a red margin. blackboard, greenboard and whiteboard are the boards chalk and the whiteboard marker are drawn on: slate grain and erased haze, with a chalk tray's dust along the bottom of the dark two, in the board's colour from the theme, the same in the app's light and dark. The texture reads on every generated sheet, the grid on graph, rough-graph, dotted and ruled, and the tile size on all of them.",
+    interactions: ['style.paper.tint', 'style.paper.texture', 'style.paper.grid', 'style.paper.tile'],
   },
   'style.paper.tint': {
     meaning:
@@ -93,13 +93,18 @@ export const STYLE_MEANINGS: Meanings = {
   },
   'style.paper.texture': {
     meaning:
-      "How strong the paper's tooth is. It is the fine speckle on paper, the coarse blotches and fibres on rough-paper, the weave's contrast and the yarn's fuzz on canvas, and how much the hand-ruled lines of rough-graph waver. 0 is a smooth sheet. Clean, none, graph, dotted and ruled have no tooth and ignore it.",
+      "How strongly the sheet's own structure shows. It is the tooth on paper, the blotches and fibres on rough-paper, the weave on canvas and linen, the fibre of kraft, the slate grain and the haze of an erased board, and how far the hand-ruled lines of graph paper stray. 0 is a smooth sheet, and 1 the full structure (the boards look right near 1, where half of it halves the slate grain and the haze). Clean and none have no structure and ignore it.",
     interactions: ['style.paper.type'],
   },
   'style.paper.grid': {
     meaning:
-      "The spacing of the grid, dots or ruled lines, in drawing units. Smaller is a finer grid. Graph and rough-graph put a heavier line every fifth square, dotted puts one dot per square, and ruled sets its lines this far apart. Clean, paper, rough-paper, canvas and none ignore it.",
+      "The spacing of the grid, dots or ruled lines, in drawing units. Smaller is a finer grid. Graph and rough-graph put a heavier line every fifth square, dotted puts one dot per square, and ruled sets its lines this far apart. The rulings are drawn in the theme's own line colours (its line and its stronger line, and the margin's red from the theme), so they change with the theme. Clean, none, the other papers and the boards ignore it.",
     interactions: ['style.paper.type'],
+  },
+  'style.paper.tile': {
+    meaning:
+      "The side of one repeating square of the sheet's generated structure, in drawing units. A bigger tile repeats less often, so the pattern is harder to spot, but it is a bigger bitmap to make and to hold, and a smaller one is cheaper but shows its repeats sooner as the figure grows. It zooms with the drawing: the tile is laid in drawing units, so zooming in enlarges the structure with the figure instead of keeping it a fixed size on the screen. Whole numbers only. Clean and none have no tile and ignore it.",
+    interactions: ['style.paper.type', 'style.paper.texture'],
   },
 
   'style.lettering.face': {

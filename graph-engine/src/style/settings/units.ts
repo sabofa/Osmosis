@@ -16,7 +16,7 @@ const ROLE_SIZES = (Object.keys(DEFAULT_PAINT_PARAMS.roles) as (keyof typeof DEF
 const PATHS_BY_UNIT: Readonly<Record<string, readonly string[]>> = {
   '×': ['style.line.width', 'style.lettering.size', 'style.colour.saturation', 'paint.mix.chromaMin', 'paint.mix.chromaMax', 'paint.particles.zoomGrowMax', 'paint.particles.zoomBigMax', 'media.ink.chroma', 'media.colouredPencil.chroma', 'media.chalk.chroma', 'board.tilt'],
   '°': ['style.fill.angle', 'paint.light.azimuth', 'paint.light.elevation', 'paint.environment.hue', 'paint.curve.warmHue', 'paint.curve.coolHue', 'paint.curve.shiftMax', 'paint.curve.accentHue', 'paint.curve.accentMax', 'paint.curve.planeStepA', 'paint.curve.planeStepB', 'paint.curve.skyHue', 'paint.curve.bounceHue', 'paint.curve.devH', 'paint.mix.hueMin', 'paint.mix.hueMax', 'paint.edges.planeCellDeg', 'paint.impasto.lightAzimuth', 'paint.impasto.lightElevation'],
-  'drawing units': ['style.fill.spacing', 'style.paper.grid'],
+  'drawing units': ['style.fill.spacing', 'style.paper.grid', 'style.paper.tile'],
   'px': ['paint.environment.occlusionRadiusPx', 'paint.detect.scumbleMinPx', 'paint.detect.dabMinPx', 'paint.detect.edgeReachPx', 'paint.mix.loadBreakPx', ...ROLE_SIZES],
   'N·L': ['paint.detect.formBandNL', 'paint.value.lightTurn', 'paint.value.lightSoftness', 'paint.value.terminatorSoftness', 'paint.value.coreWidth', 'paint.value.reflectedSoftness'],
   'world units': ['paint.mix.loadCell'],
