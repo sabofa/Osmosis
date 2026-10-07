@@ -554,6 +554,36 @@ Boundaries stay dashed for strict operators and solid otherwise, as now.
 - **Renderer.** Region outlines are triangulated with holes: rings are nested by containment, even depth is an outer ring and odd depth a hole. Dashed `curve` chains draw dashed. The legacy triangle `region` and the `segments` boundaries leave the 2D plot path. Space keeps importing `render/marchingSquares.ts` until it chooses otherwise.
 - **The corpus grows** by every row above, plus a seeded property test of random conics against their analytic shapes (component count, area, and every vertex within ½ px of the zero set).
 
+### As built (P3, 2026-10-07)
+
+P3 shipped on `milestone-a/calc` (`3d5cc7d..4d45486`). Its plan and ledger (`.superpowers/sdd/2026-10-04-calc-p3-implicit-and-regions/progress.md`) record every ruling; this is what differs from the text above or settles what it left open.
+
+**The quadtree.** Classifier-driven, so curves and regions share it: a cell is dropped, split or kept whole. It walks level by level and stops a whole level at the budget, so a capped run coarsens the picture evenly instead of cutting part of it off. Leaves halve while wider than √2 × the target, so they land within √2 of 1 px (FULL) or 4 px (COARSE).
+
+**Crossings.**
+- A critical-point pass finds X crossings the corner signs cannot show: where both partials change sign across a leaf, Newton solves ∇H = 0. An X is drawn only if H alternates in sign ½ px around it along the bisectors of its arms.
+- A node that lands on a leaf edge or corner is solved once, in the box of the leaves that share it, and every one of those leaves draws its arms from that one node.
+- An edge with an undefined end is cut at the domain edge. An edge counts as a pole line only if H is also infinite at its midpoint (a signed zero can make both ends +∞ while the edge still changes sign).
+
+**Regions.**
+- Leaves are cut by the planar faces of the comparisons' chords, not by Sutherland–Hodgman. A face's truth is the condition evaluated on per-comparison signs, so `or` and `not` are exact.
+- A region at its budget refuses budget-stopped leaves wider than `maxRegionBudgetLeafPx` (9 px). Wider leaves let a chord cross a feature and drew false fill (+16 % on `sin(x² + y²) < 0.3`). A capped region is a smaller fill, never a false one, and it says "drawn coarsely" or "not drawn". Crowded conditions at their cap can draw nearly blank.
+- An empty region draws nothing and says nothing. A region's notes say "this region".
+
+**The scene.** `buildScene` sends implicit, region and chain statements to `sampleImplicit` and `sampleRegion`. The condition is built with `compare`/`and` from the operator or chain and the `if` clause. The `resolution` parameter is kept but ignored, and the legacy `triangles` kind is gone. The slope field runs its lattice 5 ticks past each side of the view.
+
+**Gestures.** `viewChangeAction` (`render/interaction.ts`) implements the transform rule. A scripted 60-step pan rebuilds once instead of 60 times. A skipped frame re-applies the fixed pixel sizes of points and labels. Rays, angle marks and ribbon widths lag until the next rebuild.
+
+**Parser.** A statement that starts with `(` and ends with `)` is a bare point only when the first `(` closes at the last `)`, so `(x^2+y^2)^2 = 4(x^2-y^2)` parses. `sin(x) = cos(y)` stays refused, because space pins definitions named after built-ins; write `sin(x) - cos(y) = 0`. Statement-level `and` between two inequalities is not parsed; use an `if` clause.
+
+**Known limits** (pinned in the corpus):
+- Nearly parallel arms (`y² = sin(3x)²`) are not joined into an X at COARSE.
+- A tiny lemniscate draws as a dot at COARSE. FULL draws it.
+- An expanded double root (`x² − 2xy + y²`) costs about 213k points and draws with the coarse note.
+- `y < ln(x)` over −2..6 × −4..4 at 800 × 800 draws coarsely. The cost depends on the window and the canvas size.
+- Plateau X's leave a 0.83 px gap.
+- `x^y = y^x`'s y = x branch ends a leaf short.
+
 ## The frame (P4)
 
 ### Aspect and bounds
