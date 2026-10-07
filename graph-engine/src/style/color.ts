@@ -93,6 +93,20 @@ export function deepen(colour: string, factor: number): string {
   return fromOklch({ ...oklch, l: oklch.l * factor })
 }
 
+// Where a page turns from light to dark, in OKLCH lightness: a page below it is dark.
+export const DARK_PAGE = 0.5
+
+// A colour made deeper AWAY FROM THE PAGE it lies on. "Deeper" is toward the side of the lightness
+// scale the page is not on: darker on a light page (`deepen`, exactly), lighter on a dark one, where
+// darkening would only sink the colour into the page. On a dark page the lightness goes the same share
+// of the way to white as `deepen` goes to black: l -> 1 - (1 - l) x factor. Hue and chroma held.
+export function deepenFrom(colour: string, factor: number, surface: string): string {
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(colour)) return colour
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(surface) || toOklch(surface.toLowerCase()).l >= DARK_PAGE) return deepen(colour, factor)
+  const oklch = toOklch(colour.toLowerCase())
+  return fromOklch({ ...oklch, l: 1 - (1 - oklch.l) * factor })
+}
+
 // A colour's chroma scaled by `saturation`. "#rgb" and "#rrggbb" in, always
 // "#rrggbb" out; anything else (a pattern reference, "none") passes through.
 export function saturate(colour: string, saturation: number): string {

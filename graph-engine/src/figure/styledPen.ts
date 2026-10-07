@@ -1,6 +1,6 @@
 import type { Palette } from '../render/palette'
 import type { Vec2 } from '../scene/types'
-import { deepen, saturate, toOklch } from '../style/color'
+import { DARK_PAGE, deepenFrom, fromOklch, saturate, toOklch } from '../style/color'
 import { LINES, type Primitive, type StrokeInput, type Texture } from '../style/lines'
 import type { MediumSettings } from '../style/media'
 import { dashPolyline, polylineChain, sampleChain, type Chain, type Piece } from '../style/path'
@@ -10,6 +10,7 @@ import type { LineSettings, Style } from '../style/tokens'
 import { FILLS } from '../style/fills'
 import { FACES, tiltFor } from '../style/lettering'
 import { PAPERS } from '../style/papers'
+import { drawnContrast } from '../style/theme/contrast'
 import type { RoleKey, ThemeInput } from '../style/theme/types'
 import { emptyFigureLayers, FIGURE_LAYERS, figureTheme, type FigureLayer } from './document'
 import { figureMedium, paperColour } from './medium'
@@ -43,7 +44,9 @@ import { fmt, svgCircle, svgEscape, svgGroup, svgText, type SvgAttrs } from './s
 // auxiliary and hidden lines, labels, points, measures and the givens table, each as drawn (its colour at
 // the opacity it carries, over the page). Fills and their shading (hatching, scribbles, stipple, a wash's
 // rim), chalk's loose dust and a marker's pooled ends are BACKDROP TEXTURE: they are thinner and fainter
-// than a line by design, so that they sit behind the figure, and carry no floor.
+// than a line by design, so that they sit behind the figure, and carry no floor. They are not invisible,
+// though: a fill's tint and its shading marks are held to a floor of their own as drawn (FILL_FLOOR,
+// below), and the shading of a fill is deepened AWAY FROM THE PAGE (lighter on a dark page).
 //
 // Geometry is generated once, in the figure's own drawing coordinates; pan
 // and zoom transform the finished SVG, so the wobble never reshuffles.
@@ -62,13 +65,66 @@ const ID = ''
 const TEXTURED: readonly FigureLayer[] = ['regions', 'auxiliary', 'primary', 'marks']
 
 // Fill weights (see the pen's fill): shading lines and dots are this much
-// darker than the region's colour, and a solid area is drawn at this
-// fraction of the fill opacity.
+// deeper than the region's colour (away from the page: darker on a light page,
+// lighter on a dark one), and a solid area is drawn at this fraction of the
+// fill opacity.
 const SHADE_DEPTH = 0.7
 const AREA_WEIGHT = 0.5
+// What a fill's marks are held to, as drawn (the colour at the opacity it is laid at, over the page): a
+// tint and a shading mark keep at least FILL_FLOOR:1 with the page; a fill is backdrop, so this is far
+// below a line's floor, but a fill that cannot be seen is not a fill. (A wash's rim is a blurred edge
+// and a marker's pooled ends are dots of ink: texture, which carries no floor.)
+//   - A shading mark (a hatch line, a scribble, a dot) is held by its COLOUR, moved AWAY FROM THE PAGE (lighter
+//     on a dark page, darker on a light one) by at most REACH of OKLCH lightness, hue and chroma held. Chalk's
+//     marks on a DARK page keep THIN_FLOOR_DARK: a hatch line is a couple of units wide and the chalk's
+//     texture knocks out about half of it, so a pastel at 2.5:1 on a slate board is drawn dull and brown.
+//   - A tint (the flat area) is held by its OPACITY, raised by at most half again (UPLIFT): a tint's hue is
+//     what makes it a tint, and a darker orange is brown. The author's own fill opacity is a dial, and a
+//     faint fill is not made loud to make up for it.
+const FILL_FLOOR = 1.5
+const THIN_FLOOR_DARK = 3.5
+const REACH = 0.25
+const UPLIFT = 1.5
 // Shading lines are sampled this far apart (drawing units): they are many and
 // straight, and a figure of hatching would otherwise weigh megabytes.
 const SHADING_STEP = 14
+
+const SIX_DIGITS = /^#[0-9a-f]{6}$/
+
+// `hex` moved AWAY FROM THE PAGE (lighter on a dark page, darker on a light one), in steps of 0.01 of
+// OKLCH lightness and by at most REACH, until a mark of it laid at `opacity` shows against `page` at
+// `floor`:1 as drawn. A colour that already does, and anything that is not a '#rrggbb', is returned
+// as it is. Where the floor cannot be reached, the best contrast within REACH is.
+function reaching(hex: string, page: string, opacity: number, floor: number): string {
+  if (!SIX_DIGITS.test(hex) || !SIX_DIGITS.test(page) || !(opacity > 0)) return hex
+  const laid = Math.min(1, opacity)
+  let bestRatio = drawnContrast(hex, page, laid)
+  if (bestRatio >= floor) return hex
+  const base = toOklch(hex)
+  const away = toOklch(page).l < DARK_PAGE ? 1 : -1
+  let best = hex
+  for (let k = 1; k * 0.01 <= REACH + 1e-9; k++) {
+    const l = Math.min(1, Math.max(0, base.l + away * k * 0.01))
+    const next = fromOklch({ ...base, l })
+    const ratio = drawnContrast(next, page, laid)
+    if (ratio >= floor) return next
+    if (ratio > bestRatio) {
+      best = next
+      bestRatio = ratio
+    }
+    if (l === 0 || l === 1) break
+  }
+  return best
+}
+
+// `opacity` raised, in steps of 0.01 and by at most UPLIFT times, until a mark of `hex` laid at it shows
+// against `page` at `floor`:1 as drawn. An opacity that already does, or is 0, is returned as it is.
+function lifted(hex: string, page: string, opacity: number, floor: number): number {
+  if (!SIX_DIGITS.test(hex) || !SIX_DIGITS.test(page) || !(opacity > 0) || drawnContrast(hex, page, Math.min(1, opacity)) >= floor) return opacity
+  const most = Math.min(1, opacity * UPLIFT)
+  for (let laid = opacity + 0.01; laid < most; laid += 0.01) if (drawnContrast(hex, page, laid) >= floor) return laid
+  return most
+}
 
 const numberOf = (value: SvgAttrs[string], fallback: number): number => {
   const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
@@ -168,6 +224,9 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
   // The paper's tint: a tint the style names, else the theme's board when the paper is one (whatever the
   // medium: a board is the same colour in the clean medium), else the host's own page colour.
   const tint = paperColour(style, palette, themeInput) ?? theme.background
+  // The colour of the page the figure is drawn on: the medium's surface, else the tint.
+  const page = medium ? medium.surface : tint
+  const onDark = toOklch(page).l < DARK_PAGE
   let paperMarkup = ''
   let paperDefs: string[] = []
 
@@ -298,19 +357,21 @@ export function styledPen(style: Style, palette: Palette, themeInput?: ThemeInpu
       const tone = medium ? medium.paint(asked, 'fill') : undefined
       const shading = medium ? medium.paint(asked, 'shading') : undefined
       const rim = medium ? medium.paint(asked, 'region') : undefined
-      const paint = tone ? tone.hex : (colour(attrs.fill) ?? ink)
-      // Shading in lines and dots is drawn a deeper shade of the region's
-      // colour (in a medium, its shading colour), and a solid area at half the
-      // fill opacity: at the same opacity a filled area reads about twice as
-      // heavy as hatching.
-      const shade = shading ? shading.hex : deepen(paint, SHADE_DEPTH)
+      const base = tone ? tone.hex : (colour(attrs.fill) ?? ink)
       const identity = identityOf(attrs)
-      // Shading lines are drawn by the line type at the medium's strength, which replaces its own factor;
-      // the line's own opacity (shadingSettings keeps it) and then the fill's opacity multiply on top, so a
-      // shading line is fill opacity x line opacity x the medium's. Dots are the fill's own marks and take the
-      // fill's opacity and the medium's (not the line's).
+      // Shading lines are drawn by the line type at the medium's strength, which replaces its own factor; the
+      // line's own opacity (shadingSettings keeps it) and then the fill's opacity multiply on top, so a shading
+      // line is fill opacity x line opacity x the medium's. Dots are the fill's own marks and take the fill's
+      // opacity and the medium's (not the line's).
       const opacity = style.fill.opacity
-      const areaOpacity = style.fill.opacity * AREA_WEIGHT * (tone ? tone.opacity : 1)
+      // A solid area at half the fill opacity: at the same opacity a filled area reads about twice as heavy as
+      // hatching. It is the tint, and keeps the floor every fill mark keeps (by its opacity: see UPLIFT).
+      const paint = base
+      const areaOpacity = lifted(base, page, style.fill.opacity * AREA_WEIGHT * (tone ? tone.opacity : 1), FILL_FLOOR)
+      // Shading in lines and dots is drawn a deeper shade of the region's colour: deeper is AWAY FROM THE PAGE
+      // (darker on a light page, lighter on a dark one). In a medium it is the medium's shading colour. Held to
+      // its floor as drawn (chalk on a dark page to more: THIN_FLOOR_DARK).
+      const shade = reaching(shading ? shading.hex : deepenFrom(base, SHADE_DEPTH, page), page, opacity * (shading ? shading.opacity : 1), onDark && texture?.name === 'chalk' ? THIN_FLOOR_DARK : FILL_FLOOR)
       const evenOdd = attrs['fill-rule'] === 'evenodd'
       const outline = regionChains(region)
       const { marks } = FILLS[style.fill.type].draw({ outline, settings: style.fill, random: randomFor(`${id}/fill`, style.seed) })
