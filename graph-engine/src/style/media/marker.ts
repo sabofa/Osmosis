@@ -20,9 +20,8 @@
 // so they are fitted with the floor alone. Strokes multiply (overlaps darken), and streak
 // along the stroke.
 
-import { fromOklch, toOklch } from '../color'
-import type { ThemeInput } from '../theme/types'
-import { baseOf, fitWithin, liftChroma, settingOf, type Neutrals } from './fit'
+import { toOklch } from '../color'
+import { baseOf, fitWithin, liftChroma, neutralsOn, settingOf } from './fit'
 import type { Medium, MediumSettingSpec } from './types'
 
 const SETTINGS: readonly MediumSettingSpec[] = [{ key: 'streaks', label: 'Streaks', min: 0, max: 1, step: 0.05, default: 0.4 }]
@@ -30,31 +29,19 @@ const SETTINGS: readonly MediumSettingSpec[] = [{ key: 'streaks', label: 'Streak
 const LOWEST = 0.45
 const HIGHEST = 0.65
 
-// The marker's own neutrals: a near-black on a light paper, a near-white on a dark one, and how
-// much nearer the paper the muted one sits than the ink.
-const INK_ON_LIGHT = 0.22
-const INK_ON_DARK = 0.92
-const MUTED_STEP = 0.15
-
 // The opacity of one stroke. The contrast floor is measured on a stroke at it, over the paper.
 const OPACITY = 0.9
 
 // The marker's ink: the near-black (L 0.22) or the near-white (L 0.92), whichever is farther from
-// the paper (the near-black where they tie), a neutral grey with no chroma.
-// Its muted: 0.15 nearer the paper than that (0.37 on a light paper, 0.77 on a dark one).
-function neutrals(theme: ThemeInput): Neutrals {
-  const paper = toOklch(theme.colours.paper).l
-  const ink = Math.abs(INK_ON_LIGHT - paper) >= Math.abs(INK_ON_DARK - paper) ? INK_ON_LIGHT : INK_ON_DARK
-  const muted = ink + Math.sign(paper - ink) * MUTED_STEP
-  return { ink: fromOklch({ l: ink, c: 0, h: 0 }), muted: fromOklch({ l: muted, c: 0, h: 0 }) }
-}
+// the paper (the near-black where they tie), a neutral grey with no chroma, and its muted 0.15 nearer
+// the paper (0.37 on a light paper, 0.77 on a dark one): `neutralsOn` (fit.ts).
 
 export const marker: Medium = {
   name: 'marker',
   surface: 'paper',
   settings: SETTINGS,
   colour(theme, role) {
-    const { hex, neutral } = baseOf(theme, 'marker', role, neutrals(theme), theme.colours)
+    const { hex, neutral } = baseOf(theme, 'marker', role, neutralsOn(theme.colours.paper), theme.colours)
     const base = toOklch(hex)
     // A neutral keeps the lightness it has (the floor alone moves it); a coloured role is held to the marker's range.
     const [lo, hi] = neutral ? [0, 1] : [LOWEST, HIGHEST]

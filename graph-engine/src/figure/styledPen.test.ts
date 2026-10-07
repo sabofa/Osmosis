@@ -7,9 +7,9 @@ import { EXAMPLES } from '../examples'
 import { toOklch } from '../style/color'
 import { MEDIA } from '../style/media'
 import { PRESETS } from '../style/presets'
-import { defaultTheme, fromColours } from '../style/theme/adapter'
+import { defaultTheme, fromColours, fromOsmosisTheme } from '../style/theme/adapter'
 import { contrastRatio, drawnContrast } from '../style/theme/contrast'
-import { BOARD_NAMES, type MediumName, type ThemeInput } from '../style/theme/types'
+import { BOARD_NAMES, type MediumName, type PaletteLike, type ThemeInput } from '../style/theme/types'
 import { cssColor } from './document'
 import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
 import { renderFigure } from './render'
@@ -484,7 +484,7 @@ describe('a figure in a medium', () => {
       const [, closing, tag, attrs, selfClosing] = m
       if (tag === 'g') {
         if (closing) groups.pop()
-        else if (!selfClosing) groups.push(Number(/\bopacity="([0-9.]+)"/.exec(attrs)?.[1] ?? 1))
+        else if (!selfClosing) groups.push(Number(/(?<![-\w])opacity="([0-9.]+)"/.exec(attrs)?.[1] ?? 1))
         continue
       }
       if (closing) continue
@@ -492,7 +492,7 @@ describe('a figure in a medium', () => {
       const fill = /\bfill="(#[0-9a-f]{6})"/.exec(attrs)?.[1]
       const hex = stroke ?? fill
       if (hex === undefined) continue
-      const own = Number(/\bopacity="([0-9.]+)"/.exec(attrs)?.[1] ?? 1)
+      const own = Number(/(?<![-\w])opacity="([0-9.]+)"/.exec(attrs)?.[1] ?? 1)
       out.push({ tag, hex, opacity: groups.reduce((product, value) => product * value, own), backdrop: tag === 'path' && stroke === undefined })
     }
     return out
@@ -734,7 +734,7 @@ describe('a figure in a medium', () => {
       .filter((m) => m[1] === 'polygon' || /\bfill="none"/.test(m[2]))
       .map((m) => ({
         hex: /\b(?:stroke|fill)="(#[0-9a-f]{6})"/.exec(m[2].replace(/\bfill="none"/, ''))![1],
-        opacity: Number(/\bopacity="([0-9.]+)"/.exec(m[2])?.[1] ?? 1),
+        opacity: Number(/(?<![-\w])opacity="([0-9.]+)"/.exec(m[2])?.[1] ?? 1),
       }))
 
   const mediumOpacity = (name: MediumName, theme = defaultTheme('light')) => MEDIA[name].colour(theme, { key: 'line' }, {}).opacity
@@ -793,7 +793,7 @@ describe('a figure in a medium', () => {
 
   it('keeps the fade in the clean medium, byte for byte (a pencil line on clean)', () => {
     const svg = draw('@style-line: pencil', { body: DASHED })
-    const strokes = [...layerOf(svg, 'auxiliary').matchAll(/<path\b[^>]*fill="none"[^>]*>/g)].map((m) => Number(/\bopacity="([0-9.]+)"/.exec(m[0])![1]))
+    const strokes = [...layerOf(svg, 'auxiliary').matchAll(/<path\b[^>]*fill="none"[^>]*>/g)].map((m) => Number(/(?<![-\w])opacity="([0-9.]+)"/.exec(m[0])![1]))
     expect(strokes.length).toBeGreaterThan(0)
     // The figure's 0.6 times the pencil's own factor and the line's opacity: nothing of a medium's.
     for (const value of strokes) expect(value).toBeLessThanOrEqual(0.6 * 0.95 + 1e-9)
@@ -850,7 +850,7 @@ describe('a figure in a medium', () => {
   it('lays a fill’s shading at the fill opacity times the line’s own opacity times the medium’s, replacing the line type’s own factor', () => {
     const body = EXAMPLES.find((e) => e.label === 'Square minus its circle')!.spec
     const clipped = (svg: string) => [...svg.matchAll(/<g clip-path="[^"]*"[^>]*>([\s\S]*?)<\/g>/g)].flatMap((m) => [...m[1].matchAll(/<path\b([^>]*)>/g)].map((p) => p[1]))
-    const opacityOf = (attrs: string) => Number(/\bopacity="([0-9.]+)"/.exec(attrs)![1])
+    const opacityOf = (attrs: string) => Number(/(?<![-\w])opacity="([0-9.]+)"/.exec(attrs)![1])
     for (const [head, medium, fillOpacity, lineOpacity] of [
       ['@style: colouredPencil', 'colouredPencil', 0.9, 1],
       ['@style: colouredPencil\n@style-line-opacity: 0.5', 'colouredPencil', 0.9, 0.5],
@@ -919,29 +919,94 @@ describe('a figure in a medium', () => {
     const [p, q] = [lab(a), lab(b)]
     return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])
   }
+  // Paper media on a page of the other side, and BOARD media on a page that is not their board: chalk is fitted to the
+  // page it is laid on, as a paper medium is, and so is the whiteboard marker.
   const ASIDE_CASES: [string, string, number][] = [
     ['pencil on a dark tint', '@style: pencil\n@style-tint: 1d1d2b', 4.5],
     ['ink on a blackboard', '@style: ink\n@style-paper: blackboard', 7],
     ['coloured pencil on a dark tint', '@style: colouredPencil\n@style-tint: 1d1d2b', 3],
     ['marker on a dark tint', '@style: marker\n@style-tint: 1d1d2b', 3],
     ['pencil on a light tint', '@style: pencil\n@style-tint: f2e8cf', 4.5],
+    ['coloured pencil on a light tint', '@style: colouredPencil\n@style-tint: f2e8cf', 3],
+    ['marker on a light tint', '@style: marker\n@style-tint: f2e8cf', 3],
     ['ink on a whiteboard', '@style: ink\n@style-paper: whiteboard', 7],
+    ['chalk on a whiteboard paper', '@style: blackboard\n@style-paper: whiteboard', 4.5],
+    ['chalk on a light tint', '@style: blackboard\n@style-tint: f2e8cf', 4.5],
+    ['chalk on a greenboard look on a whiteboard paper', '@style: greenboard\n@style-paper: whiteboard', 4.5],
+    ['whiteboard ink on a blackboard', '@style: whiteboard\n@style-paper: blackboard', 4.5],
+    ['whiteboard ink on a dark tint', '@style: whiteboard\n@style-tint: 1d1d2b', 4.5],
+    ['whiteboard ink on a greenboard', '@style: whiteboard\n@style-paper: greenboard', 4.5],
   ]
+
+  // Custom dark themes that give NO light colours (so their light-mode colours, which the boards and the board media
+  // read, are their own dark ones: the adapter's interim fallback), as the app builds them and as a lab does.
+  const customDark = fromColours({ mode: 'dark', colours: { surface: '#1d2a26', paper: '#1d2a26', ink: '#e6efe9' } })
+  const appPalette: PaletteLike = { background: 0x1d2a26, curve: 0x7fb3d5, segment: 0xe6efe9, point: 0xf0c674, axis: 0xe6efe9, grid: 0x5a6a64, gridStrong: 0x7a8a84, muted: 0x9aa8a2 }
+  const appDark = fromOsmosisTheme(appPalette, 'dark', null)
+  const ASIDE_THEMES: [string, 'light' | 'dark', ThemeInput | undefined][] = [
+    ...(['light', 'dark'] as const).flatMap((mode): [string, 'light' | 'dark', ThemeInput | undefined][] => [
+      [`host ${mode} with no theme`, mode, undefined],
+      [`host ${mode} with its theme`, mode, defaultTheme(mode)],
+    ]),
+    ['host dark with a custom dark theme (fromColours)', 'dark', customDark],
+    ['host dark with a custom dark theme (fromOsmosisTheme, no preset)', 'dark', appDark],
+  ]
+  it('builds the custom dark themes it tests with no light colours of their own', () => {
+    // Their board colours are their own dark ones: the case the light page below has to cope with.
+    for (const theme of [customDark, appDark]) expect(toOklch(theme.boardColours.paper).l).toBeLessThan(0.5)
+  })
+
   for (const [name, head, floor] of ASIDE_CASES) {
-    for (const mode of ['light', 'dark'] as const) {
-      for (const theme of [undefined, defaultTheme(mode)]) {
-        it(`keeps a line and an auxiliary line apart for ${name}, host ${mode}${theme ? ' with its theme' : ' with no theme'}`, () => {
-          const svg = draw(head, { palette: palette(mode), theme, body: ASIDE })
-          const paper = paperOf(svg)
-          const [line] = strokesIn(svg, 'primary')
-          const [auxiliary] = strokesIn(svg, 'auxiliary')
-          expect(deltaE(line.hex, auxiliary.hex), `${line.hex} against ${auxiliary.hex}`).toBeGreaterThanOrEqual(0.05)
-          // Both read on the page, each at its own opacity.
-          for (const stroke of [line, auxiliary]) expect(drawnContrast(stroke.hex, paper, stroke.opacity), `${stroke.hex}@${stroke.opacity}`).toBeGreaterThanOrEqual(floor - 0.1)
-        })
-      }
+    for (const [themeName, mode, theme] of ASIDE_THEMES) {
+      it(`keeps a line and an auxiliary line apart for ${name}, ${themeName}`, () => {
+        const svg = draw(head, { palette: palette(mode), theme, body: ASIDE })
+        const paper = paperOf(svg)
+        const [line] = strokesIn(svg, 'primary')
+        const [auxiliary] = strokesIn(svg, 'auxiliary')
+        expect(deltaE(line.hex, auxiliary.hex), `${line.hex} against ${auxiliary.hex}`).toBeGreaterThanOrEqual(0.05)
+        // Both read on the page, each at its own opacity.
+        for (const stroke of [line, auxiliary]) expect(drawnContrast(stroke.hex, paper, stroke.opacity), `${stroke.hex}@${stroke.opacity}`).toBeGreaterThanOrEqual(floor - 0.1)
+      })
     }
   }
+
+  // And every element a reader reads, over the whole figure, meets the floor as drawn on those pages too.
+  for (const [name, head, floor] of ASIDE_CASES) {
+    it(`keeps the floor for every element read in ${name}, each at its own opacity, with every theme`, () => {
+      for (const [themeName, mode, theme] of ASIDE_THEMES) {
+        const svg = draw(head, { palette: palette(mode), theme })
+        const paper = paperOf(svg)
+        let measured = 0
+        for (const layer of READ) {
+          for (const element of drawnIn(svg, layer)) {
+            if (element.backdrop || element.hex === paper) continue
+            measured++
+            expect(drawnContrast(element.hex, paper, element.opacity), `${themeName} ${layer} ${element.tag} ${element.hex}@${element.opacity} on ${paper}`).toBeGreaterThanOrEqual(floor - 0.1)
+          }
+        }
+        expect(measured, themeName).toBeGreaterThan(20)
+      }
+    })
+  }
+
+  // `opacity=` is the element's opacity and nothing else: `fill-opacity=` and `stroke-opacity=` are not it.
+  it('reads an element’s own opacity, never its fill-opacity or stroke-opacity', () => {
+    const markup = (attrs: string) => `<g data-layer="primary"><path d="M 0 0 L 1 1" ${attrs}/></g>`
+    const read = (attrs: string) => drawnIn(markup(attrs), 'primary')[0].opacity
+    expect(read('fill="#202020" fill-opacity="0.2" opacity="0.9"')).toBeCloseTo(0.9, 9)
+    expect(read('fill="#202020" fill-opacity="0.2"')).toBeCloseTo(1, 9)
+    expect(read('fill="none" stroke="#202020" stroke-opacity="0.3" opacity="0.7"')).toBeCloseTo(0.7, 9)
+    expect(read('fill="none" stroke="#202020" stroke-opacity="0.3"')).toBeCloseTo(1, 9)
+    expect(read('fill="#202020" opacity="0.5"')).toBeCloseTo(0.5, 9)
+  })
+
+  // A board stays the same in light and in dark on whatever page the style lays, board media included.
+  it('draws a board medium on another page the same in the light and the dark', () => {
+    for (const [name, head] of ASIDE_CASES.slice(8)) {
+      expect(draw(head, { palette: DARK_PALETTE }), `${name} no theme`).toBe(draw(head, { palette: LIGHT_PALETTE }))
+      expect(draw(head, { palette: DARK_PALETTE, theme: defaultTheme('dark') }), `${name} default`).toBe(draw(head, { palette: LIGHT_PALETTE, theme: defaultTheme('light') }))
+    }
+  })
 
   // No theme is the default theme of the HOST's mode, byte for byte, whatever surface a style lays: the mode is
   // never the surface's (a dark tint under a light host).

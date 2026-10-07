@@ -21,7 +21,7 @@
 // only a little lighter.
 
 import { fromOklch, toOklch } from '../color'
-import { baseColour, fitWithin, settingOf } from './fit'
+import { baseOf, fitWithin, neutralsFor, settingOf } from './fit'
 import type { Medium, MediumSettingSpec } from './types'
 
 const SETTINGS: readonly MediumSettingSpec[] = [{ key: 'chroma', label: 'Chroma', min: 0.5, max: 0.7, step: 0.05, default: 0.6 }]
@@ -42,9 +42,16 @@ export const chalk: Medium = {
   surface: 'blackboard',
   settings: SETTINGS,
   colour(theme, role, settings) {
-    const base = toOklch(baseColour(theme, 'chalk', role, NEUTRALS, theme.boardColours))
+    const surface = theme.boards.blackboard
+    // On a page that is not a dark board (the figure lays chalk on a light paper, or a theme gave a light board),
+    // the whitest chalk would be no ink at all, and ink and muted would be fitted to one colour: the neutrals
+    // are then the page's own near-black and its step (see `neutralsFor`), held to the floor alone.
+    const neutrals = neutralsFor(surface, NEUTRALS, 'dark')
+    const { hex, neutral } = baseOf(theme, 'chalk', role, neutrals, theme.boardColours)
+    const base = toOklch(hex)
     const chroma = settingOf(SETTINGS, settings, 'chroma')
-    return { hex: fitWithin({ ...base, c: base.c * chroma }, theme.boards.blackboard, 4.5, DIMMEST, LIGHTEST, OPACITY), opacity: OPACITY }
+    const [lo, hi] = neutral && neutrals !== NEUTRALS ? [0, 1] : [DIMMEST, LIGHTEST]
+    return { hex: fitWithin({ ...base, c: base.c * chroma }, surface, 4.5, lo, hi, OPACITY), opacity: OPACITY }
   },
   surfaceColour: (theme) => theme.boards.blackboard,
   overlap: 'lighten',

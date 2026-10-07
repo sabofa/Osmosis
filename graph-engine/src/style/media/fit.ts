@@ -72,6 +72,32 @@ export function pageNeutrals(theme: ThemeInput): Neutrals {
   return { ink: theme.colours.ink, muted: theme.colours.muted }
 }
 
+// The neutrals ON a surface, whatever the theme says: a near-black ink on a light surface (L 0.22) and a
+// near-white one on a dark surface (L 0.92), whichever end is farther from the surface (the near-black where
+// they tie), both with no chroma; and the muted one 0.15 nearer the surface than the ink (0.37 on a light
+// surface, 0.77 on a dark one). They are a marker's own neutrals, and what a board medium takes on a page
+// that is not its board.
+const INK_ON_LIGHT = 0.22
+const INK_ON_DARK = 0.92
+const MUTED_STEP = 0.15
+
+export function neutralsOn(surface: Hex): Neutrals {
+  const paper = toOklch(surface).l
+  const ink = Math.abs(INK_ON_LIGHT - paper) >= Math.abs(INK_ON_DARK - paper) ? INK_ON_LIGHT : INK_ON_DARK
+  const muted = ink + Math.sign(paper - ink) * MUTED_STEP
+  return { ink: fromOklch({ l: ink, c: 0, h: 0 }), muted: fromOklch({ l: muted, c: 0, h: 0 }) }
+}
+
+// The neutrals of a medium made for one side of the lightness scale (chalk for a dark board, the whiteboard
+// marker for a light one), on the surface it is fitted to: its own while the surface is on that side, and the
+// surface's (`neutralsOn`) when it is not. The own object itself is returned in the first case, so a caller can
+// tell the two apart.
+export function neutralsFor(surface: Hex, own: Neutrals, ownSide: 'light' | 'dark'): Neutrals {
+  const mid = (INK_ON_LIGHT + INK_ON_DARK) / 2
+  const side = toOklch(surface).l >= mid ? 'light' : 'dark'
+  return side === ownSide ? own : neutralsOn(surface)
+}
+
 // The colour a role starts from, before the medium fits it:
 //   1. the author's own colour (`role.colour`). One that is not a hex is ignored,
 //      as if not given: the caller turns a colour name into a hex first;

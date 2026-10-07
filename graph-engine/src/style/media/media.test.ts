@@ -5,6 +5,7 @@ import { defaultTheme, fromOsmosisTheme, resolveTheme } from '../theme/adapter'
 import { contrastRatio } from '../theme/contrast'
 import { DEFAULT_DARK_GOOD_BAD, DEFAULT_DARK_TOKENS, DEFAULT_LIGHT_GOOD_BAD, DEFAULT_LIGHT_TOKENS } from '../theme/defaults'
 import { MEDIUM_NAMES, ROLE_KEYS, SERIES_COUNT, type Hex, type MediumName, type ThemeInput, type ThemeSource } from '../theme/types'
+import { neutralsOn } from './fit'
 import { MEDIA, defaultMediumSettings, mediumOf } from './index'
 import type { Role } from './types'
 
@@ -832,6 +833,96 @@ describe('what is seen, on the default theme and the four built-ins in both mode
     }
     // A near-black an author typed is a mid marker, not the near-black the marker keeps for its lines.
     expect(toOklch(MEDIA.marker.colour(light, { key: 'line', colour: '#202020' }, {}).hex).l).toBeGreaterThan(toOklch(MEDIA.marker.colour(light, { key: 'line' }, {}).hex).l + 0.1)
+  })
+})
+
+// A board medium (chalk, the whiteboard marker) is fitted to the board it is given. A figure lays one on a page that is
+// not its board (chalk on a whiteboard paper or a light tint, the marker on a blackboard or a dark tint) by giving it THAT
+// page as its board (figure/medium.ts, `boardFittedTheme`): every role is then fitted against the page, as a paper
+// medium's are, keeping the medium's own range where the floor allows. On the page's other side its neutrals are the
+// page's (the near-black or near-white ink and a muted step nearer), so a line and an auxiliary line are not fitted to one
+// colour, and a board is the same in light and in dark.
+describe('a board medium on a page that is not its board', () => {
+  const page = (name: 'chalk' | 'whiteboard', hex: Hex) => resolveTheme({ boards: { [name === 'chalk' ? 'blackboard' : 'whiteboard']: hex } })
+  const PAGES: ['chalk' | 'whiteboard', Hex][] = [
+    ['chalk', '#f1f5fe'],
+    ['chalk', '#f2e8cf'],
+    ['chalk', '#ffffff'],
+    ['whiteboard', '#1a2930'],
+    ['whiteboard', '#1d1d2b'],
+    ['whiteboard', '#233d1d'],
+    ['whiteboard', '#000000'],
+  ]
+
+  for (const [name, hex] of PAGES) {
+    it(`${name} on ${hex}: every role is fitted against the page and keeps its floor as drawn`, () => {
+      const theme = page(name, hex)
+      for (const role of ROLES) {
+        const out = MEDIA[name].colour(theme, role, defaultMediumSettings(name))
+        const ratio = drawn(out, hex)
+        expect(ratio >= FLOOR[name]! || ratio >= bestDrawn(hex, out.opacity) - 1e-6, `${name} on ${hex} ${JSON.stringify(role)}: ${out.hex} ${ratio.toFixed(2)}:1`).toBe(true)
+      }
+      // The floor is reachable on these pages, so it is met.
+      for (const key of ['line', 'auxiliary', 'point', 'highlight'] as const) expect(drawn(MEDIA[name].colour(theme, { key }, {}), hex), `${name} ${hex} ${key}`).toBeGreaterThanOrEqual(FLOOR[name]!)
+    })
+
+    it(`${name} on ${hex}: a line and an auxiliary line are two colours, the page's ink and a step nearer`, () => {
+      const theme = page(name, hex)
+      const line = MEDIA[name].colour(theme, { key: 'line' }, {}).hex
+      const auxiliary = MEDIA[name].colour(theme, { key: 'auxiliary' }, {}).hex
+      expect(deltaE(line, auxiliary), `${line} against ${auxiliary}`).toBeGreaterThanOrEqual(0.05)
+      // On the other side of the lightness scale from its board the medium's neutrals are the page's: neutral greys.
+      const own = name === 'chalk' ? toOklch(hex).l < 0.57 : toOklch(hex).l >= 0.57
+      if (!own) for (const colour of [line, auxiliary]) expect(toOklch(colour).c, colour).toBeLessThan(0.01)
+    })
+  }
+
+  it('keeps the whitest chalk for a dark board and the black marker for a light one: nothing changes on the board itself', () => {
+    const light = defaultTheme('light')
+    expect(MEDIA.chalk.colour(light, { key: 'line' }, {}).hex).toBe('#eeeeee')
+    expect(MEDIA.chalk.colour(light, { key: 'auxiliary' }, {}).hex).toBe('#bebebe')
+    expect(MEDIA.whiteboard.colour(light, { key: 'line' }, {}).hex).toBe('#3a3a3a')
+    expect(MEDIA.whiteboard.colour(light, { key: 'auxiliary' }, {}).hex).toBe('#686868')
+    // A greenboard is a dark board too: chalk's own neutrals, fitted to it.
+    expect(MEDIA.chalk.colour(page('chalk', light.boards.greenboard), { key: 'line' }, {}).hex).toBe('#eeeeee')
+  })
+
+  it('takes the page’s neutrals on the other side, the near-black on a light page and the near-white on a dark one', () => {
+    // Chalk on a light page: the near-black, 0.22, and its muted 0.15 nearer the page, 0.37 (as the marker's).
+    const onLight = page('chalk', '#f1f5fe')
+    expect(toOklch(MEDIA.chalk.colour(onLight, { key: 'line' }, {}).hex).l).toBeCloseTo(0.22, 1)
+    expect(toOklch(MEDIA.chalk.colour(onLight, { key: 'auxiliary' }, {}).hex).l).toBeCloseTo(0.37, 1)
+    // The marker on a dark page: the near-white, 0.92, and 0.77.
+    const onDark = page('whiteboard', '#1a2930')
+    expect(toOklch(MEDIA.whiteboard.colour(onDark, { key: 'line' }, {}).hex).l).toBeCloseTo(0.92, 1)
+    expect(toOklch(MEDIA.whiteboard.colour(onDark, { key: 'auxiliary' }, {}).hex).l).toBeCloseTo(0.77, 1)
+    // The marker's neutrals are these same ones (one rule, not two).
+    expect(neutralsOn('#ffffff')).toEqual({ ink: fromOklch({ l: 0.22, c: 0, h: 0 }), muted: fromOklch({ l: 0.37, c: 0, h: 0 }) })
+    expect(neutralsOn('#101010')).toEqual({ ink: fromOklch({ l: 0.92, c: 0, h: 0 }), muted: fromOklch({ l: 0.77, c: 0, h: 0 }) })
+  })
+
+  it('keeps a coloured role in the medium’s own range where the floor allows, and leaves it only where it does not', () => {
+    // Chalk on a greenboard-like dark page: a coloured role stays in 0.80 to 0.95. On a light page the floor wins.
+    const dark = page('chalk', '#233d1d')
+    const inRange = toOklch(MEDIA.chalk.colour(dark, { key: 'highlight' }, {}).hex).l
+    expect(inRange).toBeGreaterThanOrEqual(0.8 - TOLERANCE)
+    expect(inRange).toBeLessThanOrEqual(0.95 + TOLERANCE)
+    expect(toOklch(MEDIA.chalk.colour(page('chalk', '#f1f5fe'), { key: 'highlight' }, {}).hex).l).toBeLessThan(0.8 - TOLERANCE)
+    // The marker on a light page: a coloured role stays in 0.35 to 0.55.
+    const light = page('whiteboard', '#f1f5fe')
+    const marker = toOklch(MEDIA.whiteboard.colour(light, { key: 'highlight' }, {}).hex).l
+    expect(marker).toBeGreaterThanOrEqual(0.35 - TOLERANCE)
+    expect(marker).toBeLessThanOrEqual(0.55 + TOLERANCE)
+    expect(toOklch(MEDIA.whiteboard.colour(page('whiteboard', '#1a2930'), { key: 'highlight' }, {}).hex).l).toBeGreaterThan(0.55 + TOLERANCE)
+  })
+
+  it('does not read the mode: the same colours on the same page in light and in dark', () => {
+    for (const [name, hex] of PAGES) {
+      const boards = { [name === 'chalk' ? 'blackboard' : 'whiteboard']: hex }
+      const light = resolveTheme({ mode: 'light', boards })
+      const dark = resolveTheme({ mode: 'dark', boards })
+      for (const role of ROLES) expect(MEDIA[name].colour(dark, role, {}), `${name} ${hex} ${JSON.stringify(role)}`).toEqual(MEDIA[name].colour(light, role, {}))
+    }
   })
 })
 

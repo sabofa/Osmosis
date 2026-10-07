@@ -106,15 +106,35 @@ const isDarkPage = (surface: Hex): boolean => toOklch(surface).l < 0.6
 // muted are the ones that read on the theme's own paper: on a page of the other side (a dark tint under
 // a light theme, a blackboard under one, a light tint under a dark theme) they are the wrong ones, and
 // fitting both to the page pushes them to the same colour. So there the ink and muted are the theme's
-// light-mode ones (`boardColours`, always its light colours) for a light page, and the default dark
-// theme's for a dark one (a theme's dark mode is not known to a light-mode theme, until the theming
-// overhaul supplies both). The coloured roles (accent, bad, series, an author's own) are fitted by
-// lightness from where they are, and need nothing.
+// light-mode ones (`boardColours`) for a light page, and the default dark theme's for a dark one (a
+// theme's dark mode is not known to a light-mode theme, until the theming overhaul supplies both). A
+// dark theme that gave no light colours has `boardColours` that are its own DARK ones (the interim
+// fallback of the adapter), and then the light page takes the default light theme's, or the ink and the
+// muted would be the dark theme's light ones on a light page and collapse again. The coloured roles
+// (accent, bad, series, an author's own) are fitted by lightness from where they are, and need nothing.
 function fittedTheme(theme: ThemeInput, surface: Hex): ThemeInput {
   const dark = isDarkPage(surface)
-  const own = (theme.mode === 'dark') === dark ? theme.colours : dark ? defaultTheme('dark').colours : theme.boardColours
+  const own =
+    (theme.mode === 'dark') === dark
+      ? theme.colours
+      : dark
+        ? defaultTheme('dark').colours
+        : isDarkPage(theme.boardColours.paper)
+          ? defaultTheme('light').colours
+          : theme.boardColours
   if (surface === theme.colours.paper && own === theme.colours) return theme
   return { ...theme, colours: { ...theme.colours, paper: surface, ink: own.ink, muted: own.muted } }
+}
+
+// The theme a BOARD medium (chalk, the whiteboard marker) is fitted in. It is fitted to its own board, which is
+// the page it is drawn on in its own looks; laid on another page (chalk on a whiteboard paper or a light tint, the
+// marker on a blackboard or a dark tint) it is fitted to THAT page, as a paper medium is: its board is the page.
+// It keeps its own range of lightness where the floor allows, and the media take the page's neutrals when the
+// page is on the other side of the lightness scale from the board (style/media/fit.ts, `neutralsFor`). On
+// its own board nothing changes, and a board is the same in light and in dark (the page is a board or a
+// tint, never read from the mode).
+function boardFittedTheme(theme: ThemeInput, board: BoardName, surface: Hex): ThemeInput {
+  return theme.boards[board] === surface ? theme : { ...theme, boards: { ...theme.boards, [board]: surface } }
 }
 
 // The figure's medium, or null for the clean medium, whose colours are the host's palette
@@ -133,7 +153,7 @@ export function figureMedium(style: Style, palette: Palette, theme?: ThemeInput,
 
   // What the page is: a tint the style gives, else the board the paper is, else the medium's own surface.
   const surface = paperColour(style, palette, given) ?? medium.surfaceColour(given)
-  const fitted = medium.surface === 'paper' ? fittedTheme(given, surface) : given
+  const fitted = medium.surface === 'paper' ? fittedTheme(given, surface) : boardFittedTheme(given, medium.surface, surface)
 
   const slots = figureTheme(palette)
   const saturation = style.colour.saturation
