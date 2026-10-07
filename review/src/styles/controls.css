@@ -1,0 +1,27 @@
+/* The Style Lab's reusable controls (SettingsPanel, LayerSelector, ThemeSwitcher). Plain layout,
+   reads the lab's own tokens (--line, --muted, --accent, --card) with fallbacks. */
+.sp { display: flex; flex-direction: column; gap: 6px; }
+.sp-group { border: 1px solid var(--line, #d9d6c4); border-radius: 8px; background: var(--card, #fff); }
+.sp-group > summary { cursor: pointer; padding: 6px 10px; font-weight: 600; list-style: none; }
+.sp-group > summary::before { content: '\25B8'; display: inline-block; width: 1em; color: var(--muted, #6b6b5f); }
+.sp-group[open] > summary::before { content: '\25BE'; }
+.sp-group .sp-count { color: var(--muted, #6b6b5f); font-weight: 400; margin-left: 6px; }
+.sp-rows { padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 4px; }
+.sp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 22px; align-items: center; gap: 8px; }
+.sp-row.is-inherited .sp-ctl { opacity: 0.5; }
+.sp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-ctl { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sp-ctl input[type='range'] { flex: 1; min-width: 0; }
+.sp-ctl input[type='number'] { width: 64px; }
+.sp-ctl select { min-width: 0; max-width: 100%; }
+.sp-ctl svg { border: 1px solid var(--line, #d9d6c4); border-radius: 4px; background: var(--surface, #fbfaf4); }
+.sp-unit { color: var(--muted, #6b6b5f); }
+.sp-btn { border: 0; background: none; cursor: pointer; color: var(--muted, #6b6b5f); padding: 0 4px; line-height: 1; }
+.sp-btn:hover { color: var(--accent, #c65d22); }
+.sp-set { border: 1px solid var(--line, #d9d6c4); border-radius: 6px; background: none; cursor: pointer; font-size: 11px; padding: 1px 6px; }
+.sp-layer, .ts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sp-layer button, .ts button { border: 1px solid var(--line, #d9d6c4); background: var(--card, #fff); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
+.sp-layer button[aria-pressed='true'], .ts button[aria-pressed='true'] { background: var(--accent, #c65d22); border-color: var(--accent, #c65d22); color: #fff; }
+.ts-custom { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; width: 100%; margin-top: 4px; }
+.ts-custom label { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ts-custom h4 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 12px; color: var(--muted, #6b6b5f); }
