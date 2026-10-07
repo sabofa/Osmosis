@@ -43,6 +43,8 @@ const SOURCES: Record<string, string> = Object.fromEntries(Object.entries(RAW).m
 const isTest = (path: string) => /\.test\.tsx?$/.test(path)
 const MEANINGS = /(^|\/)style\/settings\/meanings(\/|$)/
 const GUIDE_MODULE = /(^|\/)style\/settings\/guide(\.ts)?$/
+// The one module of src/ besides the tests that may read the guide: it writes the guide's markdown and nothing renders from it.
+const GUIDE_WRITER = 'graph-engine/src/style/settings/guideDocs.ts'
 
 // The modules a source names, as paths from the repository root (a specifier that is not relative stays as it is).
 function reachedBy(path: string, source: string): string[] {
@@ -65,7 +67,7 @@ function violationsOf(path: string, source: string): string[] {
   if (!/meanings|guide/.test(source)) return out
   for (const target of reachedBy(path, source)) {
     if (MEANINGS.test(target) && !isGuide && !inMeanings && !isTest(path)) out.push(`${path} reads '${target}': only settings/guide.ts and tests may read the meanings`)
-    if (GUIDE_MODULE.test(target) && inEngine && !isTest(path)) out.push(`${path} reads '${target}': in src/ only tests may read settings/guide.ts`)
+    if (GUIDE_MODULE.test(target) && inEngine && !isTest(path) && path !== GUIDE_WRITER) out.push(`${path} reads '${target}': in src/ only tests may read settings/guide.ts`)
   }
   return out
 }
@@ -163,6 +165,11 @@ describe('the prose guard catches a stray reader', () => {
     expect(violationsOf('graph-engine/src/figure/render.ts', "const lazy = import('../style/settings/guide')")).toHaveLength(1)
     expect(violationsOf('review/src/styles/guide.tsx', "import { GUIDE } from '../../../graph-engine/src/style/settings/guide'")).toEqual([])
     expect(violationsOf('graph-engine/tools/build-guide.mts', "import { GUIDE } from '../src/style/settings/guide'")).toEqual([])
+  })
+
+  it('lets the guide writer read the guide, and no other module of src/', () => {
+    expect(violationsOf(GUIDE_WRITER, "import { GUIDE } from './guide'")).toEqual([])
+    expect(violationsOf('graph-engine/src/style/settings/guideOther.ts', "import { GUIDE } from './guide'")).toHaveLength(1)
   })
 
   it('lets the guide, the meanings among themselves and the tests read them', () => {

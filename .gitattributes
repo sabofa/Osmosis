@@ -11,3 +11,6 @@
 *.sh text eol=lf
 deploy/** text eol=lf
 *.example text eol=lf
+
+# The generated style guide is read and compared as LF.
+docs/styles/** text eol=lf
