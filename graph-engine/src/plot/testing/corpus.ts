@@ -733,4 +733,124 @@ export const CORPUS: readonly CorpusCase[] = [
     expect: { bands: false, undrawn: [{ x: (HALF_PI + 8 * Math.PI) / 500, y: (HALF_PI + 8 * Math.PI) / 500 + 0.1 }] },
     ceiling: { points: 460, intervals: 230 }, // measured 301 / 151 (601 / 451 when COARSE's chords were 8 px, and every start interval was bisected)
   },
+  // ---- P3: implicit curves and regions ---------------------------------------------------------------------
+  {
+    name: 'P3: an annulus, 1 < x^2 + y^2 < 4',
+    spec: '1 < x^2+y^2 < 4',
+    views: [STD],
+    expect: { area: { value: 3 * Math.PI, rel: 0.01 }, unfilled: [view(-0.5, 0.5, -0.5, 0.5).bounds], dashed: true, boundaries: { dashed: 2, solid: 0 } },
+    ceiling: { points: 18600, intervals: 7500 }, // measured 12360 / 4981
+  },
+  {
+    name: 'P3: a half disc, x^2 + y^2 < 4 and y > 0',
+    spec: 'x^2+y^2 < 4 if y > 0',
+    views: [STD],
+    expect: { area: { value: 2 * Math.PI, rel: 0.01 }, unfilled: [view(-1, 1, -1.5, -0.05).bounds], dashed: true },
+    ceiling: { points: 6850, intervals: 3700 }, // measured 4541 / 2465
+  },
+  {
+    name: 'P3: y < ln(x)',
+    spec: 'y < ln(x)',
+    views: [STD],
+    expect: { unfilled: [{ xMin: -9.5, xMax: -0.05, yMin: -9.5, yMax: 9.5 }], dashed: true },
+    ceiling: { points: 27800, intervals: 10250 }, // measured 18491 / 6823
+  },
+  {
+    name: 'P3: x*y > 1, two components',
+    spec: 'x*y > 1',
+    views: [STD],
+    expect: { unfilled: [view(-0.9, 0.9, -0.9, 0.9).bounds, view(-0.1, 0.1, -9, 9).bounds], dashed: true, boundaries: { dashed: 1, solid: 0 } },
+    ceiling: { points: 45900, intervals: 15200 }, // measured 30600 / 10131 (one boundary object of two chains, one a branch)
+  },
+  {
+    name: 'P3: y >= x^2, a solid boundary',
+    spec: 'y >= x^2',
+    views: [STD],
+    expect: { unfilled: [view(-3, 3, -9, -0.5).bounds], dashed: false },
+    ceiling: { points: 28700, intervals: 9900 }, // measured 19125 / 6583
+  },
+  {
+    name: 'P3: a restricted disc, x^2 + y^2 < 1 if x > 0',
+    spec: 'x^2+y^2 < 1 if x > 0',
+    views: [STD],
+    expect: { area: { value: Math.PI / 2, rel: 0.01 }, unfilled: [view(-1, -0.05, -1, 1).bounds] },
+    ceiling: { points: 3450, intervals: 1870 }, // measured 2297 / 1241
+  },
+  {
+    // the upper half circle only: nothing is drawn below y = 0 (the points below are asked undrawn; curvesOn puts every
+    // vertex on the circle, so the vertices are on the upper half or there is a stray one)
+    name: 'P3: a half circle, x^2 + y^2 = 4 if y > 0',
+    spec: 'x^2+y^2 = 4 if y > 0',
+    views: [STD],
+    expect: { curvesOn: 'x^2+y^2-4', drawn: [{ x: 0, y: 2 }, { x: 1.9, y: Math.sqrt(4 - 1.9 * 1.9) }], undrawn: [{ x: 0, y: -2 }, { x: 1.5, y: -Math.sqrt(4 - 2.25) }, { x: -1.5, y: -Math.sqrt(4 - 2.25) }] },
+    ceiling: { points: 15700, intervals: 4220 }, // measured 10424 / 2811
+  },
+  {
+    name: 'P3: a lemniscate',
+    spec: '(x^2+y^2)^2 - 4*(x^2-y^2) = 0',
+    views: [view(-4, 4, -3, 3)],
+    expect: { curvesOn: '(x^2+y^2)^2 - 4*(x^2-y^2)', drawn: [{ x: 2, y: 0 }, { x: -2, y: 0 }] },
+    ceiling: { points: 43100, intervals: 16500 }, // measured 28693 / 10997
+  },
+  {
+    name: 'P3: sin(x) = cos(y)',
+    spec: 'sin(x) - cos(y) = 0',
+    views: [STD],
+    expect: { curvesOn: 'sin(x)-cos(y)' },
+    ceiling: { points: 556000, intervals: 112500 }, // measured 370650 / 74997 (20 chains)
+  },
+  {
+    name: 'P3: x^y = y^x',
+    spec: 'x^y = y^x',
+    views: [view(-1, 7, -1, 7)],
+    expect: { curvesOn: 'y*ln(x)-x*ln(y)', drawn: [{ x: 2, y: 4 }, { x: 4, y: 2 }, { x: 3, y: 3 }] },
+    ceiling: { points: 183300, intervals: 77700 }, // measured 122181 / 51783
+  },
+  {
+    // the poles of tan are where the implicit curve leaves: no segment joins the two sides of one
+    name: 'P3: y - tan(x) = 0, panned',
+    spec: 'y - tan(x) = 0',
+    views: panSequence(STD),
+    expect: { noVerticalJoins: true },
+    ceiling: { points: 1099500, intervals: 203800 }, // measured 732945 / 135857 (the worst of 5 views)
+  },
+  {
+    // KNOWN LIMIT. y = +-sin(3x) are two arms that cross at every multiple of pi/3 and run nearly parallel near the axis.
+    // At COARSE they are drawn as 2 chains over the whole view (not joined into an X at the crossings), and the nearest
+    // vertex to the crest (pi/6, 1) is 2.3 px off (0.15 px at FULL). Pinned today: the crossings are drawn.
+    name: 'KNOWN LIMIT: P3: y^2 = sin(3x)^2 at COARSE',
+    spec: 'y^2 = sin(3*x)^2',
+    views: [STD],
+    quality: 'coarse',
+    expect: { drawn: [{ x: 0, y: 0 }, { x: Math.PI / 3, y: 0 }, { x: -Math.PI / 3, y: 0 }] },
+    ceiling: { points: 45500, intervals: 7300 }, // measured 30284 / 4805
+  },
+  {
+    // KNOWN LIMIT. A lemniscate with a = 0.02 (0.8 px wide at 40 px a unit) at COARSE: the engine draws nothing and says
+    // nothing (0 chains, no note).
+    name: 'KNOWN LIMIT: P3: a tiny lemniscate at COARSE vanishes',
+    spec: '(x^2+y^2)^2 - 0.0004*(x^2-y^2) = 0',
+    views: [STD],
+    quality: 'coarse',
+    expect: { blank: true },
+    ceiling: { points: 210, intervals: 176 }, // measured 140 / 117
+  },
+  {
+    // KNOWN LIMIT. (x - y)^2 = 0 written expanded is a double root: the expression touches 0 along y = x with no sign
+    // change. The engine spends its whole budget (about 213000 points), draws one chain of 1019 vertices and says "drawn
+    // coarsely". Pinned: that note, and that the origin and (5, 5) are drawn.
+    name: 'KNOWN LIMIT: P3: x^2 - 2*x*y + y^2 = 0, an expanded double root, large window',
+    spec: 'x^2 - 2*x*y + y^2 = 0',
+    views: [STD],
+    expect: { notes: [NOTE_COARSE], drawn: [{ x: 0, y: 0 }, { x: 5, y: 5 }] },
+    ceiling: { points: 320600, intervals: 65900 }, // measured 212257 / 43901
+  },
+  {
+    // KNOWN LIMIT: the same at a window 1000 times smaller; it fails the same way (the same note, the same work)
+    name: 'KNOWN LIMIT: P3: x^2 - 2*x*y + y^2 = 0, an expanded double root, small window',
+    spec: 'x^2 - 2*x*y + y^2 = 0',
+    views: [view(-0.01, 0.01, -0.01, 0.01)],
+    expect: { notes: [NOTE_COARSE], drawn: [{ x: 0, y: 0 }, { x: 0.005, y: 0.005 }] },
+    ceiling: { points: 320600, intervals: 65900 }, // measured 213715 / 43901
+  },
 ]
