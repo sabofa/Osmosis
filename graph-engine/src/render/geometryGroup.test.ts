@@ -20,7 +20,7 @@ describe('GeometryGroupManager', () => {
   // from the one actually attached to the geometry, so every write the
   // caller made afterward went nowhere — the geometry kept rendering its
   // *previous* (stale) shape. This is exactly the transition GraphViewer
-  // triggers every time a drag ends (DRAG_RESOLUTION -> the full resolution,
+  // triggers every time a drag ends (the coarse quality -> the full quality,
   // a big jump in vertex count for a region/implicit curve).
   it('reflects new point data after a curve object grows past its initial buffer size', () => {
     const mgr = new GeometryGroupManager()

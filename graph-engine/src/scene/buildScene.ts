@@ -19,11 +19,6 @@ import { circleCurve, polygonObjects } from './geometry/sceneObjects'
 import { formatCoord } from './format'
 import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 
-// Full-quality marching-squares resolution for a settled view; buildScene's
-// caller passes a lower value while the user is actively dragging (see
-// GraphViewer.tsx) so the expensive region/implicit-curve sampling backs off
-// during interaction and sharpens back up once it stops.
-const IMPLICIT_RESOLUTION = 140
 const FIELD_DIVISIONS = 18
 // The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
 // works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
@@ -444,10 +439,9 @@ function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex
 // Rebuilds the full scene from parsed statements. `bounds` is the current
 // camera viewport — functions, implicit curves, regions, and fields are
 // sampled over it, so the scene is rebuilt on pan/zoom as well as on spec
-// edits. `resolution` controls the marching-squares grid density for
-// implicit curves/regions — the caller (GraphViewer.tsx) passes a reduced
-// value while the view is actively being dragged, and the full
-// IMPLICIT_RESOLUTION once it settles.
+// edits. `resolution` is ignored since P3: implicit curves and regions are
+// sampled by the quadtree at the `quality` option below. It stays in the signature so
+// callers keep compiling.
 //
 // Curves (y = f(x), x = f(y), polar, parametric) go through the adaptive sampler
 // (plot/sample/curve.ts), which works in screen space, so `options` says how big the
@@ -483,7 +477,7 @@ export function buildScene(
   statements: Statement[],
   bounds: Bounds,
   config: GraphConfig,
-  resolution: number = IMPLICIT_RESOLUTION,
+  _resolution?: number,
   lines?: readonly number[],
   options?: SceneOptions
 ): Scene {
@@ -497,7 +491,6 @@ export function buildScene(
   const scope = plotScope.scope
   errors.push(...plotScope.errors)
   const namedPoints = collectNamedPoints(statements, scope)
-  void resolution // no statement reads the marching-squares resolution now; the parameter goes with the later subtasks
   const curves: CurveContext = { view: viewOf(bounds, options), scope, config, quality: options?.quality ?? 'full', budget: options?.budget, stats, errors }
 
   // Geometry constructions resolve in one pass up front, in source order (see

@@ -279,8 +279,8 @@ export class SceneRenderer {
     return this.interaction.isDragging()
   }
 
-  // Exposed so GraphViewer.tsx can ask buildScene for a coarse pass (a reduced
-  // marching-squares resolution, the sampler's coarse preset) while the user is
+  // Exposed so GraphViewer.tsx can ask buildScene for a coarse pass (the
+  // samplers' coarse quality preset) while the user is
   // dragging or zooming: dragging, or within WHEEL_SETTLE_MS of the last wheel
   // event. The rebuild that follows when it stops is full quality (see settle).
   isInteracting(): boolean {
