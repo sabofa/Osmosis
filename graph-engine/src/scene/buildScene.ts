@@ -273,11 +273,12 @@ function sayImplicit(sampled: Sampled, what: 'curve' | 'region', line: number, c
   ctx.stats.points += sampled.stats.points
   ctx.stats.intervals += sampled.stats.intervals
   if (sampled.tested && !sampled.defined) throw new Error(`this ${what} is undefined everywhere in view`)
+  const say = (note: string): string => (what === 'curve' ? note : note.replace('this curve', `this ${what}`))
   if (sampled.blankInView) {
-    if (sampled.capped) ctx.errors.push({ line, message: NOT_DRAWN_NOTE })
-    else ctx.errors.push({ line, message: NOT_CERTIFIED_NOTE })
+    if (sampled.capped) ctx.errors.push({ line, message: say(NOT_DRAWN_NOTE) })
+    else ctx.errors.push({ line, message: say(NOT_CERTIFIED_NOTE) })
   } else if ((sampled.capped || sampled.leftOut > 0) && ctx.quality === 'full' && sampled.drawnInView && !sampled.badView) {
-    ctx.errors.push({ line, message: BUDGET_NOTE })
+    ctx.errors.push({ line, message: say(BUDGET_NOTE) })
   }
   return sampled.objects
 }
@@ -293,7 +294,9 @@ function optionsOf(color: string | null, statement: number, ctx: CurveContext): 
 
 function sampleRegionStatement(condition: Expr, color: string | null, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
   const sampled = sampleRegion(condition, comparisonsOf(condition), ctx.view, ctx.scope, optionsOf(color, statementIndex, ctx))
-  return sayImplicit(sampled, 'region', line, ctx)
+  const objects = sayImplicit(sampled, 'region', line, ctx)
+  // A region with an empty outline (x^2 + y^2 < 0) is nothing to fill, and has no boundary to stroke.
+  return objects.filter((o) => o.kind !== 'region' || o.outline.length > 0)
 }
 
 // "left op right [if where]" is the one condition, "low lowOp mid highOp high" the two joined with `and`.

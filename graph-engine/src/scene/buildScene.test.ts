@@ -54,6 +54,19 @@ function filledProbes(regions: Region[]): Vec2[] {
   return out
 }
 
+// Probes at 0.05 spacing over [x0, x1] x [y0, y1] (inclusive, to rounding): the filled ones. The cut of an if clause is
+// exact, so a tight window straddling it shows any fill that leaks past.
+function fineProbes(regions: Region[], x0: number, x1: number, y0: number, y1: number): Vec2[] {
+  const out: Vec2[] = []
+  for (let i = 0; x0 + i * 0.05 <= x1 + 1e-9; i++) {
+    for (let j = 0; y0 + j * 0.05 <= y1 + 1e-9; j++) {
+      const p = { x: x0 + i * 0.05, y: y0 + j * 0.05 }
+      if (filled(regions, p)) out.push(p)
+    }
+  }
+  return out
+}
+
 describe('buildScene', () => {
   it('samples an explicit function into a curve', () => {
     const { scene } = build('y = x^2')
@@ -862,14 +875,17 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     for (const p of probes) expect(p.y).toBeGreaterThan(-0.3)
     expect(filled(regionsOf(scene), { x: 0, y: 1 })).toBe(true)
     expect(filled(regionsOf(scene), { x: 0, y: -1 })).toBe(false)
+    const near = fineProbes(regionsOf(scene), -2, 2, -0.5, 0.5)
+    expect(near.length).toBeGreaterThan(0)
+    for (const p of near) expect(p.y).toBeGreaterThan(-0.05)
   })
 
   it('an if clause on an implicit curve keeps the strokes inside it', () => {
     const scene = sceneOf('x^2 + y^2 = 9 if y > 0')
     const points = curvePoints(scene)
     expect(points.length).toBeGreaterThan(10)
-    // The quadtree's cut at y = 0 lands within a cell of the line.
-    for (const v of points) expect(v.y).toBeGreaterThan(-0.1)
+    // The cut at y = 0 is exact.
+    for (const v of points) expect(v.y).toBeGreaterThanOrEqual(-1e-6)
   })
 
   it('an if clause on a chained region keeps the shading and its edge inside it', () => {
@@ -881,7 +897,10 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     for (const p of probes) expect(p.y).toBeGreaterThan(-0.3)
     expect(filled(regions, { x: 1, y: 2 })).toBe(true)
     expect(filled(regions, { x: 1, y: -2 })).toBe(false)
-    for (const curve of boundaries(scene)) for (const v of vertices(curve)) expect(v.y).toBeGreaterThan(-0.1)
+    const near = fineProbes(regions, 0, 2, -0.5, 0.5)
+    expect(near.length).toBeGreaterThan(0)
+    for (const p of near) expect(p.y).toBeGreaterThan(-0.05)
+    for (const curve of boundaries(scene)) for (const v of vertices(curve)) expect(v.y).toBeGreaterThanOrEqual(-1e-6)
   })
 
   it('a region with two conditions joined by and keeps only the corner they share', () => {
@@ -895,6 +914,12 @@ describe('the 2D engine on the kernel (calc P1)', () => {
     expect(filled(regions, { x: 1, y: 1 })).toBe(true)
     expect(filled(regions, { x: -2, y: 1 })).toBe(false)
     expect(filled(regions, { x: 1, y: -1 })).toBe(false)
+    const nearY = fineProbes(regions, 0, 2, -0.5, 0.5)
+    expect(nearY.length).toBeGreaterThan(0)
+    for (const p of nearY) expect(p.y).toBeGreaterThan(-0.05)
+    const nearX = fineProbes(regions, -1.5, -0.5, 0.5, 2)
+    expect(nearX.length).toBeGreaterThan(0)
+    for (const p of nearX) expect(p.x).toBeGreaterThan(-1.05)
   })
 
   it('an if clause that names a missing variable on a region is a compile error on its line', () => {
@@ -1625,7 +1650,6 @@ describe('the adaptive sampler in the scene (calc P2)', () => {
 })
 
 describe('implicit curves and regions through the quadtree', () => {
-  const BUDGET = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
   const UNDEFINED_CURVE = 'this curve is undefined everywhere in view'
   type Region = Extract<SceneObject, { kind: 'region' }>
   type Curve = Extract<SceneObject, { kind: 'curve' }>
@@ -1697,7 +1721,13 @@ describe('implicit curves and regions through the quadtree', () => {
 
     it('a region forced to its cap says "drawn coarsely" at FULL', () => {
       const scene = sceneWith('x^2 + y^2 < 25', { quality: 'full', budget: TINY })
-      expect(scene.errors).toEqual([{ line: 1, message: BUDGET }])
+      expect(scene.errors).toEqual([{ line: 1, message: 'drawn coarsely: this region needs more detail than its drawing budget allows' }])
+    })
+    it('a region that is empty builds no region object and no error', () => {
+      const { scene } = build('x^2+y^2 < 0')
+      expect(scene.errors).toEqual([])
+      expect(scene.objects.filter((o) => o.kind === 'region')).toEqual([])
+      expect(boundaries(scene)).toEqual([])
     })
     it('and says nothing at COARSE', () => {
       const scene = sceneWith('x^2 + y^2 < 25', { quality: 'coarse', budget: TINY })

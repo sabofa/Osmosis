@@ -742,7 +742,7 @@ export const CORPUS: readonly CorpusCase[] = [
     ceiling: { points: 18600, intervals: 7500 }, // measured 12360 / 4981
   },
   {
-    name: 'P3: a half disc, x^2 + y^2 < 4 and y > 0',
+    name: 'P3: a half disc, x^2 + y^2 < 4 if y > 0',
     spec: 'x^2+y^2 < 4 if y > 0',
     views: [STD],
     expect: { area: { value: 2 * Math.PI, rel: 0.01 }, unfilled: [view(-1, 1, -1.5, -0.05).bounds], dashed: true },
