@@ -1,103 +1,134 @@
 // Contouring a leaf (calc P3, task 3): where the zero set of H = F - G crosses each leaf of the quadtree, as
 // straight pieces whose ends lie ON the zero set, so that the chains built from them (chains.ts) are certified.
 //
-//   const fns = compileContour(h, scope)                       // H, its twin, its gradient
-//   const { segments, touches, touchLinks, stats, capped } = contourLeaves(leaves, fns, { px, clip }, counter, budget?)
+//   const fns = compileContour(h, scope)                       // H, its twin, its gradient and Hessian
+//   const { segments, touches, touchLinks, stats, capped, refused } = contourLeaves(leaves, fns, { px, clip }, counter, budget?)
 //   const chains = buildChains(segments, px)                    // chains.ts
 //   const { chains: touchChains, points } = buildTouchCurves(touches, touchLinks, px)
 //
-// RULE 1 holds here: nothing is connected unless it is certified. A piece joins two points that are each a
-// zero of H found on a leaf edge, or a corner where H is exactly zero, or the saddle point of a crossing, and a
-// piece is never drawn across a pole, a jump or an undefined corner.
+// RULE 1 holds here: nothing is connected unless it is certified. A piece joins two points that are each a zero of H
+// found on a leaf edge, or a corner where H is exactly zero, or the certified centre of a crossing, and a piece is never
+// drawn across a pole, a jump or an undefined stretch (below).
 //
-// CORNERS. H is the scalar compile, evaluated once at each distinct corner (cached by its exact coordinates).
-// A corner is + when H >= 0 (an exact zero, signed or not, counts as +), - when H < 0, and undefined when H is NaN.
-// A leaf with an undefined corner is skipped (an undefined cell is never connected across), and counted.
+// CORNERS. H is the scalar compile, evaluated once at each distinct corner (cached by its exact coordinates). A corner is
+// + when H >= 0 (an exact zero, signed or not, counts as +), - when H < 0, and undefined when H is NaN.
 //
-// CROSSINGS. A sign change along a leaf edge is a crossing; it is located by BISECTION on H along the edge, never by
-// interpolation, to 2^-12 px (CONTOUR.bisectPx), and kept in a cache by the edge's end coordinates, so the leaf on
-// the other side of the edge is handed the very same point (Crossings, below; the region stage reuses it for each of a
-// condition's comparisons). Where the + end of the edge is exactly zero the crossing IS that corner: no bisection, and
-// the point is shared by every edge that meets the corner.
+// EDGES (Crossings). Each leaf edge has the list of its roots, kept in a cache by the edge's end coordinates, so the leaf on
+// the other side is handed the very same points (the region stage reuses the class for each of a condition's comparisons).
+//  - A sign change between the ends is located by BISECTION on H along the edge, never by interpolation, to 2^-12 px
+//    (CONTOUR.bisectPx). Where the + end is exactly zero the root IS that corner.
+//  - A leaf whose twin verdict is CONTINUOUS needs no check. For the rest, the twin is asked about the bracket the bisection
+//    ended with: CONTINUOUS, a root. Otherwise the bisection goes on to machine width, asking again as it goes: a bracket
+//    still PARTIAL with an infinite bound there holds a pole; one whose twin says nothing (DEFINED: floor, mod, a seam)
+//    is a root only if |H(hi) - H(lo)| has shrunk with the bracket (CONTOUR.jumpShrink), which a jump's does not. A UNKNOWN
+//    twin (an integral) says nothing, and the scalar sign change stands. A pole or a jump is not a root: the edge has no
+//    root there (and the leaf is not searched for touch points).
+//  - An edge with an undefined end is cut at the domain edge, found by bisecting on whether H is defined, to machine width; the
+//    defined part is tested as an ordinary edge (y = ln x reaches the bottom of the view beside x = 0).
+//  - In a leaf not proven continuous, an edge that shows no sign change is asked of the twin once; if it is PARTIAL it is
+//    subdivided by the twin down to CONTOUR.gapPx, which finds its poles and undefined points as gaps, and each stretch between
+//    gaps is tested as an ordinary edge (a curve beside a pole in the same leaf: y = 1/x far from the origin, tan x at COARSE).
 //
-// POLES AND JUMPS. A sign change is not a root if H blows up or jumps across it (y - tan x changes sign at every
-// pole). A leaf whose twin verdict is CONTINUOUS needs no check. For the rest, the twin is asked about the bracket
-// the bisection ended with: CONTINUOUS, a root. Otherwise the bisection goes on to machine width, asking again as it
-// goes: a bracket that is still PARTIAL with an infinite bound there holds a pole and the crossing is rejected; one
-// whose twin says nothing (DEFINED: floor, mod, a seam; PARTIAL with finite bounds) is a root only if |H(hi) - H(lo)|
-// has shrunk with the bracket (CONTOUR.jumpShrink), which a jump's does not. A UNKNOWN twin (an integral) says
-// nothing, and the scalar sign change stands. A rejected crossing stops its leaf (nothing is drawn in it), and the
-// edge stays rejected for the leaf on its other side.
+// PIECES. Two roots make one piece. In the classic configuration (every corner defined, a root on each edge whose ends differ)
+// the sign pattern says which: the piece cuts off the + run's corners. An edge whose two ends are exact zeros and whose
+// midpoint is exactly zero too is a piece whatever the signs of the leaf (the axes of xy = 0, the double line y^2 = 0 on a
+// grid line), unless all four corners are zero (a plateau). Where a curve meets such a zero edge (a T) it is joined to the
+// end of the edge nearer where it leaves it. Otherwise the piece is the chord between the two roots. Four roots are paired by
+// the ASYMPTOTIC DECIDER: the bilinear interpolant's value at its saddle point says whether the + corners are joined (the
+// pieces then cut off the - corners) or the - ones; when that value is within CONTOUR.crossRel of the largest corner value
+// the leaf may hold an X, and draws it if it is certified. Where roots are not one to an edge (two arms of a crossing leave
+// the leaf through the same edge, which shows no sign change) the four roots are paired by the sign of H at the leaf centre.
+// In a leaf the twin did not prove DEFINED or CONTINUOUS, a piece is drawn only if the twin over its bounding box is not
+// PARTIAL, so a chord never crosses an undefined strip. (A UNKNOWN twin, an integral, says nothing and does not block.)
 //
-// PIECES. Two crossings make one piece. The sign pattern of the corners says which: the piece cuts off the + run's
-// corners. Where that run is all exact zeros (xy = 0: the corners round the origin) the piece follows the edges between
-// them. An edge whose two ends are exact zeros is a piece whatever the signs of the leaf (the axes of xy = 0, the double
-// line y^2 = 0 on a grid line), unless all four corners are zero (a plateau). Where a curve meets such a zero edge (a T:
-// the run is a zero edge and one strict + corner) the curve is joined to the end of the edge nearer where it leaves it.
-// Otherwise the piece is the chord between the two crossings. Four crossings (the corners alternate) are paired by the
-// ASYMPTOTIC DECIDER: the bilinear interpolant's value at its saddle point says whether the + corners are joined (then
-// the pieces cut off the - corners) or the - ones. When that value is within CONTOUR.crossRel of the largest corner value
-// the leaf holds an X (two curves crossing: xy = 0, sin x sin y = 0 at its nodes), and four pieces run from the
-// crossings to the saddle point.
+// CRITICAL POINTS. Where two curves cross along the diagonals of the leaves the corners show no sign change at all (sin x =
+// cos y has none to pair). A leaf where BOTH partials of H change sign over its corners (the partials are read at the corners,
+// counted) holds a critical point: Newton's steps on grad H = 0 from the leaf centre, held inside the leaf, find it, and it is
+// a crossing if the Hessian is indefinite. Its arms run along the roots of the Hessian's quadratic form. It is certified by
+// H at CRITICAL.probePx (half a px) from the centre along the bisector of each pair of adjacent arms: the four signs must
+// alternate, which puts the centre within half a px of both curves (two branches that only pass near each other do not
+// alternate). Each arm is then followed out of the leaf: bisection of H along the leaf boundary between the points where the
+// adjacent bisectors leave it gives the root where the arm leaves. The roots are put in the edge cache before any leaf is
+// contoured, so that when two arms leave through the same edge both are there, and the neighbour pairs its four roots by the
+// sign of H at its centre. This pass is a leaf's first claim: a leaf whose critical point is certified draws its X from it.
+// Every X, whether found this way or from the saddle of the corners, is certified; one that is not is drawn as the two arcs.
 //
-// TOUCH POINTS. A leaf that drew nothing (the corners show no sign change, or every piece was a point) may still
-// hold a zero H touches without crossing ((x - y)^2 = 0, x^2 + y^2 = 0). Its centre is moved by Newton steps along
-// the gradient (the symbolic one from math/diff, compiled) toward H = 0, held in the leaf; where |H| / |grad H| ends
-// under half a px, and |H| has come down with it (the estimate is small near a pole too, where it does not), it is a
-// touch point. A leaf that shares a corner with a leaf that drew is not searched: the contour speaks for it (a dot
-// beside a curve, at its cusp, at a singular point the corners cannot see, would be wrong). Nor is a leaf on the edge of
-// the clip box (the overscan, out of view: a curve that only grazes the box leaves such leaves with a zero beyond it). The
-// touch points, and which are next to which (leaves that share a corner), are returned for chains.ts to join.
+// TOUCH POINTS. A leaf that drew nothing (the corners show no sign change, or every piece was a point) may still hold a zero H
+// touches without crossing ((x - y)^2 = 0, x^2 + y^2 = 0). Its centre is moved by Newton steps along the gradient (the symbolic
+// one from math/diff, compiled) toward H = 0, held in the leaf; where |H| / |grad H| ends under half a px, and |H| has come
+// down with it (the estimate is small near a pole too, where it does not), it is a touch point. A leaf that shares a corner
+// with a leaf that drew is not searched: the contour speaks for it (a dot beside a curve, at its cusp, would be wrong). Nor is a
+// leaf on the edge of the clip box (the overscan, out of view: a curve that only grazes the box leaves such leaves with a zero
+// beyond it), or one with a pole or an undefined point on its edges. The touch points, and which are next to which (leaves that
+// share a corner), are returned for chains.ts to join.
+//
+// LEAF SIZE. A leaf the quadtree stopped halving only because the budget ran out ('budget') and is wider than
+// CONTOUR.maxBudgetLeafPx is not contoured: a chord across it is not the curve. `refused` is true when any leaf was left out.
 //
 // KNOWN LIMITS, all of a leaf's size (1.2 px at FULL, 4.7 at COARSE) and none of them a false connection:
-//  - what the corners cannot show. Two crossings on one edge cancel, so a node where two curves cross along the diagonals of
-//    the leaves (sin x = cos y) has no leaf with four crossings, and the chord that cuts its corner misses the node by up
-//    to half a leaf; the lattice is drawn as the boundary of its cells, not as straight lines through the nodes.
-//  - a leaf that holds a pole, a jump or an undefined point, or has an undefined corner, is left blank, so a curve that
-//    ends there (the plateaus of floor(x) = y, the start of y = sqrt(x) when the origin is inside a leaf) stops a leaf short.
+//  - a leaf that holds a jump, or whose roots do not pair (an odd number: a curve that ends in the leaf at a jump or a domain
+//    edge) draws nothing, so the plateaus of floor(x) = y and the start of y = sqrt(x) stop a leaf short.
+//  - two arms that leave a leaf through one edge and the leaf beyond through one edge again (arms nearly parallel) are not followed
+//    past the first leaf; two arms that arrive together and leave the leaf by no edge that shows are not joined to each other.
 //  - a T where a curve meets a zero edge is joined at a corner of the edge, not at the point where it meets it.
+//  - a critical point lies in a leaf only if it is inside it: a crossing exactly on a grid line (the node (pi/2, 0) of sin x = cos y in the
+//    default view, on the x-axis) is on the edge of the leaf above and the leaf below, in neither, and is drawn from the corners as two arcs
+//    that miss it by up to half a leaf (0.5 px at FULL, 2.2 px at COARSE). A crossing a hair outside the clip box joins its two lines by a
+//    U-turn at the box's edge, in the overscan.
+//  - a sign change is a pole only if the bisection settles on it: an edge with a pole and two roots on one side shows no sign change there.
 //
-// COST. Every evaluation is counted on the caller's counter: points for the scalar (H, and each gradient component),
-// intervals for the twin. A leaf costs one corner evaluation (corners are shared by four leaves), about 15 for each
-// crossing on it, a twin evaluation if its verdict is not CONTINUOUS, and for a pole the chase, about 40 more. The
-// optional budget is a spend counted from the call's start, checked before each leaf: past it the remaining leaves
-// are left alone and the result says it was capped.
+// COST. Every evaluation is counted on the caller's counter: points for the scalar (H, each partial, each second partial),
+// intervals for the twin. A leaf costs one corner evaluation and two for the partials there (corners are shared by four
+// leaves), about 15 for each root on it, a twin evaluation if its verdict is not CONTINUOUS, and for a pole the chase, about
+// 30 more. The optional budget is a spend counted from the call's start, checked before each leaf: past it the remaining
+// leaves are left alone and the result says it was capped.
 import { type CompiledFn, compileScalar } from '../../math/compile'
 import { gradient } from '../../math/diff'
 import { CompileError } from '../../math/errors'
-import { CONTINUOUS, type CompiledInterval, compileInterval, type Iv, iv, PARTIAL, UNKNOWN } from '../../math/interval'
+import { CONTINUOUS, type CompiledInterval, compileInterval, isEmpty, type Iv, iv, PARTIAL, UNKNOWN, type Verdict } from '../../math/interval'
 import type { MathScope } from '../../math/scope'
 import type { Expr } from '../../parser/types'
 import type { Vec2 } from '../../scene/types'
 import type { EvalCounter, PxScale } from '../sample/types'
-import { CONTOUR, TOUCH } from './tuning'
+import { CONTOUR, CRITICAL, TOUCH } from './tuning'
 import type { Box, Leaf, Segment } from './types'
 
-// What the contouring evaluates: H, its twin over a box (the twin's contract: both boxes are passed), and the two
-// partials of H, or null when the kernel has no rule for one of them (gamma, choose, perm: a CompileError), in which
-// case touch points cannot be told and are not looked for (stats.touchUnchecked says how many leaves were left).
+// What the contouring evaluates: H, its twin over a box (the twin's contract: both boxes are passed), the two partials of H, and the
+// three second partials (xx, xy, yy), each null when the kernel has no rule for one of them (gamma, choose, perm: a CompileError). With
+// no partials touch points cannot be told and are not looked for (stats.touchUnchecked says how many leaves were left); with no second
+// partials the critical points of crossings are not looked for, and the leaves draw crossings from the saddles of their corners.
 export interface ContourFns {
   H: CompiledFn
   Hi: CompiledInterval
   grad: readonly [CompiledFn, CompiledFn] | null
+  hess: readonly [CompiledFn, CompiledFn, CompiledFn] | null
 }
 
 export function compileContour(h: Expr, scope: MathScope): ContourFns {
   const H = compileScalar(h, ['x', 'y'], scope)
   const Hi = compileInterval(h, ['x', 'y'], scope)
   let grad: readonly [CompiledFn, CompiledFn] | null = null
+  let hess: readonly [CompiledFn, CompiledFn, CompiledFn] | null = null
   try {
     const [gx, gy] = gradient(h, ['x', 'y'], scope)
     grad = [compileScalar(gx, ['x', 'y'], scope), compileScalar(gy, ['x', 'y'], scope)]
+    try {
+      const [hxx, hxy] = gradient(gx, ['x', 'y'], scope)
+      const [, hyy] = gradient(gy, ['x', 'y'], scope)
+      hess = [compileScalar(hxx, ['x', 'y'], scope), compileScalar(hxy, ['x', 'y'], scope), compileScalar(hyy, ['x', 'y'], scope)]
+    } catch (err) {
+      if (!(err instanceof CompileError)) throw err
+    }
   } catch (err) {
     if (!(err instanceof CompileError)) throw err
   }
-  return { H, Hi, grad }
+  return { H, Hi, grad, hess }
 }
 
-// What a contouring did, for the caller's notes and the corpus. `crossings` counts roots located by bisection (an edge
-// is located once, whichever leaf asks); `poles`, `jumps` and `undefinedEdges` the sign changes that were rejected;
-// `saddles` the leaves whose four edges all crossed and `crosses` those drawn as an X.
+// What a contouring did, for the caller's notes and the corpus. `crossings` counts roots located by bisection (an edge is located once,
+// whichever leaf asks); `poles`, `jumps` and `undefinedEdges` the sign changes that were rejected; `gaps` the edges that were cut at a
+// domain edge or subdivided to find a pole; `saddles` the leaves with four arms and `crosses` those drawn as an X, `critical` of which
+// were found from a critical point; `chordsRejected` the pieces the twin would not vouch for; `oversized` the 'budget' leaves left out.
 export interface ContourStats {
   leaves: number
   corners: number
@@ -107,15 +138,37 @@ export interface ContourStats {
   poles: number
   jumps: number
   undefinedEdges: number
+  gaps: number
   saddles: number
   crosses: number
+  critical: number
+  chordsRejected: number
+  oversized: number
   touchCandidates: number
   touchPoints: number
   touchUnchecked: number
 }
 
 export function newStats(): ContourStats {
-  return { leaves: 0, corners: 0, definedCorners: 0, undefinedLeaves: 0, crossings: 0, poles: 0, jumps: 0, undefinedEdges: 0, saddles: 0, crosses: 0, touchCandidates: 0, touchPoints: 0, touchUnchecked: 0 }
+  return {
+    leaves: 0,
+    corners: 0,
+    definedCorners: 0,
+    undefinedLeaves: 0,
+    crossings: 0,
+    poles: 0,
+    jumps: 0,
+    undefinedEdges: 0,
+    gaps: 0,
+    saddles: 0,
+    crosses: 0,
+    critical: 0,
+    chordsRejected: 0,
+    oversized: 0,
+    touchCandidates: 0,
+    touchPoints: 0,
+    touchUnchecked: 0,
+  }
 }
 
 // A corner of the grid with the value of H there, and the point it is (kept, so that pieces that end at an exact zero
@@ -131,16 +184,34 @@ export interface Corner {
 // A located crossing, or why a sign change was not one. 'pole': H blows up across it. 'jump': H is discontinuous
 // across it. 'undefined': H is undefined at a point of the edge.
 export type CrossingResult = { ok: true; x: number; y: number } | { ok: false; why: 'pole' | 'jump' | 'undefined' }
+type Root = Extract<CrossingResult, { ok: true }>
+type Rejected = Extract<CrossingResult, { ok: false }>
 
-// The crossings of H along leaf edges, cached by the edge. One per condition: the contouring of a curve makes one, and
-// the region stage makes one for each comparison of its condition.
+// The roots of one edge, in order from the end with the smaller (x, y) to the other; `fail` says a sign change that was not a root;
+// `gap` that the edge holds a pole or an undefined stretch.
+export interface EdgeInfo {
+  roots: Root[]
+  fail: Rejected | null
+  gap: boolean
+}
+
+const NO_EDGE: EdgeInfo = { roots: [], fail: null, gap: false }
+
+// The edges of the leaves, and the roots on them, cached by the edge. One per condition: the contouring of a curve makes one, and the
+// region stage makes one for each comparison of its condition.
 export class Crossings {
   private readonly corners = new Map<string, Corner>()
-  private readonly edges = new Map<string, CrossingResult>()
+  private readonly edges = new Map<string, EdgeInfo>()
+  private readonly zeros = new Map<string, boolean>()
+  private readonly registered = new Set<string>()
+  private readonly arms = new Set<object>()
+  // the gaps (poles) found on recent edges, along x for the horizontal edges and along y for the vertical ones
+  private readonly hintsX: [number, number][] = []
+  private readonly hintsY: [number, number][] = []
   private readonly out: Iv = iv()
   private readonly fns: Pick<ContourFns, 'H' | 'Hi'>
   private readonly px: PxScale
-  private readonly counter: EvalCounter
+  readonly counter: EvalCounter
   readonly stats: ContourStats
 
   constructor(fns: Pick<ContourFns, 'H' | 'Hi'>, px: PxScale, counter: EvalCounter, stats: ContourStats = newStats()) {
@@ -164,22 +235,85 @@ export class Crossings {
     return c
   }
 
-  // The crossing on the edge between two corners that share a coordinate, or null when there is no sign change (the
-  // same sign at both ends, or a NaN). `continuous` says the twin has proved H continuous over the edge (a leaf of
-  // the edge has verdict CONTINUOUS), so there is no pole or jump to look for. The answer is the same object whichever
-  // way the edge is given, and whichever leaf asks first.
+  // H at a point that is not a corner: counted, not cached.
+  value(x: number, y: number): number {
+    this.counter.points++
+    return this.fns.H(x, y)
+  }
+
+  // The verdict of the twin over a box: counted. An empty enclosure (undefined everywhere) is PARTIAL.
+  verdictOver(x0: number, x1: number, y0: number, y1: number): Verdict {
+    this.counter.intervals++
+    this.fns.Hi(this.out, x0, x1, y0, y1)
+    return this.out.v
+  }
+
+  private ends(a: Corner, b: Corner): { p: Corner; q: Corner; key: string; swapped: boolean } {
+    const swapped = a.x > b.x || (a.x === b.x && a.y > b.y)
+    const p = swapped ? b : a
+    const q = swapped ? a : b
+    return { p, q, key: `${p.key}|${q.key}`, swapped }
+  }
+
+  // Whether the edge may carry roots put there by register (a cheap test before building its key).
+  maybeRegistered(a: Corner, b: Corner): boolean {
+    return this.registered.size > 0 && this.registered.has(a.key) && this.registered.has(b.key)
+  }
+
+  // Whether the edge has been looked at or registered already.
+  hasEdge(a: Corner, b: Corner): boolean {
+    return this.edges.has(this.ends(a, b).key)
+  }
+
+  // Puts roots on an edge that has none yet (the arms of a crossing that leave a leaf by it: found there by the critical-point pass,
+  // before any edge is looked at). `roots` runs from a to b. False if the edge is already known.
+  register(a: Corner, b: Corner, roots: Root[]): boolean {
+    const { key, swapped } = this.ends(a, b)
+    if (this.edges.has(key)) return false
+    this.edges.set(key, { roots: swapped ? [...roots].reverse() : roots, fail: null, gap: false })
+    this.registered.add(a.key)
+    this.registered.add(b.key)
+    for (const r of roots) this.arms.add(r)
+    return true
+  }
+
+  // Whether a root is the end of an arm of a crossing, put on its edge by register. Two arms of one crossing on one edge leave the leaf
+  // beyond it by other edges: they are not to be joined to each other.
+  isArm(r: Vec2): boolean {
+    return this.arms.has(r)
+  }
+
+  // Whether the edge between two corners that are exact zeros is itself zero: H is zero at its midpoint too (the parabola
+  // y = 1000 x (x - h) is zero at the two ends of [0, h] and nowhere between).
+  zeroEdge(a: Corner, b: Corner): boolean {
+    const { key } = this.ends(a, b)
+    const known = this.zeros.get(key)
+    if (known !== undefined) return known
+    const ok = this.value((a.x + b.x) / 2, (a.y + b.y) / 2) === 0
+    this.zeros.set(key, ok)
+    return ok
+  }
+
+  // The roots on the edge between two corners that share a coordinate. `continuous` says the twin has proved H continuous over a leaf of
+  // the edge (so over the edge: its closed box), so there is no pole or jump to look for. The answer is the same object whichever way
+  // the edge is given, and whichever leaf asks first.
+  edge(a: Corner, b: Corner, continuous: boolean): EdgeInfo {
+    const { p, q, key } = this.ends(a, b)
+    const known = this.edges.get(key)
+    if (known) return known
+    const made = this.analyse(p, q, continuous)
+    this.edges.set(key, made)
+    return made
+  }
+
+  // The root on an edge whose ends differ in sign (the first, if there is more than one), the reason it is not one, or null where there is
+  // no sign change (the same sign at both ends, or a NaN).
   crossing(a: Corner, b: Corner, continuous: boolean): CrossingResult | null {
     const sameSide = a.v >= 0 === b.v >= 0
     if (!(a.v === a.v && b.v === b.v) || sameSide) return null
-    const swap = a.x > b.x || (a.x === b.x && a.y > b.y)
-    const p = swap ? b : a
-    const q = swap ? a : b
-    const key = `${p.key}|${q.key}`
-    const known = this.edges.get(key)
-    if (known) return known
-    const made = this.locate(p, q, continuous)
-    this.edges.set(key, made)
-    return made
+    const info = this.edge(a, b, continuous)
+    if (info.roots.length > 0) return info.roots[0]
+    return info.fail ?? { ok: false, why: 'pole' }
   }
 
   private enclose(horizontal: boolean, fixed: number, lo: number, hi: number): Iv {
@@ -189,19 +323,154 @@ export class Crossings {
     return this.out
   }
 
-  // p is the end with the smaller (x, y); the signs at the ends differ and neither is NaN.
-  private locate(p: Corner, q: Corner, continuous: boolean): CrossingResult {
-    const plus = p.v >= 0 ? p : q
-    // an exact zero at the + end is the crossing: the zero set meets the edge there
-    if (plus.v === 0) return { ok: true, x: plus.x, y: plus.y }
-    const { H } = this.fns
+  private at(horizontal: boolean, fixed: number, t: number): number {
+    this.counter.points++
+    return horizontal ? this.fns.H(t, fixed) : this.fns.H(fixed, t)
+  }
+
+  private take(info: EdgeInfo, r: CrossingResult): void {
+    if (r.ok) info.roots.push(r)
+    else {
+      info.fail = r
+      info.gap = true
+    }
+  }
+
+  // p is the end with the smaller (x, y).
+  private analyse(p: Corner, q: Corner, continuous: boolean): EdgeInfo {
+    const info: EdgeInfo = { roots: [], fail: null, gap: false }
     const horizontal = p.y === q.y
     const fixed = horizontal ? p.y : p.x
-    const plusLo = p.v >= 0
-    let lo = horizontal ? p.x : p.y
-    let hi = horizontal ? q.x : q.y
-    let vlo = p.v
-    let vhi = q.v
+    const lo = horizontal ? p.x : p.y
+    const hi = horizontal ? q.x : q.y
+    const pn = p.v !== p.v
+    const qn = q.v !== q.v
+    if (!pn && !qn) {
+      if (p.v >= 0 !== q.v >= 0) {
+        // (A sign change that is a pole splits the edge there, and each side is tested, but the sides' ends agree: the bisection keeps the
+        // ends' signs, so it can only settle on a pole that flips the sign the way the ends do, and then H at the pole's two sides has the
+        // signs of the ends. A root beside it is a pair on its side, which no sign shows; the twin's subdivision, below, is for sign-less edges.)
+        this.take(info, this.locate(horizontal, fixed, lo, hi, p.v, q.v, continuous))
+        return info
+      }
+      if (continuous) return info
+      // No sign change, and the twin has not proved the leaf continuous: a pole and a root beside it on this edge cancel in the
+      // signs. The twin says whether there is anything to look for.
+      const whole = this.enclose(horizontal, fixed, lo, hi)
+      if (whole.v !== PARTIAL) return info
+      this.spans(info, horizontal, fixed, lo, hi, p.v, q.v, isEmpty(whole))
+      return info
+    }
+    if (pn && qn) {
+      const whole = this.enclose(horizontal, fixed, lo, hi)
+      this.spans(info, horizontal, fixed, lo, hi, p.v, q.v, isEmpty(whole))
+      return info
+    }
+    this.cut(info, horizontal, fixed, lo, hi, p.v, q.v)
+    return info
+  }
+
+  // An edge with one undefined end: cut at the domain edge, found by bisecting on whether H is defined (to machine width: a curve
+  // that runs along the domain edge, y = ln x, must be followed to the bottom of the view), and the defined part tested as an edge.
+  private cut(info: EdgeInfo, horizontal: boolean, fixed: number, lo: number, hi: number, vlo: number, vhi: number): void {
+    info.gap = true
+    this.stats.gaps++
+    const loDefined = vlo === vlo
+    let d = loDefined ? lo : hi
+    let u = loDefined ? hi : lo
+    let vd = loDefined ? vlo : vhi
+    for (let i = 0; i < CONTOUR.maxBisect; i++) {
+      const m = (d + u) / 2
+      if (!(m !== d && m !== u)) break
+      const vm = this.at(horizontal, fixed, m)
+      if (vm === vm) {
+        d = m
+        vd = vm
+      } else u = m
+    }
+    const a = loDefined ? lo : d
+    const b = loDefined ? d : hi
+    const va = loDefined ? vlo : vd
+    const vb = loDefined ? vd : vhi
+    if (a < b && va >= 0 !== vb >= 0) this.take(info, this.locate(horizontal, fixed, a, b, va, vb, false))
+  }
+
+  // An edge the twin finds PARTIAL where H shows no sign change between its ends, or whose ends are both undefined: halved by the twin
+  // until each piece is proved (not PARTIAL) or is CONTOUR.gapPx wide, a gap. Each stretch between gaps is tested as an edge, with
+  // H at its ends (the ends of a proved stretch are defined).
+  private spans(info: EdgeInfo, horizontal: boolean, fixed: number, lo: number, hi: number, vlo: number, vhi: number, wholeEmpty: boolean): void {
+    info.gap = true
+    this.stats.gaps++
+    const minWidth = CONTOUR.gapPx / (horizontal ? this.px.x : this.px.y)
+    const runs: { a: number; b: number; v: Verdict }[] = []
+    const gaps: [number, number][] = []
+    let evals = 0
+    const visit = (a: number, b: number, v: Verdict, empty: boolean): void => {
+      if (v !== PARTIAL) {
+        const last = runs[runs.length - 1]
+        if (last && last.b === a) {
+          last.b = b
+          if (v < last.v) last.v = v
+        } else runs.push({ a, b, v })
+        return
+      }
+      if (empty || b - a <= minWidth || evals >= CONTOUR.gapEvals) {
+        if (!empty) gaps.push([a, b])
+        return
+      }
+      const m = (a + b) / 2
+      if (!(m > a && m < b)) return
+      for (const [s, e] of [
+        [a, m],
+        [m, b],
+      ]) {
+        const z = this.enclose(horizontal, fixed, s, e)
+        evals++
+        visit(s, e, z.v, isEmpty(z))
+      }
+    }
+    // The edges of a column of leaves cross the same pole line (tan x at x = pi / 2 in every row): a gap found on one edge is the first
+    // thing tried on the next. The gap and the stretches either side of it are each asked of the twin, so a pole that has moved is not
+    // taken for the old one.
+    const hints = horizontal ? this.hintsX : this.hintsY
+    let known = false
+    for (const [ga, gb] of hints) {
+      if (!(lo < ga && gb < hi)) continue
+      const inGap = this.enclose(horizontal, fixed, ga, gb).v === PARTIAL
+      if (!inGap) continue
+      const left = this.enclose(horizontal, fixed, lo, ga).v
+      if (left === PARTIAL) continue
+      const right = this.enclose(horizontal, fixed, gb, hi).v
+      if (right === PARTIAL) continue
+      runs.push({ a: lo, b: ga, v: left }, { a: gb, b: hi, v: right })
+      known = true
+      break
+    }
+    if (!known) {
+      visit(lo, hi, PARTIAL, wholeEmpty)
+      if (gaps.length === 1) {
+        if (hints.length >= 64) hints.shift()
+        hints.push(gaps[0])
+      }
+    }
+    for (const run of runs) {
+      const va = run.a === lo ? vlo : this.at(horizontal, fixed, run.a)
+      const vb = run.b === hi ? vhi : this.at(horizontal, fixed, run.b)
+      if (!(va === va && vb === vb) || va >= 0 === vb >= 0) continue
+      this.take(info, this.locate(horizontal, fixed, run.a, run.b, va, vb, run.v === CONTINUOUS))
+    }
+  }
+
+  // A root between two points of an edge, given the values of H at them (their signs differ, neither is NaN).
+  private locate(horizontal: boolean, fixed: number, lo0: number, hi0: number, vlo0: number, vhi0: number, continuous: boolean): CrossingResult {
+    const plusLo = vlo0 >= 0
+    const pointOf = (r: number): Root => (horizontal ? { ok: true, x: r, y: fixed } : { ok: true, x: fixed, y: r })
+    // an exact zero at the + end is the root: the zero set meets the edge there
+    if ((plusLo ? vlo0 : vhi0) === 0) return pointOf(plusLo ? lo0 : hi0)
+    let lo = lo0
+    let hi = hi0
+    let vlo = vlo0
+    let vhi = vhi0
     const lenPx = (hi - lo) * (horizontal ? this.px.x : this.px.y)
 
     // The bracket [lo, hi] keeps the sign change. 'undefined': H is NaN at a midpoint. 'narrow': the doubles can not halve
@@ -210,8 +479,7 @@ export class Crossings {
       for (let i = 0; i < steps; i++) {
         const mid = (lo + hi) / 2
         if (!(mid > lo && mid < hi)) return 'narrow'
-        const vm = horizontal ? H(mid, fixed) : H(fixed, mid)
-        this.counter.points++
+        const vm = this.at(horizontal, fixed, mid)
         if (vm !== vm) return 'undefined'
         const sameAsLo = vm >= 0 === plusLo
         if (sameAsLo) {
@@ -226,9 +494,8 @@ export class Crossings {
     }
     const root = (): CrossingResult => {
       // an exact zero found on the way is the root; else the middle of the bracket
-      const r = vhi === 0 ? hi : vlo === 0 ? lo : (lo + hi) / 2
       this.stats.crossings++
-      return horizontal ? { ok: true, x: r, y: fixed } : { ok: true, x: fixed, y: r }
+      return pointOf(vhi === 0 ? hi : vlo === 0 ? lo : (lo + hi) / 2)
     }
     const reject = (why: 'pole' | 'jump' | 'undefined'): CrossingResult => {
       if (why === 'pole') this.stats.poles++
@@ -293,6 +560,9 @@ export interface ContourResult {
   stats: ContourStats
   // the budget ran out: the leaves not reached are missing from the contour
   capped: boolean
+  // leaves the quadtree left too coarse to contour (stop 'budget', wider than CONTOUR.maxBudgetLeafPx) were left out: the curve is missing
+  // there, and the statement is drawn coarsely (stats.oversized counts them)
+  refused: boolean
 }
 
 type LeafKind = 'drew' | 'candidate' | 'none'
@@ -323,6 +593,23 @@ function clipSegment(a: Vec2, b: Vec2, c: Box): [Vec2, Vec2] | null {
   return [t0 === 0 ? a : { x: a.x + t0 * dx, y: a.y + t0 * dy }, t1 === 1 ? b : { x: a.x + t1 * dx, y: a.y + t1 * dy }]
 }
 
+// The crossing a critical point of H makes in a leaf: its centre, and the roots where its four arms leave the leaf.
+interface CritX {
+  p: Vec2
+  exits: Root[]
+}
+
+interface Ctx {
+  fns: ContourFns
+  cr: Crossings
+  stats: ContourStats
+  px: PxScale
+  emit: (a: Vec2, b: Vec2) => boolean
+  crit: Map<number, CritX>
+  // the corners of leaf i, counter-clockwise from (x0, y0): looked up once for the two passes
+  corners: (i: number) => Corner[]
+}
+
 // The pieces of the zero set in `leaves`, and the touch points. The leaves are those of subdivide: one size, meeting
 // edge to edge on equal coordinates.
 export function contourLeaves(leaves: readonly Leaf[], fns: ContourFns, view: ContourView, counter: EvalCounter, budget?: ContourBudget): ContourResult {
@@ -349,16 +636,41 @@ export function contourLeaves(leaves: readonly Leaf[], fns: ContourFns, view: Co
     return true
   }
 
-  const kinds = new Uint8Array(leaves.length) // 0 none, 1 drew, 2 candidate
-  let capped = false
+  // a leaf that the budget stopped halving, too wide to hold a chord
+  const eligible = new Uint8Array(leaves.length)
   for (let i = 0; i < leaves.length; i++) {
-    if (over()) {
-      capped = true
-      break
+    const l = leaves[i]
+    const tooWide = l.stop === 'budget' && ((l.x1 - l.x0) * view.px.x > CONTOUR.maxBudgetLeafPx || (l.y1 - l.y0) * view.px.y > CONTOUR.maxBudgetLeafPx)
+    if (tooWide) stats.oversized++
+    else eligible[i] = 1
+  }
+
+  const cornerCache: Corner[][] = new Array<Corner[]>(leaves.length)
+  const corners = (i: number): Corner[] => {
+    let c = cornerCache[i]
+    if (!c) {
+      const l = leaves[i]
+      c = [cr.corner(l.x0, l.y0), cr.corner(l.x1, l.y0), cr.corner(l.x1, l.y1), cr.corner(l.x0, l.y1)]
+      cornerCache[i] = c
     }
-    stats.leaves++
-    const k = contourLeaf(leaves[i], cr, stats, emit)
-    kinds[i] = k === 'drew' ? 1 : k === 'candidate' ? 2 : 0
+    return c
+  }
+  const ctx: Ctx = { fns, cr, stats, px: view.px, emit, crit: new Map(), corners }
+  let capped = false
+  if (fns.grad && fns.hess) capped = criticalPass(leaves, eligible, ctx, over)
+
+  const kinds = new Uint8Array(leaves.length) // 0 none, 1 drew, 2 candidate
+  if (!capped) {
+    for (let i = 0; i < leaves.length; i++) {
+      if (!eligible[i]) continue
+      if (over()) {
+        capped = true
+        break
+      }
+      stats.leaves++
+      const k = contourLeaf(i, leaves[i], ctx)
+      kinds[i] = k === 'drew' ? 1 : k === 'candidate' ? 2 : 0
+    }
   }
 
   const touches: TouchPoint[] = []
@@ -374,7 +686,7 @@ export function contourLeaves(leaves: readonly Leaf[], fns: ContourFns, view: Co
     }
   }
   stats.touchPoints = touches.length
-  return { segments, touches, touchLinks, stats, capped }
+  return { segments, touches, touchLinks, stats, capped, refused: stats.oversized > 0 }
 }
 
 // The leaves of the contour that meet each corner: the grid's own adjacency, exact because the leaves share coordinates.
@@ -484,43 +796,293 @@ function touchPoint(leaf: Leaf, H: CompiledFn, grad: readonly [CompiledFn, Compi
   return { x, y, est }
 }
 
-// One leaf. The corners c0..c3 run counter-clockwise from (x0, y0); edge k joins corner k to corner k + 1.
-function contourLeaf(leaf: Leaf, cr: Crossings, stats: ContourStats, emit: (a: Vec2, b: Vec2) => boolean): LeafKind {
-  const c = [cr.corner(leaf.x0, leaf.y0), cr.corner(leaf.x1, leaf.y0), cr.corner(leaf.x1, leaf.y1), cr.corner(leaf.x0, leaf.y1)]
-  for (const k of c) {
-    if (k.v !== k.v) {
-      stats.undefinedLeaves++
-      return 'none'
+// The position of a point of the leaf's boundary along it, counter-clockwise from (x0, y0): the bottom edge is 0 to 1, the right 1 to 2,
+// the top 2 to 3, the left 3 to 4.
+function boundaryParam(l: Leaf, x: number, y: number): number {
+  const w = l.x1 - l.x0
+  const h = l.y1 - l.y0
+  const db = Math.abs(y - l.y0)
+  const dr = Math.abs(x - l.x1)
+  const dt = Math.abs(y - l.y1)
+  const dl = Math.abs(x - l.x0)
+  const m = Math.min(db, dr, dt, dl)
+  if (m === db) return (x - l.x0) / w
+  if (m === dr) return 1 + (y - l.y0) / h
+  if (m === dt) return 2 + (l.x1 - x) / w
+  return 3 + (l.y1 - y) / h
+}
+
+function boundaryPoint(l: Leaf, u: number): Vec2 {
+  const v = ((u % 4) + 4) % 4
+  const k = Math.min(3, Math.floor(v))
+  const t = v - k
+  const w = l.x1 - l.x0
+  const h = l.y1 - l.y0
+  if (k === 0) return { x: l.x0 + t * w, y: l.y0 }
+  if (k === 1) return { x: l.x1, y: l.y0 + t * h }
+  if (k === 2) return { x: l.x1 - t * w, y: l.y1 }
+  return { x: l.x0, y: l.y1 - t * h }
+}
+
+// A value with a sign: not zero, not NaN (an infinity has one).
+function signed(v: number): boolean {
+  return v === v && v !== 0
+}
+
+// H alternates in sign round a point: the four samples are all nonzero and neighbours differ.
+function alternates(signs: boolean[]): boolean {
+  return signs[0] !== signs[1] && signs[1] !== signs[2] && signs[2] !== signs[3] && signs[3] !== signs[0]
+}
+
+// Whether H alternates in sign round `centre`, sampled CRITICAL.probePx from it along the bisector of each pair of adjacent arms (the
+// arms are the points the four pieces of the X run to, counter-clockwise round it).
+function certified(cr: Crossings, centre: Vec2, arms: Vec2[], px: PxScale): boolean {
+  const angles = arms.map((a) => {
+    const dx = (a.x - centre.x) * px.x
+    const dy = (a.y - centre.y) * px.y
+    return dx === 0 && dy === 0 ? NaN : Math.atan2(dy, dx)
+  })
+  if (angles.some((a) => a !== a)) return false
+  const signs: boolean[] = []
+  for (let k = 0; k < 4; k++) {
+    let gap = angles[(k + 1) % 4] - angles[k]
+    while (gap <= 0) gap += 2 * Math.PI
+    const beta = angles[k] + gap / 2
+    const v = cr.value(centre.x + (CRITICAL.probePx * Math.cos(beta)) / px.x, centre.y + (CRITICAL.probePx * Math.sin(beta)) / px.y)
+    if (!signed(v)) return false
+    signs.push(v > 0)
+  }
+  return alternates(signs)
+}
+
+// The critical points of H: leaves where both partials change sign over the corners, solved by Newton's steps (held in the leaf), tested
+// for a crossing (an indefinite Hessian), certified, and followed out by bisection round the leaf boundary. The roots where the arms leave
+// are put in the edge cache. True if the budget ran out.
+function criticalPass(leaves: readonly Leaf[], eligible: Uint8Array, ctx: Ctx, over: () => boolean): boolean {
+  const { fns, cr } = ctx
+  const grad = fns.grad as readonly [CompiledFn, CompiledFn]
+  const grads = new Map<string, [number, number]>()
+  const gradAt = (c: Corner): [number, number] => {
+    let g = grads.get(c.key)
+    if (!g) {
+      g = [grad[0](c.x, c.y), grad[1](c.x, c.y)]
+      cr.counter.points += 2
+      grads.set(c.key, g)
+    }
+    return g
+  }
+  for (let i = 0; i < leaves.length; i++) {
+    if (!eligible[i]) continue
+    if (over()) return true
+    const l = leaves[i]
+    const c = ctx.corners(i)
+    if (c.some((k) => k.v !== k.v)) continue
+    const g = c.map(gradAt)
+    if (g.some((p) => !(Number.isFinite(p[0]) && Number.isFinite(p[1])))) continue
+    const changes = (j: 0 | 1) => g.some((p) => p[j] >= 0) && g.some((p) => p[j] < 0)
+    if (!changes(0) || !changes(1)) continue
+    const x = crossingOf(l, c, ctx)
+    if (x) {
+      ctx.crit.set(i, x)
+      ctx.stats.critical++
+      ctx.stats.crosses++
+      ctx.stats.saddles++
     }
   }
+  return false
+}
+
+// The X a leaf holds at its critical point, certified, with its arms followed out of the leaf and registered on its edges; or null.
+function crossingOf(leaf: Leaf, c: Corner[], ctx: Ctx): CritX | null {
+  const { fns, cr, px } = ctx
+  const grad = fns.grad as readonly [CompiledFn, CompiledFn]
+  const hess = fns.hess as readonly [CompiledFn, CompiledFn, CompiledFn]
+  const counter = cr.counter
+
+  // Newton's steps on grad H = 0 from the centre, held inside the leaf; the Hessian must be indefinite (a saddle) all the way
+  let x = (leaf.x0 + leaf.x1) / 2
+  let y = (leaf.y0 + leaf.y1) / 2
+  let hxx = 0
+  let hxy = 0
+  let hyy = 0
+  let done = false
+  for (let step = 0; step <= CRITICAL.steps; step++) {
+    const gx = grad[0](x, y)
+    const gy = grad[1](x, y)
+    hxx = hess[0](x, y)
+    hxy = hess[1](x, y)
+    hyy = hess[2](x, y)
+    counter.points += 5
+    if (!(Number.isFinite(gx) && Number.isFinite(gy) && Number.isFinite(hxx) && Number.isFinite(hxy) && Number.isFinite(hyy))) return null
+    const det = hxx * hyy - hxy * hxy
+    if (!(det < 0)) return null
+    const dx = (-hyy * gx + hxy * gy) / det
+    const dy = (hxy * gx - hxx * gy) / det
+    const nx = x + dx
+    const ny = y + dy
+    // (a node on a grid line, y = 0 for sin x = cos y, is on the edge of the leaf on either side of it and in neither: its arms go both ways
+    // across the edge, and it is left to the corners, which draw it as two arcs; a known limit)
+    if (!(nx > leaf.x0 && nx < leaf.x1 && ny > leaf.y0 && ny < leaf.y1)) return null
+    x = nx
+    y = ny
+    if (Math.hypot(dx * px.x, dy * px.y) < CRITICAL.convergedPx) {
+      done = true
+      break
+    }
+  }
+  if (!done) return null
+
+  // The zero directions of the Hessian's quadratic form, on the screen: q(t) = m + r cos(2t - phi) is zero at 2t - phi = +-alpha. The
+  // four arms are t1, t2 and their opposites; the bisectors of neighbouring arms are a quarter turn apart.
+  const A = hxx / (px.x * px.x)
+  const B = hxy / (px.x * px.y)
+  const C = hyy / (px.y * px.y)
+  const m = (A + C) / 2
+  const r = Math.hypot((A - C) / 2, B)
+  if (!(r > Math.abs(m))) return null
+  const phi = Math.atan2(B, (A - C) / 2)
+  const alpha = Math.acos(-m / r)
+  const tau = 2 * Math.PI
+  const norm = (t: number) => ((t % tau) + tau) % tau
+  const rays = [(phi + alpha) / 2, (phi - alpha) / 2, (phi + alpha) / 2 + Math.PI, (phi - alpha) / 2 + Math.PI].map(norm).sort((a, b) => a - b)
+  const bisectors = [0, 1, 2, 3].map((j) => (j < 3 ? (rays[j] + rays[j + 1]) / 2 : (rays[3] + rays[0] + tau) / 2))
+
+  // certified: H alternates in sign half a px out along the bisectors
+  const probe = bisectors.map((b) => {
+    const v = cr.value(x + (CRITICAL.probePx * Math.cos(b)) / px.x, y + (CRITICAL.probePx * Math.sin(b)) / px.y)
+    return v > 0 ? 1 : v < 0 ? -1 : 0
+  })
+  if (probe.includes(0) || !alternates(probe.map((s) => s > 0))) return null
+
+  // where each bisector leaves the leaf, and the sign of H there: the sectors must reach the boundary
+  const exitsAt = bisectors.map((b) => {
+    const dwx = Math.cos(b) / px.x
+    const dwy = Math.sin(b) / px.y
+    const tx = dwx > 0 ? (leaf.x1 - x) / dwx : dwx < 0 ? (leaf.x0 - x) / dwx : Infinity
+    const ty = dwy > 0 ? (leaf.y1 - y) / dwy : dwy < 0 ? (leaf.y0 - y) / dwy : Infinity
+    const t = Math.min(tx, ty)
+    const bx = t === tx ? (dwx > 0 ? leaf.x1 : leaf.x0) : x + t * dwx
+    const by = t === ty ? (dwy > 0 ? leaf.y1 : leaf.y0) : y + t * dwy
+    return { x: bx, y: by }
+  })
+  const bu: number[] = []
+  for (let j = 0; j < 4; j++) {
+    const v = cr.value(exitsAt[j].x, exitsAt[j].y)
+    const sameSector = v > 0 === probe[j] > 0
+    if (!(sameSector && signed(v))) return null
+    bu.push(boundaryParam(leaf, exitsAt[j].x, exitsAt[j].y))
+  }
+
+  // Arm a runs between bisectors a - 1 and a; the root where it leaves is the sign change of H along the boundary between the two
+  // points where those bisectors leave (counter-clockwise).
+  const maxEdgePx = Math.max((leaf.x1 - leaf.x0) * px.x, (leaf.y1 - leaf.y0) * px.y)
+  const roots: { u: number; root: Root }[] = []
+  for (let a = 0; a < 4; a++) {
+    const j0 = (a + 3) % 4
+    let lo = bu[j0]
+    let hi = bu[a]
+    while (hi <= lo) hi += 4
+    // (the arcs between the bisectors' exits make one turn round the boundary between them; a centre near a corner makes one of them long)
+    if (hi - lo >= 4 - 1e-9) return null
+    const plusLo = probe[j0] > 0
+    const steps = Math.min(CONTOUR.maxBisect, Math.max(1, Math.ceil(Math.log2(((hi - lo) * maxEdgePx) / CONTOUR.bisectPx))))
+    for (let s = 0; s < steps; s++) {
+      const mid = (lo + hi) / 2
+      const p = boundaryPoint(leaf, mid)
+      const v = cr.value(p.x, p.y)
+      if (!signed(v)) return null
+      if (v > 0 === plusLo) lo = mid
+      else hi = mid
+    }
+    const u = (lo + hi) / 2
+    const p = boundaryPoint(leaf, u)
+    roots.push({ u: ((u % 4) + 4) % 4, root: { ok: true, x: p.x, y: p.y } })
+  }
+
+  // the roots on each edge must fit the corners' signs (an odd number where the ends differ), and the edges must be new
+  const s = c.map((k) => k.v >= 0)
+  const onEdge: { u: number; root: Root }[][] = [[], [], [], []]
+  for (const e of roots) onEdge[Math.min(3, Math.floor(e.u))].push(e)
+  for (let k = 0; k < 4; k++) {
+    onEdge[k].sort((p, q) => p.u - q.u)
+    const oddHere = onEdge[k].length % 2 === 1
+    const endsDiffer = s[k] !== s[(k + 1) % 4]
+    if (oddHere !== endsDiffer) return null
+    if (cr.hasEdge(c[k], c[(k + 1) % 4])) return null
+  }
+  for (let k = 0; k < 4; k++) if (onEdge[k].length > 0) cr.register(c[k], c[(k + 1) % 4], onEdge[k].map((e) => e.root))
+  return { p: { x, y }, exits: roots.map((e) => e.root) }
+}
+
+// One leaf. The corners c0..c3 run counter-clockwise from (x0, y0); edge k joins corner k to corner k + 1.
+function contourLeaf(index: number, leaf: Leaf, ctx: Ctx): LeafKind {
+  const { cr, stats, px, emit } = ctx
+  const c = ctx.corners(index)
+  const anyNaN = c.some((k) => k.v !== k.v)
+  if (anyNaN) stats.undefinedLeaves++
   let drew = false
+  // A leaf the twin did not prove DEFINED or CONTINUOUS may hold an undefined strip a chord would cross: the twin must vouch for the
+  // box of the piece (a UNKNOWN twin, an integral, vouches for nothing and blocks nothing).
+  const check = leaf.verdict === PARTIAL
   const piece = (a: Vec2, b: Vec2) => {
+    if (a.x === b.x && a.y === b.y) return
+    if (check && cr.verdictOver(Math.min(a.x, b.x), Math.max(a.x, b.x), Math.min(a.y, b.y), Math.max(a.y, b.y)) === PARTIAL) {
+      stats.chordsRejected++
+      return
+    }
     if (emit(a, b)) drew = true
   }
-  // An edge whose two ends are exact zeros is on the zero set (H is linear between them in the interpolant, and zero at
-  // both): it is a piece, whichever signs the leaf has (the axis of xy = 0 beside a leaf that is positive all through,
-  // the double line y^2 = 0). A leaf of zeros throughout is a plateau, not a curve, and has no edges of its own.
+  // An edge whose two ends are exact zeros and whose midpoint is zero is on the zero set: a piece, whichever signs the leaf has (the
+  // axis of xy = 0 beside a leaf that is positive all through, the double line y^2 = 0). A leaf of zeros throughout is a plateau, not a
+  // curve, and has no edges of its own.
   if (!c.every((k) => k.v === 0)) {
-    for (let k = 0; k < 4; k++) if (c[k].v === 0 && c[(k + 1) % 4].v === 0) piece(c[k].pt, c[(k + 1) % 4].pt)
+    for (let k = 0; k < 4; k++) {
+      const a = c[k]
+      const b = c[(k + 1) % 4]
+      if (a.v === 0 && b.v === 0 && cr.zeroEdge(a, b)) piece(a.pt, b.pt)
+    }
   }
 
-  const s = [c[0].v >= 0, c[1].v >= 0, c[2].v >= 0, c[3].v >= 0]
-  if (s[0] === s[1] && s[1] === s[2] && s[2] === s[3]) return drew ? 'drew' : 'candidate'
+  // a crossing found from a critical point: its arms run from the centre to the roots where they leave
+  const owner = ctx.crit.get(index)
+  if (owner) {
+    for (const g of owner.exits) piece(g, owner.p)
+    return drew ? 'drew' : 'none'
+  }
 
+  const s = c.map((k) => k.v >= 0)
   const continuous = leaf.verdict === CONTINUOUS
-  const x: (Vec2 | null)[] = [null, null, null, null]
-  let n = 0
+  const infos: EdgeInfo[] = []
   for (let k = 0; k < 4; k++) {
-    const next = (k + 1) % 4
-    if (s[k] === s[next]) continue
-    const r = cr.crossing(c[k], c[next], continuous)
-    // a pole, a jump or an undefined point on an edge: nothing more is drawn in this leaf
-    if (!r || !r.ok) return drew ? 'drew' : 'none'
-    x[k] = r
-    n++
+    const a = c[k]
+    const b = c[(k + 1) % 4]
+    const defined = a.v === a.v && b.v === b.v
+    const differ = defined && s[k] !== s[(k + 1) % 4]
+    infos.push(differ || !defined || !continuous || cr.maybeRegistered(a, b) ? cr.edge(a, b, continuous) : NO_EDGE)
   }
+  // the roots of each edge counter-clockwise (the edges' own order runs from the smaller (x, y): the top and left edges are the other way)
+  const roots = infos.map((inf, k) => (k >= 2 ? [...inf.roots].reverse() : inf.roots))
+  const n = roots[0].length + roots[1].length + roots[2].length + roots[3].length
+  const gapAny = infos.some((inf) => inf.gap || inf.fail !== null)
+  const rest: LeafKind = anyNaN || gapAny ? 'none' : 'candidate'
+  if (n === 0) return drew ? 'drew' : rest
+  if (n !== 2 && n !== 4) return drew ? 'drew' : 'none'
+
+  // the classic configuration: corners all defined, a root on each edge whose ends differ and none on the others
+  const std = !anyNaN && infos.every((inf, k) => inf.roots.length <= 1 && inf.roots.length === (s[k] !== s[(k + 1) % 4] ? 1 : 0))
+  const ring: { pt: Root; k: number; i: number }[] = []
+  roots.forEach((list, k) => list.forEach((pt, i) => ring.push({ pt, k, i })))
+
+  // two roots of one edge that are the ends of two arms of a crossing: the arms leave this leaf by other edges
+  const armPair = (p: number, q: number) => ring[p].k === ring[q].k && cr.isArm(ring[p].pt) && cr.isArm(ring[q].pt)
 
   if (n === 2) {
+    if (!std) {
+      // Two arms that arrive by one edge and leave by none that shows: not joined to each other (they leave beyond, hidden as a pair)
+      if (!armPair(0, 1)) piece(ring[0].pt, ring[1].pt)
+      return drew ? 'drew' : rest
+    }
+    const x: (Vec2 | null)[] = infos.map((inf) => inf.roots[0] ?? null)
     const edges = [0, 1, 2, 3].filter((k) => x[k] !== null)
     const [a, b] = edges
     // the corners a + 1 .. b and b + 1 .. a (cyclic) are the two runs; the + run is cut off by the piece
@@ -532,12 +1094,12 @@ function contourLeaf(leaf: Leaf, cr: Crossings, stats: ContourStats, emit: (a: V
     for (let i = 0; i < length; i++) run.push(c[(first + i) % 4])
     let path: Vec2[] = [x[before] as Vec2, x[after] as Vec2]
     if (run.every((k) => k.v === 0)) {
-      // where every corner of the run is an exact zero the zero set follows the edges between them
-      path = [x[before] as Vec2, ...run.map((k) => k.pt), x[after] as Vec2]
+      // where every corner of the run is an exact zero the zero set follows the edges between them: those are pieces of their own (above)
+      path = []
     } else if (run.length === 3 && run[1].v === 0 && (run[0].v === 0) !== (run[2].v === 0)) {
       // A zero edge (z1, z2) and a strict + corner s at one end of the run: a curve that meets the zero edge, a T. The
       // zero edge is a piece of its own (above); the curve is joined to the end of it nearer where it leaves it, the
-      // strict corner's end if the crossing on the edge s - m is in the half nearer s.
+      // strict corner's end if the root on the edge s - m is in the half nearer s.
       const sFirst = run[0].v !== 0
       const strict = sFirst ? run[0] : run[2]
       const m = c[(first + 3) % 4]
@@ -548,35 +1110,63 @@ function contourLeaf(leaf: Leaf, cr: Crossings, stats: ContourStats, emit: (a: V
       path = sFirst ? [cross, end.pt] : [end.pt, cross]
     }
     for (let i = 0; i + 1 < path.length; i++) piece(path[i], path[i + 1])
-  } else {
+    return drew ? 'drew' : rest
+  }
+
+  // four roots
+  if (std) {
     stats.saddles++
+    const x = infos.map((inf) => inf.roots[0]) as Root[]
     const f = c.map((k) => k.v)
     let cross = false
     let saddleInPlus = false
-    let sx = 0
-    let sy = 0
     if (f.every((v) => Number.isFinite(v))) {
       const m = Math.max(...f.map(Math.abs))
       const [g0, g1, g2, g3] = f.map((v) => v / m)
       const d = g0 - g1 + g2 - g3
       const saddle = (g0 * g2 - g1 * g3) / d
+      saddleInPlus = saddle > 0
       if (Math.abs(saddle) <= CONTOUR.crossRel) {
-        cross = true
-        sx = leaf.x0 + clamp((g0 - g3) / d, 0, 1) * (leaf.x1 - leaf.x0)
-        sy = leaf.y0 + clamp((g0 - g1) / d, 0, 1) * (leaf.y1 - leaf.y0)
-      } else saddleInPlus = saddle > 0
+        // an X through the saddle point, if H alternates round it half a px out
+        const centre: Vec2 = { x: leaf.x0 + clamp((g0 - g3) / d, 0, 1) * (leaf.x1 - leaf.x0), y: leaf.y0 + clamp((g0 - g1) / d, 0, 1) * (leaf.y1 - leaf.y0) }
+        if (certified(cr, centre, x, px)) {
+          cross = true
+          stats.crosses++
+          for (let k = 0; k < 4; k++) piece(x[k], centre)
+        }
+      }
     }
-    if (cross) {
-      stats.crosses++
-      const centre: Vec2 = { x: sx, y: sy }
-      for (let k = 0; k < 4; k++) piece(x[k] as Vec2, centre)
-    } else {
+    if (!cross) {
       // the region the saddle point lies in is the one that is joined; the pieces cut off the corners of the other
       for (let i = 0; i < 4; i++) {
         if (s[i] === saddleInPlus) continue
-        piece(x[(i + 3) % 4] as Vec2, x[i] as Vec2)
+        piece(x[(i + 3) % 4], x[i])
       }
     }
+    return drew ? 'drew' : rest
   }
-  return drew ? 'drew' : 'candidate'
+  // Roots not one to an edge: two arms of a crossing leave the leaf through one edge. The roots of an edge that shows no sign change
+  // come in pairs, so the boundary's signs still alternate with each root. The two ways to pair four roots round a ring without arcs
+  // crossing are (0 1)(2 3) and (1 2)(3 0). Two arms of one crossing that arrive together continue apart: the pairing that does not join
+  // them is the right one. Otherwise H at the centre says which sectors join.
+  const parity = infos.every((inf, k) => inf.roots.length % 2 === (s[k] !== s[(k + 1) % 4] ? 1 : 0))
+  if (anyNaN || gapAny || !parity) return drew ? 'drew' : 'none'
+  stats.saddles++
+  const joinsArms = [armPair(0, 1) || armPair(2, 3), armPair(1, 2) || armPair(3, 0)]
+  if (joinsArms[0] !== joinsArms[1]) {
+    const j0 = joinsArms[0] ? 1 : 0
+    piece(ring[j0].pt, ring[j0 + 1].pt)
+    piece(ring[j0 + 2].pt, ring[(j0 + 3) % 4].pt)
+    return drew ? 'drew' : rest
+  }
+  const centre = cr.value((leaf.x0 + leaf.x1) / 2, (leaf.y0 + leaf.y1) / 2)
+  if (!signed(centre)) return drew ? 'drew' : 'none'
+  for (let j = 0; j < 4; j++) {
+    // the sign of the boundary after root j: that of the corner the edge starts at, once for each root up to and including it
+    const e = ring[j]
+    const after = e.i % 2 === 0 ? !s[e.k] : s[e.k]
+    // the stretches that do not have the sign of the centre are cut off
+    if (after !== centre > 0) piece(ring[j].pt, ring[(j + 1) % 4].pt)
+  }
+  return drew ? 'drew' : rest
 }

@@ -78,13 +78,38 @@ export const CONTOUR = {
   // (floor, mod, a piecewise seam) keeps it all, a pole grows it.
   jumpShrink: 0.25,
   // A leaf whose four edges all cross and whose bilinear saddle value is within this fraction of its largest corner
-  // value is drawn as an X through the saddle point: two curves crossing in it (xy = 0, sin x sin y = 0 at its nodes),
-  // not two near-miss arcs. The worst case for the X is two branches close but not touching, xy = e at the middle of a
-  // square leaf of side h: the corners are +-h^2/4 - e, the saddle value -e, and the branches pass sqrt(2e) from the
-  // saddle point, where the X's vertex is. At e = crossRel * h^2/4 that is h * sqrt(crossRel / 2): 0.12 px at FULL and 0.47
-  // at COARSE for 0.02, where the chains are held to half a px (0.1 would be 0.26 and 1.05 px). Above it the leaf draws
-  // the two arcs, which pass within about that of each other.
+  // value MAY hold an X (two curves crossing in it: xy = 0, sin x sin y = 0 at its nodes); the X is drawn only if it is
+  // certified (CRITICAL.probePx), and otherwise the leaf draws the two arcs. The gate is a cheap first test: a saddle
+  // value that is not small beside the corners is two branches too far apart for an X.
   crossRel: 0.02,
+  // The twin subdivision that finds the poles and undefined stretches of an edge that shows no sign change stops at this
+  // many px (2^-12): a gap that narrow is a point. A curve beside a pole (1/x - y at |y| = 150 is 0.0067 from it) is
+  // found beyond it.
+  gapPx: 2 ** -12,
+  // The most twin evaluations the subdivision of one edge may spend; past it what is still undecided is a gap (an
+  // edge that is undefined or unbounded all along is not subdivided to the bottom).
+  gapEvals: 128,
+  // A leaf the quadtree stopped halving only because the budget ran out ('budget') is contoured only up to this many px
+  // on a side: a leaf of 679 px (a starved quadtree) is not a place to draw a chord. The chords of the leaves allowed are
+  // true at their ends and off the curve by about (leaf size)^2 / (8 radius): 0.2 px for a leaf of 18.75 px on a circle
+  // of 200 px. Past it the leaf is left out and the result says so (ContourResult.refused).
+  maxBudgetLeafPx: 24,
+}
+
+// The critical point of H in a leaf (calc P3, task 3 fix round 1): two curves cross where grad H = 0 and H = 0, and
+// the corners of a leaf cannot always show it (a crossing along the diagonals of the leaves shows no sign change at
+// all). A leaf where both partials change sign over its corners holds a critical point; Newton's steps find it, the
+// Hessian says which directions the zero set leaves it in, and each arm is followed out of the leaf.
+export const CRITICAL = {
+  // Newton steps on grad H = 0 from the leaf centre; the iterate must stay inside the leaf. The partials of a crossing
+  // are nearly linear over a leaf, so the steps converge in three or four.
+  steps: 8,
+  // The iterate has converged when a step moves it less than this many px.
+  convergedPx: 2 ** -10,
+  // The X is certified by H at this many px from its centre along the bisector of each pair of adjacent arms: the four
+  // signs must alternate. Two branches that only pass near each other (xy = e) alternate at a radius only if sqrt(2 e)
+  // is under it, so a certified X is within half a px of both curves, which is the bound the chains are held to.
+  probePx: 0.5,
 }
 
 // A leaf the twin cannot clear whose corners show no sign change (a double root: (x - y)^2 = 0; a point:
