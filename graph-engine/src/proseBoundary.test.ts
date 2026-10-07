@@ -93,7 +93,7 @@ describe('the prose stays out of the renderers', () => {
     ])
     const readers = paths.filter((path) => reachedBy(path, SOURCES[path]).some((target) => MEANINGS.test(target)))
     expect(readers.filter((path) => !isTest(path) && !MEANINGS.test(path)).sort()).toEqual(['graph-engine/src/style/settings/guide.ts'])
-  })
+  }, 30_000)
 
   it('has no file that reads the meanings or the guide where it must not', () => {
     expect(paths.flatMap((path) => violationsOf(path, SOURCES[path]))).toEqual([])

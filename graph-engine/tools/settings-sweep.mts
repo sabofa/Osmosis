@@ -544,6 +544,15 @@ interface Measured {
   measure: SweepMeasure
 }
 
+// The stronger of a figure's geometry (px) and colour (dE) change: the higher rating wins, a tie going to the larger share of the moderate edge.
+function strongerOf(geometryPx: number[], colourDE: number[]): { measure: SweepMeasure; change: number[] } {
+  const score = (measure: SweepMeasure, change: number[]): number => {
+    const top = Math.max(0, ...change)
+    return RANK[rate(measure, top)] * 1000 + Math.min(999, top / EDGES[measure][2])
+  }
+  return score('geometry', geometryPx) >= score('colour', colourDE) ? { measure: 'geometry', change: geometryPx } : { measure: 'colour', change: colourDE }
+}
+
 const PAPER_SURFACE: Hex = '#ffffff'
 
 function sweepFigureSetting(spec: GuideEntry, values: (number | string)[]): Measured {
@@ -584,11 +593,11 @@ function sweepFigureSetting(spec: GuideEntry, values: (number | string)[]): Meas
   const worst = (rows: number[][]): number[] => values.map((_, v) => Math.max(...rows.map((row) => row[v])))
   const displacementPx = worst(geometry)
   const colourDE = worst(colour)
-  // Geometry when the setting moves points at all (the 'none' edge, 0.1 px); colour otherwise.
-  const measure: SweepMeasure = Math.max(...displacementPx) >= 0.1 ? 'geometry' : 'colour'
+  // The stronger of geometry and colour, as paint takes it.
+  const { measure, change } = strongerOf(displacementPx, colourDE)
   return {
     measure,
-    change: measure === 'geometry' ? displacementPx : colourDE,
+    change,
     detail: {
       displacementPx,
       colourDeltaE: colourDE,
@@ -776,7 +785,8 @@ function paintFrameOf(params: PaintParams, vi: number): PaintFrame {
     g = sphereGBuffer(PAINT_W, PAINT_H, { view, params, table: { z: -1, mark: 1 } })
     paintGBuffers.set(gkey, g)
   }
-  const pkey = JSON.stringify([params.seed, params.particles])
+  // every input buildParticles reads: the seed, the density, and the load cell (each particle's cell id)
+  const pkey = JSON.stringify([params.seed, params.particles, params.mix.loadCell])
   let set = paintSets.get(pkey)
   if (!set) {
     if (paintSets.size >= 6) paintSets.clear()
@@ -1024,15 +1034,17 @@ function entryOf(spec: GuideEntry): SweepEntry {
   const values = valuesOf(spec, lightness, spec.path === 'style.paper.tint' ? 0.05 : 0.1)
   const measured = engine === 'paint' ? sweepPaintSetting(spec, values) : engine === 'figures' ? sweepFigureSetting(spec, values) : engine === 'media' ? sweepMediumSetting(spec, values) : sweepBackground(spec, values)
   const change = measured.change.map((x) => round(x, 6))
-  const active = activeRange(values, change)
   const notDrawn = spec.meaning.startsWith('Not drawn yet:')
+  const rating = ratingOf(spec.path, notDrawn, measured.measure, change)
+  // a setting that changes nothing (none) or is read only by the shader (render-only) has no working range
+  const active = rating === 'none' || rating === 'render-only' ? null : activeRange(values, change)
   return {
     path: spec.path,
     engine,
     measure: measured.measure,
     values,
     change,
-    rating: ratingOf(spec.path, notDrawn, measured.measure, change),
+    rating,
     activeRange: active,
     saturates: saturates(change),
     detail: Object.fromEntries(Object.entries(measured.detail).map(([k, list]) => [k, list.map((x) => round(x, 6))])),
@@ -1042,7 +1054,7 @@ function entryOf(spec: GuideEntry): SweepEntry {
 const NOTE =
   'Measured by tools/settings-sweep.mts (figures, media, backgrounds); each setting is swept over 9 evenly spaced values (all the values of an integer or a choice when there are fewer, 9 hues at the default\'s lightness for a colour), and its change is measured against the setting at its registry default. ' +
   'Figures: three examples drawn through renderFigure under four looks (ink, pencil, marker, blackboard), the setting written with @style-set; the change is the largest over the looks of the mean over the examples. ' +
-  'Measure: geometry when the setting moves path points by 0.1 px or more at any value (mean px distance from each sampled point to the nearest point of the default drawing, both ways, each capped at 40 px; the paper layer is left out; labels are measured apart, as points along the baseline with the glyph width estimated from the face, and the larger of the two counts), otherwise colour (OKLab dE of the drawn fill and stroke colours over a white page, at their opacities, a grain filter taken as the share of a stroke its speckle leaves, the noise assumed uniform). detail.markupChanged marks the values at which the markup differs from the default at all. ' +
+  'Measure: the stronger of geometry and colour, as paint takes it (geometry: mean px distance from each sampled point to the nearest point of the default drawing, both ways, each capped at 40 px; the paper layer is left out; labels are measured apart, as points along the baseline with the glyph width estimated from the face, and the larger of the two counts; colour: OKLab dE of the drawn fill and stroke colours over a white page, at their opacities, a grain filter taken as the share of a stroke its speckle leaves, the noise assumed uniform; the higher rating wins). Settings rated none or render-only carry no active range. detail.markupChanged marks the values at which the markup differs from the default at all. ' +
   'Media: mean OKLab dE of each role colour (13 roles, over its own surface) across the 6 themes. ' +
   'Backgrounds: the 256 px tile as the figure bakes it (tilePixels), averaged over the 6 themes; the headline is the larger of the mean colour shift (dE) and the change in the tile\'s L standard deviation (grain moves the spread before the mean); style.paper.grid is the displacement of the rulings (geometry) on a graph paper; board.* are the board colours derived from each theme\'s accent. ' +
   'Not-drawn-yet settings are measured like the rest and rated not-drawn-yet.'
@@ -1078,9 +1090,20 @@ function relabel(): void {
   const notDrawn = new Map(GUIDE.map((spec) => [spec.path, spec.meaning.startsWith('Not drawn yet:')]))
   let changed = 0
   for (const entry of file.entries) {
+    // figures: the measure is the stronger of the stored geometry and colour
+    if (entry.engine === 'figures' && entry.detail.displacementPx && entry.detail.colourDeltaE) {
+      const stronger = strongerOf(entry.detail.displacementPx, entry.detail.colourDeltaE)
+      entry.measure = stronger.measure
+      entry.change = stronger.change
+    }
     const rating = ratingOf(entry.path, notDrawn.get(entry.path) ?? entry.rating === 'not-drawn-yet', entry.measure, entry.change)
-    if (rating !== entry.rating) changed++
+    if (rating !== entry.rating) {
+      changed++
+      console.log(`  ${entry.path}: ${entry.rating} -> ${rating}`)
+    }
     entry.rating = rating
+    entry.activeRange = rating === 'none' || rating === 'render-only' ? null : activeRange(entry.values, entry.change)
+    entry.saturates = saturates(entry.change)
   }
   writeFileSync(OUT, JSON.stringify(file, null, 2) + '\n')
   console.log(`relabelled ${OUT}: ${changed} of ${file.entries.length} ratings changed`)

@@ -5,6 +5,7 @@
 
 import { GUIDE, type GuideEntry } from './guide'
 import type { SweepEntry, SweepFile } from './sweepTypes'
+import { safeRange } from './sweepRate'
 
 export const GUIDE_PAGES = ['paint.md', 'figures.md', 'media.md', 'backgrounds.md'] as const
 type Page = (typeof GUIDE_PAGES)[number]
@@ -42,16 +43,7 @@ function rangeOf(entry: GuideEntry): string {
   return '—'
 }
 
-// The active range widened by one swept step on each side, clamped to the swept values.
-function safeRange(sweep: SweepEntry): [number | string, number | string] | null {
-  if (sweep.activeRange === null) return null
-  const low = sweep.values.indexOf(sweep.activeRange[0])
-  const high = sweep.values.indexOf(sweep.activeRange[1])
-  if (low < 0 || high < 0) return sweep.activeRange
-  return [sweep.values[Math.max(0, low - 1)], sweep.values[Math.min(sweep.values.length - 1, high + 1)]]
-}
-
-const span = (range: [number | string, number | string] | null): string => (range === null ? 'none' : `${range[0]} to ${range[1]}`)
+const span = (range: [number | string, number | string] | null): string => (range === null ? '—' : `${range[0]} to ${range[1]}`)
 
 function appliesOf(entry: GuideEntry): string {
   const media = entry.appliesTo.media === 'all' ? 'all media' : entry.appliesTo.media.join(', ')
@@ -70,7 +62,7 @@ function row(entry: GuideEntry, sweep: SweepEntry | undefined): string {
     entry.unit ?? '—',
     rating,
     measured ? span(sweep.activeRange) : '—',
-    measured ? span(safeRange(sweep)) : '—',
+    measured ? span(safeRange(sweep.values, sweep.activeRange)) : '—',
     entry.interactions.length === 0 ? '—' : entry.interactions.map((path) => `\`${path}\``).join(', '),
     appliesOf(entry),
   ]
