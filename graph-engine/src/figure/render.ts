@@ -85,7 +85,7 @@ import { shortestPath, type SurfacePath } from './shortestPath'
 import { ellipsePoint, type SvgAttrs } from './svg'
 import { cleanPen, type FigurePen, type FillRegion, type StrokePath } from './pen'
 import { styledPen } from './styledPen'
-import { figureMedium, figureMediumSettings, mediumTheme, paperColour } from './medium'
+import { figureBoardTheme, figureMedium, figureMediumSettings, mediumTheme, paperColour } from './medium'
 import type { Piece } from '../style/path'
 import type { MediumSettings } from '../style/media'
 import { checkLayer, isClean, resolveStyle, themeStylesOf, type StyleLayer } from '../style/resolve'
@@ -2121,7 +2121,7 @@ export function renderFigure(statements: Statement[], config: GraphConfig, palet
   const graphType = statements.some((s) => isSolidFigureStatement(s.kind)) ? 'figure3d' : 'figure2d'
   const style = resolveStyle([base.layer, config.style], themeStyles, graphType)
   const clean = isClean(style)
-  const given = clean ? undefined : mediumTheme(palette, theme)
+  const given = clean ? undefined : figureBoardTheme(mediumTheme(palette, theme), [base.layer, config.style], themeStyles, graphType)
   const settings = clean ? undefined : figureMediumSettings(style, [base.layer, config.style], themeStyles, graphType)
   const drawn = clean ? palette : paperPalette(style, palette, given, settings)
   const pen = choosePen(style, drawn, given, settings)

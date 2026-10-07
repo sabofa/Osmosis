@@ -1,6 +1,6 @@
 import type { Palette } from '../render/palette'
 import { saturate, toOklch } from '../style/color'
-import { mediumSettingsOf, type ThemeStyles } from '../style/layers'
+import { boardSettingsOf, mediumSettingsOf, themeWithBoardSettings, type ThemeStyles } from '../style/layers'
 import { MEDIA, type MediumColour, type MediumSettings } from '../style/media'
 import { resolveFigureSettings, type FigureGraphType, type StyleLayer } from '../style/resolve'
 import { defaultTheme } from '../style/theme/adapter'
@@ -214,4 +214,15 @@ export function figureMediumSettings(
   graphType?: FigureGraphType
 ): MediumSettings {
   return mediumSettingsOf(resolveFigureSettings(layers, themeStyles, graphType), style.colour.medium)
+}
+
+// The theme with its boards drawn from the board settings (board.tilt, board.<name>.chromaCap) as the layers
+// resolve them: the theme itself, the same object, at the defaults.
+export function figureBoardTheme(
+  theme: ThemeInput,
+  layers: readonly (StyleLayer | null | undefined)[],
+  themeStyles?: ThemeStyles,
+  graphType?: FigureGraphType
+): ThemeInput {
+  return themeWithBoardSettings(theme, boardSettingsOf(resolveFigureSettings(layers, themeStyles, graphType)))
 }

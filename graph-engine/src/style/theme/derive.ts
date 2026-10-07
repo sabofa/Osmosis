@@ -137,7 +137,15 @@ const BOARD_FULL_ACCENT_CHROMA = 0.15
 // accent nears the board's opposite hue (where the side flips) and faded in with
 // the accent's chroma (a grey has no hue). Both fades are continuous, so a
 // small change of accent never makes a visible jump in a board.
-export function deriveBoards(accent: Hex): Record<BoardName, Hex> {
+//
+// `opts` are the board settings (board.tilt and board.<name>.chromaCap): the share of the angle taken, and the
+// most chroma each board may have. Left out, they are BOARD_TILT and each base's `maxChroma`.
+export interface BoardOptions {
+  tilt?: number
+  chromaCap?: Partial<Record<BoardName, number>>
+}
+export function deriveBoards(accent: Hex, opts: BoardOptions = {}): Record<BoardName, Hex> {
+  const share = opts.tilt ?? BOARD_TILT
   const { c: accentChroma, h: accentHue } = toOklch(accent)
   const boost = BOARD_CHROMA_BOOST * Math.min(1, accentChroma / BOARD_FULL_ACCENT_CHROMA)
   const hasHue = smoothstep(BOARD_TILT_CHROMA_FROM, BOARD_TILT_CHROMA_TO, accentChroma)
@@ -145,10 +153,10 @@ export function deriveBoards(accent: Hex): Record<BoardName, Hex> {
   for (const name of BOARD_NAMES) {
     const base = BOARD_BASES[name]
     const angle = shortestAngle(base.h, accentHue)
-    const toward = clamp(angle, -BOARD_TILT_LIMIT, BOARD_TILT_LIMIT) * BOARD_TILT
+    const toward = clamp(angle, -BOARD_TILT_LIMIT, BOARD_TILT_LIMIT) * share
     const notOpposite = clamp((180 - Math.abs(angle)) / BOARD_OPPOSITE_FADE, 0, 1)
     const tilt = toward * notOpposite * hasHue
-    boards[name] = fromOklch({ l: base.l, c: Math.min(base.maxChroma, base.c + boost), h: wrapHue(base.h + tilt) })
+    boards[name] = fromOklch({ l: base.l, c: Math.min(opts.chromaCap?.[name] ?? base.maxChroma, base.c + boost), h: wrapHue(base.h + tilt) })
   }
   return boards
 }

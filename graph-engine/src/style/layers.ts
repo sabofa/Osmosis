@@ -5,7 +5,8 @@ import type { SettingValue } from './settings/types'
 import { stylePathOf } from './settings/values'
 import { TYPE_DEFAULTS } from './typeDefaults'
 import type { StyleLayer } from './resolve'
-import type { GraphType, MediumName } from './theme/types'
+import { BOARD_BASES, BOARD_TILT, deriveBoards, themeKey } from './theme/derive'
+import { BOARD_NAMES, type BoardName, type GraphType, type MediumName, type ThemeInput } from './theme/types'
 import { readToken, TOKENS, type Style, type Token } from './tokens'
 
 export { toPaintParams } from './settings/paintParams'
@@ -134,6 +135,32 @@ export function mediumSettingsOf(resolved: ResolvedSettings, name: MediumName): 
     out[setting.key] = typeof value === 'number' ? value : setting.default
   }
   return out
+}
+
+// The board settings: how far a board leans toward the accent, and each board's most chroma.
+export interface BoardSettings {
+  tilt: number
+  chromaCap: Record<BoardName, number>
+}
+
+export function boardSettingsOf(resolved: ResolvedSettings): BoardSettings {
+  const number = (path: string, fallback: number) => {
+    const value = resolved.get(path)
+    return typeof value === 'number' ? value : fallback
+  }
+  const chromaCap = {} as Record<BoardName, number>
+  for (const name of BOARD_NAMES) chromaCap[name] = number(`board.${name}.chromaCap`, BOARD_BASES[name].maxChroma)
+  return { tilt: number('board.tilt', BOARD_TILT), chromaCap }
+}
+
+// The theme with its boards drawn from the board settings. At the defaults it is the theme itself (the same
+// object); otherwise a copy whose boards derive from the board accent (the light mode's, so light and dark stay
+// byte-equal), with a key of its own.
+export function themeWithBoardSettings(theme: ThemeInput, board: BoardSettings): ThemeInput {
+  if (board.tilt === BOARD_TILT && BOARD_NAMES.every((name) => board.chromaCap[name] === BOARD_BASES[name].maxChroma)) return theme
+  const next: Omit<ThemeInput, 'key'> = { ...theme, boards: deriveBoards(theme.boardColours.accent, board) }
+  delete (next as Partial<ThemeInput>).key
+  return { ...next, key: themeKey(next) }
 }
 
 // A figure's or a host's StyleLayer (groups of settings, as the "@style…" directives
