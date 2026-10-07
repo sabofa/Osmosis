@@ -1,12 +1,12 @@
-// The settings sweep: how much each registry setting moves the picture, for the figures, media and
-// backgrounds groups (T7.1-T7.2). The paint group is added by T7.3, into the same file.
+// The settings sweep: how much each registry setting moves the picture, for the figures, media,
+// backgrounds (T7.1-T7.2) and paint (T7.3) groups.
 //
 //   npx vite-node tools/settings-sweep.mts [--only <path prefix>]       (from graph-engine/)
 //
 // writes ../docs/styles/sweep.json (SweepFile, src/style/settings/sweepTypes.ts). With --only, just the paths
 // that start with the prefix are re-measured and MERGED into the file already there (their entries replaced, the
-// rest kept, all sorted by path). A full run replaces every figures, media and backgrounds entry and keeps the
-// paint entries (and the paint fixtures) another run wrote. The file holds no timing; the run time is printed.
+// rest kept, all sorted by path). A full run replaces every entry (the paint group alone takes about 10 minutes:
+// `--only paint.` runs just it). The file holds no timing; the run time is printed.
 // Deterministic: every render is seeded, and nothing here reads a clock or Math.random.
 //
 // Not covered by tsconfig.app.json (include: src) nor tsconfig.node.json (include: vite.config.ts): run by vite-node.
@@ -15,6 +15,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXAMPLES } from '../src/examples'
+import { lchToLab, linearToOklab } from '../src/space/paint/model/colour'
+import { buildParticles, paintFrame } from '../src/space/paint/model/index'
+import { flatColours, sphereGBuffer } from '../src/space/paint/model/testing'
+import { CANVAS, SCENE, viewOf } from '../src/space/paint/model/valueFinalFixture'
+import { EDGE_CLASSES, ROLES, type GBuffer, type ParticleSet, type PaintFrame, type PaintView } from '../src/space/paint/types'
+import type { PaintParams } from '../src/space/paint/params'
+import { toPaintParams } from '../src/style/settings/paintParams'
 import { renderFigure } from '../src/figure/render'
 import { parseSpec } from '../src/parser/parseSpec'
 import { LIGHT_PALETTE } from '../src/render/palette'
@@ -140,7 +147,7 @@ function valuesOf(spec: GuideEntry, lightness: number, chroma: number): (number 
       return Array.from({ length: STEPS }, (_, i) => Math.min(max, Math.max(min, round(min + ((max - min) * i) / (STEPS - 1)))))
     }
     case 'curve':
-      throw new Error(`${spec.path}: curves are T7.3's`)
+      return [...CURVE_SHAPES]
   }
 }
 
@@ -720,11 +727,166 @@ function sweepBackground(spec: GuideEntry, values: (number | string)[]): Measure
 }
 
 // ---------------------------------------------------------------------------
+// Paint (the per-frame painter only: paintFrame, never the bake)
+// ---------------------------------------------------------------------------
+
+const CURVE_SHAPES = ['identity', 'raised', 'lowered'] as const
+// How far 'raised' and 'lowered' bend the default curve: each point's y moved by this share of the editor's y range.
+const CURVE_BEND = 0.15
+
+// The three views of the sphere-on-table fixture (space/paint/model/valueFinalFixture.ts): the default light on the
+// default camera; a low world-fixed light and a grazing camera (a long cast shadow, a lit and a shadow side); a nearer
+// camera from above (the strokes larger on screen). A frame is PAINT_W x PAINT_H css px (the fixture's own is 640x480;
+// the smaller frame keeps the sweep inside its time budget).
+const PAINT_W = 400
+const PAINT_H = 300
+const PAINT_VIEWS: { name: string; opts: Parameters<typeof viewOf>[0]; zoom: number }[] = [
+  { name: 'sphere-on-table, camera 30/25, default light', opts: { azimuth: 30, elevation: 25 }, zoom: 75 },
+  { name: 'sphere-on-table, camera 200/2, world light 30/5', opts: { azimuth: 200, elevation: 2, light: [30, 5] }, zoom: 75 },
+  { name: 'sphere-on-table, closer camera 120/40, default light', opts: { azimuth: 120, elevation: 40 }, zoom: 130 },
+]
+const PAINT_COLOURS = flatColours({ 0: lchToLab(0.56, 0.14, 38), 1: CANVAS, 2: lchToLab(0.4, 0.05, 55) })
+
+const paintViews: PaintView[] = PAINT_VIEWS.map((v) => viewOf(v.opts, [PAINT_W, PAINT_H, v.zoom]))
+const paintSets = new Map<string, ParticleSet>()
+const paintGBuffers = new Map<string, GBuffer>()
+
+function paintFrameOf(params: PaintParams, vi: number): PaintFrame {
+  const view = paintViews[vi]
+  const gkey = JSON.stringify([vi, params.light])
+  let g = paintGBuffers.get(gkey)
+  if (!g) {
+    g = sphereGBuffer(PAINT_W, PAINT_H, { view, params, table: { z: -1, mark: 1 } })
+    paintGBuffers.set(gkey, g)
+  }
+  const pkey = JSON.stringify([params.seed, params.particles])
+  let set = paintSets.get(pkey)
+  if (!set) {
+    if (paintSets.size >= 6) paintSets.clear()
+    set = buildParticles(SCENE, PAINT_COLOURS, params)
+    paintSets.set(pkey, set)
+  }
+  return paintFrame(SCENE, set, view, g, params)
+}
+
+// A frame as the metrics read it: each stroke's role, colour (OKLab) and a key naming its particle (role, the stroke's
+// seed and where its path starts in the world), and the edge-class shares of the frame's edge segments.
+interface Reading {
+  keys: string[]
+  role: Uint8Array
+  lab: Float64Array
+  count: number
+  edgeShare: number[]
+}
+
+function reading(frame: PaintFrame): Reading {
+  const b = frame.strokes
+  const keys: string[] = new Array(b.count)
+  const lab = new Float64Array(3 * b.count)
+  const seen = new Map<string, number>()
+  const stride = b.worldPath.length / Math.max(1, b.count) // 3 * PATH_POINTS
+  for (let i = 0; i < b.count; i++) {
+    const o = stride * i
+    const base = `${b.role[i]}|${b.seed[i]}|${Math.round(b.worldPath[o] * 200)}|${Math.round(b.worldPath[o + 1] * 200)}|${Math.round(b.worldPath[o + 2] * 200)}`
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    keys[i] = `${base}#${n}`
+    const [l, a, bb] = linearToOklab(b.colour[3 * i], b.colour[3 * i + 1], b.colour[3 * i + 2])
+    lab[3 * i] = l
+    lab[3 * i + 1] = a
+    lab[3 * i + 2] = bb
+  }
+  const hist = new Array<number>(EDGE_CLASSES.length).fill(0)
+  const ec = frame.debug.edgeClass
+  for (let i = 0; i < ec.length; i++) if (ec[i] < hist.length) hist[ec[i]]++
+  const total = hist.reduce((x, y) => x + y, 0)
+  return { keys, role: b.role, lab, count: b.count, edgeShare: hist.map((h) => (total > 0 ? h / total : 0)) }
+}
+
+const dE = (a: Float64Array, i: number, b: Float64Array, j: number): number => Math.hypot(a[3 * i] - b[3 * j], a[3 * i + 1] - b[3 * j + 1], a[3 * i + 2] - b[3 * j + 2])
+
+// The colour change of each stroke of `r` against the default's stroke of the same particle and role. When the particles
+// themselves moved (a seed, a cell size: under half the strokes find their partner) the strokes are paired by role and
+// by rank of lightness instead, which compares the two frames' colour distributions role by role.
+function colourDeltas(r: Reading, d: Reading): number[] {
+  const index = new Map<string, number>()
+  d.keys.forEach((k, i) => index.set(k, i))
+  const out: number[] = []
+  for (let i = 0; i < r.count; i++) {
+    const j = index.get(r.keys[i])
+    if (j !== undefined) out.push(dE(r.lab, i, d.lab, j))
+  }
+  if (out.length >= 0.5 * Math.min(r.count, d.count)) return out
+  const paired: number[] = []
+  for (let role = 0; role < ROLES.length; role++) {
+    const a = [...Array(r.count).keys()].filter((i) => r.role[i] === role).sort((x, y) => r.lab[3 * x] - r.lab[3 * y] || x - y)
+    const b = [...Array(d.count).keys()].filter((i) => d.role[i] === role).sort((x, y) => d.lab[3 * x] - d.lab[3 * y] || x - y)
+    const n = Math.min(a.length, b.length)
+    for (let k = 0; k < n; k++) paired.push(dE(r.lab, a[Math.floor((k * a.length) / n)], d.lab, b[Math.floor((k * b.length) / n)]))
+  }
+  return paired
+}
+
+const meanOf = (xs: readonly number[]): number => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length)
+function percentile(xs: number[], q: number): number {
+  if (xs.length === 0) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  return s[Math.min(s.length - 1, Math.floor(q * (s.length - 1) + 0.5))]
+}
+function meanL(r: Reading): number {
+  let s = 0
+  for (let i = 0; i < r.count; i++) s += r.lab[3 * i]
+  return r.count === 0 ? 0 : s / r.count
+}
+
+// The curve shapes: identity is the straight line between the default's end points, raised and lowered move every
+// point of the default curve up or down by CURVE_BEND of the editor's y range (clamped to it).
+function curveShape(spec: GuideEntry, shape: string): number[][] {
+  const points = spec.default as number[][]
+  const lo = spec.min ?? 0
+  const hi = spec.max ?? 1
+  const clamp = (y: number): number => Math.min(hi, Math.max(lo, y))
+  if (shape === 'identity') {
+    const first = points[0]
+    const last = points[points.length - 1]
+    return points.map(([x]) => [x, clamp(first[1] + ((x - first[0]) / (last[0] - first[0])) * (last[1] - first[1]))])
+  }
+  const sign = shape === 'raised' ? 1 : -1
+  return points.map(([x, y]) => [x, clamp(y + sign * CURVE_BEND * (hi - lo))])
+}
+
+function sweepPaintSetting(spec: GuideEntry, values: (number | string)[]): Measured {
+  const change: number[] = []
+  const detail = { p95DeltaE: [] as number[], meanLShift: [] as number[], strokeRatio: [] as number[], edgeClassL1: [] as number[] }
+  const base = paintViews.map((_, vi) => reading(paintFrameOf(toPaintParams(new Map()), vi)))
+  for (const value of values) {
+    const set = new Map<string, number | string | number[][]>([[spec.path, spec.type === 'curve' ? curveShape(spec, value as string) : value]])
+    const params = toPaintParams(set)
+    const acc = { mean: [] as number[], p95: [] as number[], l: [] as number[], ratio: [] as number[], edge: [] as number[] }
+    paintViews.forEach((_, vi) => {
+      const r = reading(paintFrameOf(params, vi))
+      const deltas = colourDeltas(r, base[vi])
+      acc.mean.push(meanOf(deltas))
+      acc.p95.push(percentile(deltas, 0.95))
+      acc.l.push(meanL(r) - meanL(base[vi]))
+      acc.ratio.push(base[vi].count === 0 ? 1 : r.count / base[vi].count)
+      acc.edge.push(r.edgeShare.reduce((s, x, k) => s + Math.abs(x - base[vi].edgeShare[k]), 0))
+    })
+    change.push(meanOf(acc.mean))
+    detail.p95DeltaE.push(meanOf(acc.p95))
+    detail.meanLShift.push(meanOf(acc.l))
+    detail.strokeRatio.push(meanOf(acc.ratio))
+    detail.edgeClassL1.push(meanOf(acc.edge))
+  }
+  return { change, detail, measure: 'colour' }
+}
+
+// ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
 
-function engineOf(path: string): Exclude<SweepEngine, 'paint'> | null {
-  if (path.startsWith('paint.')) return null
+function engineOf(path: string): SweepEngine | null {
+  if (path.startsWith('paint.')) return 'paint'
   if (path.startsWith('media.')) return 'media'
   if (path.startsWith('board.') || path.startsWith('style.paper.')) return 'backgrounds'
   if (path.startsWith('style.')) return 'figures'
@@ -735,7 +897,7 @@ function entryOf(spec: GuideEntry): SweepEntry {
   const engine = engineOf(spec.path)!
   const lightness = spec.path === 'style.paper.tint' ? Math.min(0.93, toOklch(defaultTheme('light').colours.paper).l) : toOklch(defaultTheme('light').colours.ink).l
   const values = valuesOf(spec, lightness, spec.path === 'style.paper.tint' ? 0.05 : 0.1)
-  const measured = engine === 'figures' ? sweepFigureSetting(spec, values) : engine === 'media' ? sweepMediumSetting(spec, values) : sweepBackground(spec, values)
+  const measured = engine === 'paint' ? sweepPaintSetting(spec, values) : engine === 'figures' ? sweepFigureSetting(spec, values) : engine === 'media' ? sweepMediumSetting(spec, values) : sweepBackground(spec, values)
   const change = measured.change.map((x) => round(x, 6))
   const active = activeRange(values, change)
   const notDrawn = spec.meaning.startsWith('Not drawn yet:')
@@ -759,6 +921,25 @@ const NOTE =
   'Media: mean OKLab dE of each role colour (13 roles, over its own surface) across the 6 themes. ' +
   'Backgrounds: the 256 px tile as the figure bakes it (tilePixels), averaged over the 6 themes; the headline is the larger of the mean colour shift (dE) and the change in the tile\'s L standard deviation (grain moves the spread before the mean); style.paper.grid is the displacement of the rulings (geometry) on a graph paper; board.* are the board colours derived from each theme\'s accent. ' +
   'Not-drawn-yet settings are measured like the rest and rated not-drawn-yet.'
+
+const PAINT_MARK = ' Paint: '
+const PAINT_NOTE =
+  PAINT_MARK +
+  `the per-frame painter only (paintFrame, never the bake), on the sphere-on-table fixture (valueFinalFixture.ts) in ${PAINT_VIEWS.length} views at ${PAINT_W}x${PAINT_H} css px (smaller than the fixture's 640x480, to keep the run inside its time budget); each setting is applied with toPaintParams to a stack with that one setting changed and the frame is compared with the default frame, averaged over the views. ` +
+  'The headline (measure colour) is the mean OKLab dE of the stroke colours, each stroke matched to the stroke of the same particle in the default frame and role (role, stroke seed and where its path starts in the world); when under half the strokes find a partner (the particles themselves moved: seed, cell size) strokes are paired by role and by rank of lightness instead. ' +
+  'detail: p95DeltaE (the 95th percentile of the same dE), meanLShift (signed change of the mean OKLab L of all strokes), strokeRatio (stroke count over that of the default frame), edgeClassL1 (L1 distance between the shares of the edge segments in the four edge classes). ' +
+  'A curve is swept over 3 shapes: identity (the straight line between the end points of the default curve), raised and lowered (every point of the default curve moved up or down by ' +
+  `${CURVE_BEND * 100}% of the editor's y range, clamped to it).`
+
+// The header's note: a full run writes it whole; an --only run keeps the existing one, with its paint part (the text from
+// PAINT_MARK on) replaced when this run measured paint.
+function noteOf(only: string | undefined, existing: SweepFile | null): string {
+  if (only === undefined || existing === null) return NOTE + PAINT_NOTE
+  const old = existing.header.note
+  if (!'paint.'.startsWith(only) && !only.startsWith('paint.')) return old
+  const at = old.indexOf(PAINT_MARK)
+  return (at < 0 ? old : old.slice(0, at)) + PAINT_NOTE
+}
 
 function main(): void {
   const started = Date.now()
@@ -785,13 +966,14 @@ function main(): void {
   const header: SweepFile['header'] = {
     fixtures: {
       ...(existing?.header.fixtures ?? {}),
+      ...(chosen.some((spec) => engineOf(spec.path) === 'paint') ? { paint: PAINT_VIEWS.map((v) => `${v.name} (${PAINT_W}x${PAINT_H})`) } : {}),
       figures: [...FIGURE_FIXTURES],
       media: [...ROLE_KEYS],
       backgrounds: [`a ${TILE} px tile, seed 0`, `${FIGURE_FIXTURES[0]} on a graph paper (grid)`],
     },
     themes: THEMES.map((t) => t.name),
     steps: STEPS,
-    note: only !== undefined && existing !== null ? existing.header.note : NOTE,
+    note: noteOf(only, existing),
   }
   const file: SweepFile = { header, entries }
   mkdirSync(dirname(OUT), { recursive: true })
