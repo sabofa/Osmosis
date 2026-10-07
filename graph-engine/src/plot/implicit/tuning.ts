@@ -56,3 +56,60 @@ export const QUADTREE = {
   // slack a cell on the limit to the last bit would be halved once more. A billionth.
   sizeSlack: 1e-9,
 }
+
+// Contouring a leaf (calc P3, task 3): where the zero set crosses a leaf, and how a crossing is told from a
+// pole or a jump.
+export const CONTOUR = {
+  // A crossing on a leaf edge is bisected on H until the bracket is this many screen px wide (2^-12 of a px: about
+  // 12 steps from a 1 px leaf, 14 from a 4 px one). Far finer than anything drawn: the vertex is the zero to a
+  // thousandth of a px, so the vertices of a curve lie on it and the chains join without cracks.
+  bisectPx: 2 ** -12,
+  // The most steps one bisection takes (a bracket of adjacent doubles is reached sooner).
+  maxBisect: 64,
+  // The most further steps the chase for a pole takes, from the 2^-12 px bracket to machine width: a 1 px leaf at
+  // 40 px a unit is 2^-12 px = 6e-6 units wide, and 2^-52 relative of a coordinate near 1 is 2e-16, 35 steps.
+  maxChase: 80,
+  // The chase asks the twin whether the bracket has become CONTINUOUS (a root, not a pole) every this many steps, so
+  // a root whose first twin enclosure was loose is let go early; the verdict at machine width decides the rest.
+  chaseCheck: 16,
+  // A sign change whose twin is not CONTINUOUS down to machine width and that is not a pole is a root only if H is
+  // continuous across it: |H(hi) - H(lo)| over the bracket must have shrunk, from its width at 2^-12 px to its width
+  // at machine width, to at most this fraction. A continuous H shrinks it with the bracket (by 2^-35 or so); a jump
+  // (floor, mod, a piecewise seam) keeps it all, a pole grows it.
+  jumpShrink: 0.25,
+  // A leaf whose four edges all cross and whose bilinear saddle value is within this fraction of its largest corner
+  // value is drawn as an X through the saddle point: two curves crossing in it (xy = 0, sin x sin y = 0 at its nodes),
+  // not two near-miss arcs. The worst case for the X is two branches close but not touching, xy = e at the middle of a
+  // square leaf of side h: the corners are +-h^2/4 - e, the saddle value -e, and the branches pass sqrt(2e) from the
+  // saddle point, where the X's vertex is. At e = crossRel * h^2/4 that is h * sqrt(crossRel / 2): 0.12 px at FULL and 0.47
+  // at COARSE for 0.02, where the chains are held to half a px (0.1 would be 0.26 and 1.05 px). Above it the leaf draws
+  // the two arcs, which pass within about that of each other.
+  crossRel: 0.02,
+}
+
+// A leaf the twin cannot clear whose corners show no sign change (a double root: (x - y)^2 = 0; a point:
+// x^2 + y^2 = 0; the cusp of y^2 = x^3 beside the branches) is searched for a touch point, and its touch points are
+// chained.
+export const TOUCH = {
+  // Newton steps toward the zero of H along its gradient, from the leaf centre, the iterate held in the leaf. A
+  // double root halves its distance each step, so 8 steps leave a 256th of the leaf.
+  steps: 8,
+  // The leaf is a touch point if |H| / |grad H| (the first-order distance to the zero set) at the iterate is under
+  // this many px: the spec's half a px.
+  maxPx: 0.5,
+  // The iterate has converged when |H| / |grad H| is under this many px: the point is a zero for every purpose.
+  convergedPx: 2 ** -8,
+  // Touch points within this many px of each other are one point: the four leaves round a grid corner that is the
+  // point x^2 + y^2 = 0, the columns either side of the double line x^2 = 0.
+  mergePx: 0.25,
+  // |H| / |grad H| is small near a pole as well (H is large there and its gradient larger), where Newton's steps carry
+  // |H| UP. A zero's iterates bring it down: at the last iterate |H| must be at most this fraction of its value at the
+  // leaf centre (unless it has converged).
+  descent: 0.5,
+  // A cluster of touch points no more than this many px across is one filled point, not a curve: a curve of that length
+  // is a mark to the eye.
+  pointPx: 2,
+}
+// (A leaf that shares a corner with a leaf that drew a piece of the contour is not searched at all: the contour
+// already speaks for it, and a touch point there would be a dot beside a curve: at a singular point the corners
+// cannot see, at the cusp of y^2 = x^3, at a leaf the twin was loose about.)

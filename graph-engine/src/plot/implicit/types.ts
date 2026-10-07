@@ -1,6 +1,7 @@
 // Shared types of the interval quadtree (calc P3) and what is built on it: implicit curves and
 // regions. Pure data; nothing here evaluates anything.
 import type { Verdict } from '../../math/interval'
+import type { Vec2 } from '../../scene/types'
 
 // An axis-aligned rectangle of the plane, the cell of a subdivision: x0 < x1, y0 < y1, in world units. (Not
 // the sampler's Box in plot/sample/types.ts, which is the twin's xLo/xHi/yLo/yHi enclosure of a curve over a
@@ -58,4 +59,13 @@ export interface Subdivision {
   // of stop 'budget', one size, coarser than the leaf size asks, and the caller says the statement was drawn
   // coarsely.
   capped: boolean
+}
+
+// A piece of a contour inside one leaf: the straight stretch between two points of the zero set. Its ends are
+// the very objects the crossing cache keeps (a crossing is made once per leaf edge, and both leaves that share
+// the edge hold the same object), or a corner of the grid where H is exactly zero, or the saddle point of a
+// crossing: so two pieces that meet do so on exactly equal coordinates, and the chains join on them.
+export interface Segment {
+  a: Vec2
+  b: Vec2
 }
