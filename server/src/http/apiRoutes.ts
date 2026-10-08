@@ -39,6 +39,7 @@ import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDra
 import {
   listThemes, listThemesForSync, saveTheme, patchTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
   getLocation, setLocation, type ThemeRow, type ThemeTokens, type SaveResult,
+  clearActiveIf,
 } from "../domain/themes.js";
 import { BUILTINS, validate as validateTheme, type Location, type ThemeManifest } from "theme-core";
 import type { AppContext } from "./app.js";
@@ -900,6 +901,11 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   // a local node go to canonical first and then mirror canonical's answer.
   const isLocal = ctx.env.role === "local";
 
+  const THEME_OFFLINE = {
+    error: "theme_requires_connection", reason: "theme_requires_connection",
+    message: "Theme changes need a connection to the server.",
+  };
+
   async function forwardOrLocal<T>(
     reply: { code: (n: number) => { send: (body: unknown) => void } },
     forward: () => Promise<T>,
@@ -907,7 +913,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   ): Promise<unknown> {
     if (!isLocal) return local(null);
     if (!ctx.runtime.online) {
-      reply.code(503).send({ reason: "theme_requires_connection", message: "Theme changes need a connection to the server." });
+      reply.code(503).send(THEME_OFFLINE);
       return;
     }
     let fromCanonical: T;
@@ -915,7 +921,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
       fromCanonical = await forward();
     } catch (err) {
       if (err instanceof ForwardError) {
-        reply.code(err.status).send(err.status === 503 ? { reason: "theme_requires_connection", message: "Theme changes need a connection to the server." } : err.body);
+        reply.code(err.status).send(err.status === 503 ? THEME_OFFLINE : err.body);
         return;
       }
       throw err;
@@ -972,7 +978,12 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.put("/api/themes/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { manifest?: ThemeManifest; name?: string; tokens?: ThemeTokens; custom_css?: string };
+    const rawBody = request.body === undefined ? {} : request.body;
+    if (rawBody === null || typeof rawBody !== "object" || Array.isArray(rawBody) || (rawBody as { manifest?: unknown }).manifest === null) {
+      reply.code(400).send({ error: "invalid_body", reason: "invalid_body", message: "expected a manifest object or {name,tokens}" });
+      return;
+    }
+    const body = rawBody as { manifest?: ThemeManifest; name?: string; tokens?: ThemeTokens; custom_css?: string };
     try {
       if (body.manifest !== undefined && body.manifest?.id !== id) {
         throw new DomainError("id_mismatch", `The path id "${id}" must equal manifest.id.`);
@@ -1029,7 +1040,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
         (fromCanonical) => {
           if (fromCanonical) {
             applyThemesFromPull(db, [fromCanonical.tombstone], undefined);
-            if (getActiveThemeId(db) === id) setActiveTheme(db, null);
+            clearActiveIf(db, id);
             return { id };
           }
           const result = deleteTheme(db, id);

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  migrate as migrateTheme, normalise, resolve, validate, toLegacyTokens, isBuiltinId, REMOVED_BUILTINS,
+  migrate as migrateTheme, builtinById, normalise, resolve, validate, toLegacyTokens, isBuiltinId, REMOVED_BUILTINS,
   DEFAULT_THEME_ID, type ThemeManifest, type Report, type Location,
 } from "theme-core";
 import { DomainError } from "./errors.js";
@@ -60,9 +60,10 @@ const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const BUILTIN_MSG = "Built-in themes are read-only; duplicate one to edit it.";
 
 const warned = new Set<string>();
-function warnOnce(id: string, why: string): void {
-  if (warned.has(id)) return;
-  warned.add(id);
+function warnOnce(id: string, why: string, payload = ""): void {
+  const key = `${id}:${payload.slice(0, 40)}`;
+  if (warned.has(key)) return;
+  warned.add(key);
   console.warn(`theme "${id}" skipped: ${why}`);
 }
 
@@ -77,7 +78,7 @@ function toRow(r: RawRow, manifest: ThemeManifest): ThemeRow | null {
     try {
       tokens = toLegacyTokens(resolve(manifest));
     } catch (err) {
-      warnOnce(r.id, (err as Error).message);
+      warnOnce(r.id, (err as Error).message, r.manifest ?? "");
       return null;
     }
   }
@@ -103,7 +104,7 @@ function rowFromRaw(r: RawRow): ThemeRow | null {
     }
   }
   if (!manifest) {
-    warnOnce(r.id, "manifest cannot be parsed");
+    warnOnce(r.id, "manifest cannot be parsed", r.manifest ?? "");
     return null;
   }
   return toRow(r, manifest);
@@ -254,9 +255,7 @@ export function deleteTheme(db: DatabaseSync, id: string): { id: string } {
   try {
     db.prepare("UPDATE theme SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
     // Deleting the active theme drops back to "mode only".
-    db.prepare(
-      "UPDATE theme_setting SET active_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_theme_id = ?"
-    ).run(id);
+    clearActiveIf(db, id);
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
@@ -265,8 +264,19 @@ export function deleteTheme(db: DatabaseSync, id: string): { id: string } {
   return { id };
 }
 
+// Nulls the STORED pointer when it names `id` (getActiveThemeId hides tombstones,
+// so it cannot be used to detect this).
+export function clearActiveIf(db: DatabaseSync, id: string): void {
+  db.prepare(
+    "UPDATE theme_setting SET active_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_theme_id = ?"
+  ).run(id);
+}
+
 export function setActiveTheme(db: DatabaseSync, id: string | null): { active_theme_id: string | null } {
   const stored = mapRemoved(id);
+  if (stored !== null && stored.startsWith("builtin:") && !builtinById(stored)) {
+    throw new DomainError("unknown_builtin", `Unknown built-in theme "${stored}".`);
+  }
   if (stored !== null && !stored.startsWith("builtin:")) {
     const row = db.prepare("SELECT id FROM theme WHERE id = ? AND deleted_at IS NULL").get(stored);
     if (!row) throw new DomainError("not_found", `Theme "${stored}" does not exist.`);
@@ -324,6 +334,10 @@ export function applyThemesFromPull(
   );
   let applied = 0;
   for (const t of themes) {
+    if (t === null || typeof t !== "object" || Array.isArray(t)) {
+      console.warn("pulled theme skipped: row is not an object");
+      continue;
+    }
     try {
       const manifest = t.manifest
         ? t.manifest
@@ -344,7 +358,7 @@ export function applyThemesFromPull(
       });
       applied += Number(r.changes);
     } catch (err) {
-      console.warn(`pulled theme "${t.id}" skipped: ${(err as Error).message}`);
+      console.warn(`pulled theme "${t?.id}" skipped: ${(err as Error).message}`);
     }
   }
   if (active !== undefined) {

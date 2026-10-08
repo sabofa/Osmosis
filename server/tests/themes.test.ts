@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { openTestDb } from "./helpers.js";
 import {
   listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
-  patchTheme, getTheme, getLocation, setLocation,
+  patchTheme, getTheme, clearActiveIf, getLocation, setLocation,
 } from "../src/domain/themes.js";
 import { buildPullResponse, applyPullResponse } from "../src/domain/sync.js";
 import { DomainError } from "../src/domain/errors.js";
@@ -28,7 +28,7 @@ describe("themes domain", () => {
   it("validates ids, names, tokens, and refuses builtin ids", () => {
     const db = openTestDb();
     expect(() => saveTheme(db, { id: "Bad Id", name: "x", tokens })).toThrow(/invalid_theme_id|must be/);
-    expect(() => saveTheme(db, { id: "builtin:paper", name: "x", tokens })).toThrow(DomainError);
+    expect(() => saveTheme(db, { id: "builtin:forest", name: "x", tokens })).toThrow(DomainError);
     expect(() => saveTheme(db, { id: "a", name: " ", tokens })).toThrow(DomainError);
     expect(() => saveTheme(db, { id: "a", name: "x", tokens: { light: { accent: "#fff" }, dark: {} } })).toThrow(DomainError);
   });
@@ -37,12 +37,66 @@ describe("themes domain", () => {
     const db = openTestDb();
     expect(getActiveThemeId(db)).toBeNull();
     expect(() => setActiveTheme(db, "nope")).toThrow(DomainError);
-    setActiveTheme(db, "builtin:paper");
-    expect(getActiveThemeId(db)).toBe("builtin:paper");
+    setActiveTheme(db, "builtin:forest");
+    expect(getActiveThemeId(db)).toBe("builtin:forest");
     saveTheme(db, { id: "mine", name: "Mine", tokens });
     setActiveTheme(db, "mine");
     deleteTheme(db, "mine");
     expect(getActiveThemeId(db)).toBeNull();
+  });
+});
+
+describe("themes cleanup", () => {
+  it("pull skips null/non-object rows and applies the good one", () => {
+    const db = openTestDb();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const good = { id: "good", name: "Good", tokens, custom_css: "", updated_at: "2020-01-01 00:00:00", deleted_at: null };
+    const n = applyThemesFromPull(db, [null, "x", good] as never, undefined);
+    warn.mockRestore();
+    expect(n).toBe(1);
+    expect(listThemes(db).map((t) => t.id)).toEqual(["good"]);
+  });
+
+  it("deleting the active theme nulls the stored pointer; re-saving does not reactivate", () => {
+    const db = openTestDb();
+    saveTheme(db, { id: "old", name: "Old", tokens });
+    setActiveTheme(db, "old");
+    deleteTheme(db, "old");
+    const raw = () => (db.prepare("SELECT active_theme_id FROM theme_setting WHERE id = 1").get() as { active_theme_id: string | null }).active_theme_id;
+    expect(raw()).toBeNull();
+    saveTheme(db, { id: "old", name: "Old", tokens });
+    expect(getActiveThemeId(db)).toBeNull();
+  });
+
+  it("clearActiveIf nulls a stale pointer to a tombstoned theme", () => {
+    const db = openTestDb();
+    saveTheme(db, { id: "old", name: "Old", tokens });
+    setActiveTheme(db, "old");
+    db.prepare("UPDATE theme SET deleted_at = datetime('now') WHERE id = 'old'").run();
+    clearActiveIf(db, "old");
+    saveTheme(db, { id: "old", name: "Old", tokens });
+    expect(getActiveThemeId(db)).toBeNull();
+  });
+
+  it("a re-corrupted row logs again (warn keyed on id + payload)", () => {
+    const db = openTestDb();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    saveTheme(db, { id: "recorrupt", name: "R", tokens });
+    db.prepare("UPDATE theme SET manifest = ? WHERE id = 'recorrupt'").run("{not json one");
+    listThemes(db); listThemes(db);
+    db.prepare("UPDATE theme SET manifest = ? WHERE id = 'recorrupt'").run("{not json two");
+    listThemes(db);
+    const n = warn.mock.calls.filter((c) => String(c[0]).includes("recorrupt")).length;
+    warn.mockRestore();
+    expect(n).toBe(2);
+  });
+
+  it("setActiveTheme rejects unknown builtins but maps removed ones to osmosis", () => {
+    const db = openTestDb();
+    expect(() => setActiveTheme(db, "builtin:nope")).toThrow(/unknown_builtin|builtin/);
+    try { setActiveTheme(db, "builtin:nope"); } catch (e) { expect((e as DomainError).code).toBe("unknown_builtin"); }
+    expect(setActiveTheme(db, "builtin:slate").active_theme_id).toBe("builtin:osmosis");
+    expect(setActiveTheme(db, "builtin:plum").active_theme_id).toBe("builtin:osmosis");
   });
 });
 

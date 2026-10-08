@@ -144,6 +144,9 @@ describe("theme MCP tools", () => {
     expect(getActiveThemeId(db)).toBe("builtin:osmosis");
     r = await callTool(client, "set_active_theme", { id: "builtin:forest" });
     expect(getActiveThemeId(db)).toBe("builtin:forest");
+    r = await callTool(client, "set_active_theme", { id: "builtin:nope" });
+    expect(r.isError).toBe(true);
+    expect(r.body.error).toBe("unknown_builtin");
     r = await callTool(client, "delete_theme", { id: "builtin:forest" });
     expect(r.isError).toBe(true);
     expect(r.body.error).toBe("builtin_theme");

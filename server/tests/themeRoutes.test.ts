@@ -35,14 +35,22 @@ describe("theme routes on canonical", () => {
 
     res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "ocean" } });
     expect(res.json().active_theme_id).toBe("ocean");
-    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:paper" } });
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:forest" } });
     expect(res.statusCode).toBe(200);
     res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "missing" } });
     expect(res.statusCode).toBe(404);
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:nope" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("unknown_builtin");
+    for (const payload of [null, "str", [1], { manifest: null }]) {
+      res = await app.inject({ method: "PUT", url: "/api/themes/zzz", headers: { "content-type": "application/json" }, payload: JSON.stringify(payload) });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe("invalid_body");
+    }
 
     res = await app.inject({ method: "GET", url: "/api/themes" });
     expect(res.json().themes.map((t: { id: string }) => t.id)).toEqual(["ocean"]);
-    expect(res.json().active_theme_id).toBe("builtin:paper");
+    expect(res.json().active_theme_id).toBe("builtin:forest");
 
     res = await app.inject({ method: "PUT", url: "/api/themes/builtin:x", payload: { name: "x", tokens } });
     expect(res.statusCode).toBe(400);
@@ -164,6 +172,7 @@ describe("theme writes from a local node", () => {
     let res = await app.inject({ method: "PUT", url: "/api/themes/ocean", payload: { name: "Ocean", tokens } });
     expect(res.statusCode).toBe(503);
     expect(res.json().reason).toBe("theme_requires_connection");
+    expect(res.json().error).toBe("theme_requires_connection");
 
     runtime.online = true;
     res = await app.inject({ method: "PUT", url: "/api/themes/ocean", payload: { name: "Ocean", tokens, custom_css: ".x{}" } });

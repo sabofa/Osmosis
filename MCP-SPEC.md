@@ -447,28 +447,38 @@ Worked example, `save_theme` with a 6-seed manifest:
 }
 ```
 
-The manifest above validates clean (`warnings: []`). The report below is
-illustrative of the shape when a seed has low contrast:
+The manifest above validates clean (`warnings: []`). Here is a real report, from
+`validate` on a manifest whose light `ink` is `#dddddd` on a `#ffffff` canvas
+(the dark-mode entries, which repeat the same three tokens, are left out):
 
 ```json
 {
-  "saved": true,
-  "theme": { "id": "harbour", "name": "Harbour", "updated_at": "2026-10-07 23:40:12" },
-  "report": {
-    "ok": true,
-    "errors": [],
-    "warnings": [
-      { "path": "seeds.light.secondary",
-        "message": "secondary on surface has contrast 2.9:1 (< 3:1)",
-        "suggestion": "#a8691a" }
-    ]
-  },
-  "active": true
+  "ok": true,
+  "errors": [],
+  "warnings": [
+    { "path": "overrides.light.color-text",
+      "message": "light: color-text on color-canvas has contrast 1.36, below 4.5",
+      "suggestion": "set color-text to #767676 (contrast 4.5)" },
+    { "path": "overrides.light.color-text",
+      "message": "light: color-text on color-surface has contrast 1.36, below 4.5",
+      "suggestion": "set color-text to #767676 (contrast 4.5)" },
+    { "path": "overrides.light.color-text-muted",
+      "message": "light: color-text-muted on color-surface has contrast 1.19, below 3",
+      "suggestion": "set color-text-muted to #949494 (contrast 3.0)" }
+  ]
 }
 ```
 
-The warning's suggestion is applied with
-`patch_theme { id: "harbour", patch: { seeds: { light: { secondary: "#a8691a" } } } }`.
+`save_theme` wraps this as `{ saved: true, theme, report, active }`. A warning's
+`path` names the derived token, and its `suggestion` is prose naming the value
+to use; apply it with `patch_theme`, either as an override
+(`patch: { overrides: { light: { "color-text": "#767676" } } }`) or by fixing
+the seed that produced it (`patch: { seeds: { light: { ink: "#444444" } } }`).
+
+Removed built-ins (`builtin:slate`, `builtin:plum`) resolve to `builtin:osmosis`
+only as the **active pointer** (`set_active_theme`, or a stored pointer). They
+are not themes: `get_theme("builtin:slate")` is `not_found`. An unknown
+`builtin:*` id given to `set_active_theme` fails `unknown_builtin`.
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 
