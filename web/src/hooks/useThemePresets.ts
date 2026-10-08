@@ -1,3 +1,4 @@
+import type { ThemeManifest } from 'theme-core'
 import { useCallback, useEffect, useState } from 'react'
 import { TOKEN_FIELDS } from '../lib/themeTokens'
 import { BUILTIN_THEMES } from '../lib/builtinThemes'
@@ -13,6 +14,7 @@ export interface ThemePreset {
   }
   customCss: string
   builtin?: boolean
+  manifest?: ThemeManifest
 }
 
 // Themes live on the server (canonical) and reach this device through its
