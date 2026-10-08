@@ -24,7 +24,34 @@ const SEED_KEYS: Record<string, 'canvas' | 'surface' | 'ink' | 'accent'> = {
 
 const MANIFEST_FIELDS = new Set(['schema', 'id', 'name', 'description', 'author', 'seeds', 'dials', 'fonts', 'overrides', 'css', 'graph', 'ambience', 'sounds', 'assets'])
 
+const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+function checkShape(raw: Record<string, unknown>): void {
+  const bad = (msg: string): never => { throw new MigrateError('invalid_manifest', msg) }
+  for (const f of ['seeds', 'dials', 'fonts', 'graph']) {
+    if (raw[f] !== undefined && !isObj(raw[f])) bad(`${f} must be an object`)
+  }
+  if (raw.overrides !== undefined) {
+    if (!isObj(raw.overrides)) bad('overrides must be an object')
+    const ov = raw.overrides as Record<string, unknown>
+    for (const m of ['any', 'light', 'dark']) {
+      if (!own(ov, m) || ov[m] === undefined) continue
+      const t = ov[m]
+      if (!isObj(t)) bad(`overrides.${m} must be an object`)
+      for (const [k, v] of Object.entries(t as Record<string, unknown>)) {
+        if (typeof v !== 'string') bad(`overrides.${m}.${k} must be a string`)
+      }
+    }
+  }
+  if (raw.css !== undefined && typeof raw.css !== 'string') bad('css must be a string')
+  if (raw.description !== undefined && typeof raw.description !== 'string') bad('description must be a string')
+  if (raw.author !== undefined && raw.author !== 'human' && raw.author !== 'claude') bad("author must be 'human' or 'claude'")
+}
+
+// --danger is processed before --bad so --bad wins deterministically regardless of key order.
+const sortedEntries = (o: Record<string, unknown>): [string, unknown][] =>
+  Object.entries(o).sort(([a], [b]) => (a === '--danger' ? -1 : 0) - (b === '--danger' ? -1 : 0))
 
 export function migrate(raw: unknown): ThemeManifest {
   if (!isObj(raw)) throw new MigrateError('not_object', 'theme must be an object')
@@ -34,6 +61,7 @@ export function migrate(raw: unknown): ThemeManifest {
     }
     if (typeof raw.id !== 'string') throw new MigrateError('invalid_manifest', 'id must be a string')
     if (typeof raw.name !== 'string' || raw.name === '') throw new MigrateError('invalid_manifest', 'name must be a non-empty string')
+    checkShape(raw)
     return normalise(raw as unknown as Partial<ThemeManifest> & { id: string; name: string })
   }
   if (!isObj(raw.tokens)) throw new MigrateError('unknown_shape', 'neither a legacy theme row nor a schema-1 manifest')
@@ -47,13 +75,12 @@ export function migrate(raw: unknown): ThemeManifest {
   const blocks: string[] = []
   for (const [mode, toks] of [['light', light], ['dark', dark]] as [Mode, Record<string, unknown>][]) {
     let unknown = ''
-    for (const [k, v] of Object.entries(toks)) {
+    for (const [k, v] of sortedEntries(toks)) {
       if (typeof v !== 'string') throw new MigrateError('invalid_tokens', `token ${k} must be a string`)
+      if (!own(LEGACY_TOKEN_MAP, k)) { unknown += `${k}:${v};`; continue }
       const target = LEGACY_TOKEN_MAP[k]
-      if (!target) { unknown += `${k}:${v};`; continue }
       overrides[mode][target] = v
-      const seed = SEED_KEYS[k]
-      if (seed) (seeds[mode] ??= {})[seed] = v
+      if (own(SEED_KEYS, k)) (seeds[mode] ??= {})[SEED_KEYS[k]] = v
     }
     if (unknown) blocks.push(`:root[data-theme="${mode}"]{${unknown}}`)
   }
