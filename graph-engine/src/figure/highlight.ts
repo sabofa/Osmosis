@@ -1,4 +1,5 @@
-import type { Rect } from '../view2d/types'
+import type { HitShape } from '../view2d/pointing'
+import type { Vec } from '../view2d/types'
 import { itemForId } from './focusLine'
 import type { FigureHitItem, FigureTarget } from './hitItems'
 
@@ -72,98 +73,97 @@ export function outermostMatches<N>(matches: readonly N[], parent: (node: N) => 
 }
 
 // ---------------------------------------------------------------------------
-// The look, as SVG filters
+// The look, as a clean overlay
 // ---------------------------------------------------------------------------
 //
-// Hover thickens the item a little in its own colour; selection lays a soft
-// accent halo behind it. Both are SVG filters the view injects into the live
-// <svg> at run time (never the renderer's markup), because a CSS
-// `drop-shadow(...)` on an SVG child is measured in drawing units and so grows
-// with the zoom: about 30 px at 12x. A filter's own lengths are in drawing
-// units too, so they are rewritten, whenever the drawing is committed, as
-// (target px) / (px per unit), which holds them at the same size on screen at
-// any zoom.
+// Hover and selection are drawn as plain lines laid over the figure, from the
+// item's own hit shape (figure/hitItems.ts), not by running a filter over the
+// item. Under a textured style an item is hundreds of paths with a texture
+// filter of its own, and a second filter over that was what made a selection
+// lag; a plain stroked path costs next to nothing and looks the same under every
+// style. Strokes use `vector-effect: non-scaling-stroke`, so their widths are
+// in screen pixels at any zoom, and the overlay sits inside the <svg> so it
+// moves with the live transform.
 
-const HOVER_RADIUS_PX = 0.75 // how far hover grows the stroke or ring
-const HALO_DEVIATION_PX = 1.5 // the halo's blur: a halo about 3 px wide
-const HALO_OPACITY = 0.55
-// A hairline's blurred alpha peaks well under what a halo needs, so it is
-// lifted before the flood tints it.
-const HALO_GAIN = 3
+const HOVER_WIDTH_PX = 3.5
+const HOVER_OPACITY = 0.7
+const SELECT_CORE_PX = 2.5
+const SELECT_HALO_PX = 8
+const HALO_OPACITY = 0.35
+// A point is a round dot as wide as its stroke, so it is drawn heavier.
+const POINT_GAIN = 2.5
 const DEFAULT_ACCENT = '#3b6fd8'
-
-export interface HighlightFilterSizes {
-  hoverRadius: number
-  haloDeviation: number
-}
-
-// The filters' lengths in drawing units. A degenerate scale (an unmeasured
-// view) counts as one pixel per unit.
-export function highlightFilterSizes(pxPerUnit: number): HighlightFilterSizes {
-  const ppu = Number.isFinite(pxPerUnit) && pxPerUnit > 0 ? pxPerUnit : 1
-  return { hoverRadius: HOVER_RADIUS_PX / ppu, haloDeviation: HALO_DEVIATION_PX / ppu }
-}
-
-// How far the look reaches beyond the shape it is drawn on, in px: the halo is
-// blurred out to three deviations, and a hovered item is thickened first and
-// then haloed.
-export const HIGHLIGHT_REACH_PX = 3 * HALO_DEVIATION_PX + HOVER_RADIUS_PX
-// What the region is grown by, in px: the reach and a little over.
-const REGION_MARGIN_PX = HIGHLIGHT_REACH_PX + 2.75
-
-// The region the filters work in: the window grown by a small margin (the
-// reach of the look, in drawing units at this scale) on every side. The
-// margin is what keeps the look of an item at the edge of the window whole;
-// a bigger region only costs: the filters' work grows with its area, and a
-// texture under them has to be redone. Given in drawing units
-// (userSpaceOnUse), not as a fraction of each element's box: a horizontal
-// line has a zero-height box, and a filter region of zero height draws
-// nothing at all.
-export function highlightFilterRegion(visible: Rect, pxPerUnit: number): Rect {
-  const ppu = Number.isFinite(pxPerUnit) && pxPerUnit > 0 ? pxPerUnit : 1
-  const margin = REGION_MARGIN_PX / ppu
-  return { x: visible.x - margin, y: visible.y - margin, width: visible.width + 2 * margin, height: visible.height + 2 * margin }
-}
+// The id of the givens item; its rect is the one rect that is an outline to draw
+// (a label's rect is only a place to point at).
+const GIVENS_ID = 'givens'
 
 const num = (n: number): string => String(Number(n.toPrecision(10)))
+const pt = (p: Vec): string => `${num(p.x)} ${num(p.y)}`
 
-export interface HighlightDefsInput {
-  hoverId: string
-  selectId: string
-  accent: string
-  region: Rect
-  sizes: HighlightFilterSizes
+function pathOf(points: readonly Vec[], closed: boolean): string {
+  return `M${points.map(pt).join('L')}${closed ? 'Z' : ''}`
 }
 
-// The two filters, as markup for an SVG `<defs>`. The two lengths are marked
-// (`data-size`) so the view can find and rewrite them at each commit.
-export function highlightDefs({ hoverId, selectId, accent, region, sizes }: HighlightDefsInput): string {
-  const frame = `filterUnits="userSpaceOnUse" x="${num(region.x)}" y="${num(region.y)}" width="${num(region.width)}" height="${num(region.height)}" color-interpolation-filters="sRGB"`
-  return (
-    '<defs>' +
-    `<filter id="${hoverId}" ${frame}>` +
-    `<feMorphology in="SourceGraphic" operator="dilate" radius="${num(sizes.hoverRadius)}" data-size="hover" result="thick"/>` +
-    '<feMerge><feMergeNode in="thick"/><feMergeNode in="SourceGraphic"/></feMerge>' +
-    '</filter>' +
-    `<filter id="${selectId}" ${frame}>` +
-    `<feGaussianBlur in="SourceAlpha" stdDeviation="${num(sizes.haloDeviation)}" data-size="halo" result="blur"/>` +
-    `<feComponentTransfer in="blur" result="strong"><feFuncA type="linear" slope="${HALO_GAIN}"/></feComponentTransfer>` +
-    `<feFlood flood-color="${accent}" flood-opacity="${HALO_OPACITY}" result="tint"/>` +
-    '<feComposite in="tint" in2="strong" operator="in" result="halo"/>' +
-    '<feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>' +
-    '</filter>' +
-    '</defs>'
-  )
+// The shape as the `d` of one path (or a circle's attributes), null when there
+// is nothing to draw. Angles are the hit shape's own (view coordinates).
+function shapeElement(shape: HitShape, id: string): { tag: 'path'; d: string; point: boolean } | { tag: 'circle'; at: Vec; r: number } | null {
+  switch (shape.kind) {
+    case 'point':
+      return { tag: 'path', d: `M${pt(shape.at)}L${pt(shape.at)}`, point: true }
+    case 'segment':
+      return { tag: 'path', d: pathOf([shape.a, shape.b], false), point: false }
+    case 'polyline':
+      return shape.points.length < 2 ? null : { tag: 'path', d: pathOf(shape.points, shape.closed), point: false }
+    case 'polygon':
+      return shape.points.length < 3 ? null : { tag: 'path', d: pathOf(shape.points, true), point: false }
+    case 'circle':
+      return { tag: 'circle', at: shape.center, r: shape.radius }
+    case 'arc': {
+      const sweep = shape.end - shape.start
+      if (Math.abs(sweep) >= Math.PI * 2) return { tag: 'circle', at: shape.center, r: shape.radius }
+      const at = (t: number): Vec => ({ x: shape.center.x + shape.radius * Math.cos(t), y: shape.center.y + shape.radius * Math.sin(t) })
+      const large = Math.abs(sweep) > Math.PI ? 1 : 0
+      // Increasing angle runs clockwise on screen (y points down).
+      const flag = sweep > 0 ? 1 : 0
+      return { tag: 'path', d: `M${pt(at(shape.start))}A${num(shape.radius)} ${num(shape.radius)} 0 ${large} ${flag} ${pt(at(shape.end))}`, point: false }
+    }
+    case 'rect': {
+      if (id !== GIVENS_ID) return null
+      const { x, y, width, height } = shape.rect
+      return { tag: 'path', d: pathOf([{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }], true), point: false }
+    }
+  }
 }
 
-// The inline `filter` an element gets. An item that is both hovered and
-// selected is thickened first and then haloed, so the halo follows the
-// thickened shape.
-export function highlightFilterValue(lit: { hovered: boolean; selected: boolean }, ids: { hoverId: string; selectId: string }): string {
-  const parts: string[] = []
-  if (lit.hovered) parts.push(`url(#${ids.hoverId})`)
-  if (lit.selected) parts.push(`url(#${ids.selectId})`)
-  return parts.join(' ')
+function stroked(items: readonly { id: string; shape: HitShape }[], id: string, color: string, widthPx: number, opacity: number): string {
+  let out = ''
+  for (const item of items) {
+    if (item.id !== id) continue
+    const element = shapeElement(item.shape, id)
+    if (!element) continue
+    const attrs = `fill="none" stroke="${color}" stroke-width="${num(widthPx * (element.tag === 'path' && element.point ? POINT_GAIN : 1))}" stroke-opacity="${opacity}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"`
+    out +=
+      element.tag === 'path'
+        ? `<path d="${element.d}" ${attrs}/>`
+        : `<circle cx="${num(element.at.x)}" cy="${num(element.at.y)}" r="${num(element.r)}" ${attrs}/>`
+  }
+  return out
+}
+
+// The overlay's markup for the hovered item and the selected ones, empty when
+// nothing is pointed at. Every item of an id is drawn (an arc and its sector,
+// the edges of a face). A selection is a soft wide stroke under a thin core,
+// both in the accent; hover is a thicker line over the top.
+export function highlightOverlay(
+  items: readonly { id: string; shape: HitShape }[],
+  hovered: string | null,
+  selected: readonly string[],
+  accent: string,
+): string {
+  let body = ''
+  for (const id of selected) body += stroked(items, id, accent, SELECT_HALO_PX, HALO_OPACITY) + stroked(items, id, accent, SELECT_CORE_PX, 1)
+  if (hovered !== null) body += stroked(items, hovered, accent, HOVER_WIDTH_PX, HOVER_OPACITY)
+  return body === '' ? '' : `<g data-figure-highlight="" pointer-events="none">${body}</g>`
 }
 
 // The host's accent colour (the `--accent` custom property, read from the

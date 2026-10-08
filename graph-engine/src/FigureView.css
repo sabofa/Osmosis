@@ -88,14 +88,10 @@
   background: var(--surface, #201e15);
 }
 
-/* Hover and selection, as classes on the elements that already carry the
-   figure's identity (data-statement, data-object), so they work under every
-   style. What they look like is drawn by two SVG filters that FigureView
-   injects into the live <svg> (a thin dilation for hover, a soft accent halo
-   for selection), sized in screen pixels at any zoom; the filter itself is set
-   inline, because its id is unique to each figure on the page. A CSS
-   drop-shadow would not do: its lengths are in drawing units and would swell
-   with the zoom. Here, only what a filter cannot do: a hovered or selected
+/* Hover and selection. The look (a clean line over the item, a halo for a
+   selection) is an overlay FigureView lays into the live <svg>; see
+   figure/highlight.ts. The classes on the elements that already carry the
+   figure's identity do only what the overlay cannot: a hovered or selected
    label comes to full strength, and a selected one is set a little heavier.
    Only the outermost element of an item carries the class (see the highlight
    effect in FigureView.tsx), so the text is reached either as that element or

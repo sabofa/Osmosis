@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   highlightAccent,
-  highlightDefs,
-  highlightFilterRegion,
-  highlightFilterSizes,
-  highlightFilterValue,
   highlightOf,
-  HIGHLIGHT_REACH_PX,
+  highlightOverlay,
   outermostMatches,
   selectedItems,
 } from './highlight'
@@ -73,33 +69,6 @@ describe('highlightOf: the givens panel', () => {
   })
 })
 
-describe('highlightFilterSizes', () => {
-  // The filter lengths are in drawing units, which grow with the zoom, so they
-  // are written as (target px) / (px per unit): the on-screen size is constant.
-  it('is the same on screen at every zoom', () => {
-    const at = (ppu: number) => {
-      const sizes = highlightFilterSizes(ppu)
-      return { hover: sizes.hoverRadius * ppu, halo: sizes.haloDeviation * ppu }
-    }
-    const base = at(1)
-    for (const ppu of [0.1, 0.5, 1, 2.5, 64]) {
-      expect(at(ppu).hover).toBeCloseTo(base.hover, 10)
-      expect(at(ppu).halo).toBeCloseTo(base.halo, 10)
-    }
-  })
-
-  it('is about 0.75 px of dilation for hover and a halo about 3 px wide for selection', () => {
-    expect(highlightFilterSizes(1).hoverRadius).toBeCloseTo(0.75, 10)
-    // A deviation of 1.5 px is a halo about 3 px wide.
-    expect(highlightFilterSizes(1).haloDeviation * 2).toBeCloseTo(3, 10)
-  })
-
-  it('falls back to one pixel per unit on an unmeasured view', () => {
-    expect(highlightFilterSizes(0)).toEqual(highlightFilterSizes(1))
-    expect(highlightFilterSizes(Number.NaN)).toEqual(highlightFilterSizes(1))
-  })
-})
-
 describe('highlightOf: several selected', () => {
   it('lights the givens panel when the givens item is among the selected', () => {
     const ids = (selected: string[]) => ({ hovered: null, selected })
@@ -113,39 +82,6 @@ describe('highlightOf: several selected', () => {
     expect(highlightOf('2', 'AB', [], picked)).toEqual({ hovered: false, selected: true })
     expect(highlightOf('5', 'zz', [], picked)).toEqual({ hovered: false, selected: true })
     expect(highlightOf('3', 'AB', [], picked)).toEqual({ hovered: false, selected: false })
-  })
-})
-
-describe('highlightFilterRegion', () => {
-  const ppu = 4
-  const window = { x: 10, y: 20, width: 100, height: 50 }
-
-  it('is the window grown by a small margin, not by the size of the window itself', () => {
-    const r = highlightFilterRegion(window, ppu)
-    expect(r.width).toBeLessThan(window.width * 1.5)
-    expect(r.height).toBeLessThan(window.height * 1.5)
-    // Symmetric: the window sits in the middle.
-    expect(r.x + r.width / 2).toBeCloseTo(window.x + window.width / 2, 10)
-    expect(r.y + r.height / 2).toBeCloseTo(window.y + window.height / 2, 10)
-  })
-
-  it('reaches at least as far as the halo and the dilation do, at every zoom', () => {
-    for (const p of [0.1, 1, 4, 64]) {
-      const r = highlightFilterRegion(window, p)
-      const marginPx = (window.x - r.x) * p
-      expect(marginPx).toBeGreaterThanOrEqual(HIGHLIGHT_REACH_PX - 1e-9)
-      expect((window.y - r.y) * p).toBeGreaterThanOrEqual(HIGHLIGHT_REACH_PX - 1e-9)
-      expect(r.x + r.width - (window.x + window.width)).toBeCloseTo(window.x - r.x, 9)
-    }
-  })
-
-  it('the reach is three deviations of the halo plus the dilation radius, in px', () => {
-    const sizes = highlightFilterSizes(1)
-    expect(HIGHLIGHT_REACH_PX).toBeCloseTo(3 * sizes.haloDeviation + sizes.hoverRadius, 10)
-  })
-
-  it('falls back to one pixel per unit on an unmeasured view', () => {
-    expect(highlightFilterRegion(window, 0)).toEqual(highlightFilterRegion(window, 1))
   })
 })
 
@@ -211,51 +147,70 @@ describe('outermostMatches', () => {
   })
 })
 
-describe('highlightDefs', () => {
-  const region = { x: -90, y: -30, width: 300, height: 150 }
-  const markup = highlightDefs({ hoverId: 'figure-hover-a', selectId: 'figure-select-a', accent: '#3b6fd8', region, sizes: highlightFilterSizes(1) })
+describe('highlightOverlay', () => {
+  const accent = '#3b6fd8'
+  const items = [
+    { id: 'a', shape: { kind: 'segment' as const, a: { x: 0, y: 0 }, b: { x: 10, y: 5 } } },
+    { id: 'p', shape: { kind: 'point' as const, at: { x: 3, y: 4 } } },
+    { id: 'c', shape: { kind: 'circle' as const, center: { x: 1, y: 2 }, radius: 3 } },
+    { id: 'poly', shape: { kind: 'polygon' as const, points: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 4 }] } },
+    { id: 'arc', shape: { kind: 'arc' as const, center: { x: 0, y: 0 }, radius: 2, start: 0, end: Math.PI / 2 } },
+    { id: 'arc', shape: { kind: 'polygon' as const, points: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 0, y: 2 }] } },
+    { id: 'lab', shape: { kind: 'rect' as const, rect: { x: 0, y: 0, width: 5, height: 2 } } },
+    { id: 'givens', shape: { kind: 'rect' as const, rect: { x: 1, y: 1, width: 5, height: 2 } } },
+  ]
 
-  it('is a defs with both filters, in drawing units over the given region', () => {
-    expect(markup).toMatch(/^<defs[ >]/)
-    expect(markup).toContain('<filter id="figure-hover-a"')
-    expect(markup).toContain('<filter id="figure-select-a"')
-    expect(markup.match(/filterUnits="userSpaceOnUse"/g)).toHaveLength(2)
-    expect(markup.match(/x="-90" y="-30" width="300" height="150"/g)).toHaveLength(2)
+  it('is empty when nothing is pointed at', () => {
+    expect(highlightOverlay(items, null, [], accent)).toBe('')
+    expect(highlightOverlay(items, 'missing', ['missing'], accent)).toBe('')
   })
 
-  it('hover dilates the graphic in its own colour and keeps the original on top', () => {
-    const hover = markup.slice(markup.indexOf('figure-hover-a'), markup.indexOf('figure-select-a'))
-    expect(hover).toMatch(/<feMorphology[^>]*in="SourceGraphic"[^>]*operator="dilate"/)
-    expect(hover).not.toContain('feFlood')
-    expect(hover.lastIndexOf('in="SourceGraphic"')).toBeGreaterThan(hover.indexOf('<feMerge'))
+  it('draws plain stroked shapes that keep their pixel width at any zoom, with no filter', () => {
+    const svg = highlightOverlay(items, 'a', [], accent)
+    expect(svg).toContain('d="M0 0L10 5"')
+    expect(svg).toContain('vector-effect="non-scaling-stroke"')
+    expect(svg).toContain('fill="none"')
+    expect(svg).not.toContain('filter')
+    expect(svg).toContain('pointer-events="none"')
   })
 
-  it('selection blurs the alpha, floods it with the accent, and merges the halo under the graphic', () => {
-    const select = markup.slice(markup.indexOf('figure-select-a'))
-    expect(select).toMatch(/<feGaussianBlur[^>]*in="SourceAlpha"/)
-    expect(select).toMatch(/<feFlood[^>]*flood-color="#3b6fd8"[^>]*flood-opacity="0.55"/)
-    const merge = select.slice(select.indexOf('<feMerge'))
-    expect(merge.indexOf('in="halo"')).toBeGreaterThan(-1)
-    expect(merge.indexOf('in="halo"')).toBeLessThan(merge.indexOf('in="SourceGraphic"'))
+  it('draws a selection as a wide soft stroke under a thin core, and hover over the top', () => {
+    const svg = highlightOverlay(items, 'a', ['a'], accent)
+    const widths = [...svg.matchAll(/stroke-width="([^"]+)"/g)].map((m) => Number(m[1]))
+    expect(widths).toEqual([8, 2.5, 3.5])
   })
 
-  it('exposes the two lengths the view rewrites every frame as marked elements', () => {
-    expect(markup).toMatch(/<feMorphology[^>]*data-size="hover"/)
-    expect(markup).toMatch(/<feGaussianBlur[^>]*data-size="halo"/)
-  })
-})
-
-describe('highlightFilterValue', () => {
-  const ids = { hoverId: 'h', selectId: 's' }
-
-  it('names the filter for what is lit, and nothing when nothing is', () => {
-    expect(highlightFilterValue({ hovered: true, selected: false }, ids)).toBe('url(#h)')
-    expect(highlightFilterValue({ hovered: false, selected: true }, ids)).toBe('url(#s)')
-    expect(highlightFilterValue({ hovered: false, selected: false }, ids)).toBe('')
+  it('draws every selected id, in order', () => {
+    const svg = highlightOverlay(items, null, ['p', 'a'], accent)
+    expect(svg.indexOf('M3 4L3 4')).toBeLessThan(svg.indexOf('M0 0L10 5'))
   })
 
-  it('thickens first and haloes the thickened shape when an item is both', () => {
-    expect(highlightFilterValue({ hovered: true, selected: true }, ids)).toBe('url(#h) url(#s)')
+  it('draws a point as a round dot heavier than a line', () => {
+    const svg = highlightOverlay(items, null, ['p'], accent)
+    expect(svg).toContain('M3 4L3 4')
+    expect(svg).toContain('stroke-linecap="round"')
+    expect(svg).toContain('stroke-width="20"')
+  })
+
+  it('draws a circle as a circle, a polygon closed, and an arc as an arc', () => {
+    expect(highlightOverlay(items, 'c', [], accent)).toContain('<circle cx="1" cy="2" r="3"')
+    expect(highlightOverlay(items, 'poly', [], accent)).toContain('d="M0 0L4 0L0 4Z"')
+    const arc = highlightOverlay(items, 'arc', [], accent)
+    expect(arc).toMatch(/d="M2 0A2 2 0 0 1 [-0-9.e]+ 2"/)
+    // Its sector is an item of the same id, drawn too.
+    expect(arc).toContain('M0 0L2 0L0 2Z')
+  })
+
+  it('draws an arc running the other way with the other sweep flag, and a full turn as a circle', () => {
+    const back = [{ id: 'x', shape: { kind: 'arc' as const, center: { x: 0, y: 0 }, radius: 2, start: Math.PI / 2, end: 0 } }]
+    expect(highlightOverlay(back, 'x', [], accent)).toContain('A2 2 0 0 0 2 0')
+    const full = [{ id: 'x', shape: { kind: 'arc' as const, center: { x: 0, y: 0 }, radius: 2, start: 0, end: 7 } }]
+    expect(highlightOverlay(full, 'x', [], accent)).toContain('<circle')
+  })
+
+  it('outlines the givens panel but not the rect of a label', () => {
+    expect(highlightOverlay(items, 'givens', [], accent)).toContain('d="M1 1L6 1L6 3L1 3Z"')
+    expect(highlightOverlay(items, 'lab', [], accent)).toBe('')
   })
 })
 
