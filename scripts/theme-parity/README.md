@@ -16,3 +16,6 @@ Needs: headless Edge, node, the feature worktree's node_modules. No PNG library 
 5. Other themes: `curl -X PUT -H 'content-type: application/json' -d '{"id":"builtin:forest"}' localhost:8082/api/themes/active`, capture with `-Prefix branch-forest`, then reset to `builtin:osmosis`.
 
 Edge does not exit after `--screenshot` under `--virtual-time-budget`; capture.ps1 waits up to `-TimeoutSec` then kills only processes using its own throwaway profile.
+
+Themes actually apply: capture `branch-forest`, `branch-ocean`, `branch-ember` (step 5), then `node diff.mjs --themes <dir>`.
+It asserts each differs from `branch-home-<mode>.png` (osmosis) in more than 5% of pixels, and that the pixel at (width-3,height-3) (bottom-right page margin, plain canvas; the top-left is avoided because ember paints an accent radial gradient there) is within 10 per channel (body has a 0.25s background transition that headless virtual time can catch mid-flight) of the theme canvas (forest light #ecf0e6 / dark #0f1511, ocean #e9f1f4 / #0a1419, ember #f2ebe0 / #0d0b09). Note the osmosis shot is named `branch-home-*` (prefix `branch`); the theme shots `branch-<theme>-home-*`.

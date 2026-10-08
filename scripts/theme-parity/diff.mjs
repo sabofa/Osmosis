@@ -45,8 +45,31 @@ function compare(fa, fb) {
   return { total: a.w * a.h, diff, maxChannelDelta: maxd, bbox: diff ? [minX, minY, maxX, maxY] : null, bytesEqual: sha(fa) === sha(fb) }
 }
 
+// --themes <dir>: asserts branch-<theme>-home-<mode>.png differ from branch-home-<mode>.png (osmosis) in >5% of
+// pixels and that the page margin (sample point bottom-right corner (w-3,h-3), clear of ember top-left gradient) is near the expected canvas.
+const EXPECT = {
+  forest: { light: '#ecf0e6', dark: '#0f1511' }, ocean: { light: '#e9f1f4', dark: '#0a1419' }, ember: { light: '#f2ebe0', dark: '#0d0b09' },
+}
+function themesCheck(dir) {
+  let bad = 0
+  for (const [theme, modes] of Object.entries(EXPECT)) for (const mode of ['light', 'dark']) {
+    const A = decode(join(dir, `branch-home-${mode}.png`)), B = decode(join(dir, `branch-${theme}-home-${mode}.png`))
+    let diff = 0
+    for (let i = 0; i < A.w * A.h; i++) if (A.px[i * A.bpp] !== B.px[i * B.bpp] || A.px[i * A.bpp + 1] !== B.px[i * B.bpp + 1] || A.px[i * A.bpp + 2] !== B.px[i * B.bpp + 2]) diff++
+    const frac = diff / (A.w * A.h)
+    const o = ((B.h - 3) * B.w + (B.w - 3)) * B.bpp, got = [B.px[o], B.px[o + 1], B.px[o + 2]]
+    const want = [1, 3, 5].map((k) => parseInt(modes[mode].slice(k, k + 2), 16))
+    const delta = Math.max(...got.map((g, k) => Math.abs(g - want[k])))
+    const ok = frac > 0.05 && delta <= 10
+    if (!ok) bad++
+    console.log(`${theme}-${mode}: ${(frac * 100).toFixed(1)}% px differ from osmosis, corner rgb(${got}) vs ${modes[mode]} maxDelta ${delta} ${ok ? 'OK' : 'FAIL'}`)
+  }
+  process.exit(bad ? 1 : 0)
+}
+
 const [x, y, z] = process.argv.slice(2)
-if (x?.endsWith('.png')) console.log(JSON.stringify(compare(x, y)))
+if (x === '--themes') themesCheck(y)
+else if (x?.endsWith('.png')) console.log(JSON.stringify(compare(x, y)))
 else {
   const dir = x, pa = y ?? 'main', pb = z ?? 'branch'
   let bad = 0
