@@ -1,7 +1,7 @@
 import type { Oklch } from '../colour.js'
 import { parseColour } from '../colour.js'
 import type { Dials, FontRef, FontRole, Mode } from '../manifest.js'
-import { parseTokenValue, type DeriveCtx, type SeedKey, type TokenDef } from './types.js'
+import { isValidTokenValue, type DeriveCtx, type SeedKey, type TokenDef } from './types.js'
 
 export interface ModeSeeds {
   canvas: Oklch; ink: Oklch; accent: Oklch
@@ -40,8 +40,8 @@ export function createResolver(i: ResolverInput): {
   for (const [name, v] of Object.entries(overrides)) {
     const d = byName.get(name)
     if (!d) throw new ResolveError(name, `override names unknown token "${name}"`)
-    if (!parseTokenValue(d.type, v)) {
-      throw new ResolveError(name, `override for "${name}" is not a valid ${d.type}: ${JSON.stringify(v)}`)
+    if (!isValidTokenValue(d, v)) {
+      throw new ResolveError(name, `override for "${name}" is not a valid ${d.type}${d.allowed ? ` (one of ${d.allowed.join(', ')})` : ''}: ${JSON.stringify(v)}`)
     }
     overridden.add(name)
   }

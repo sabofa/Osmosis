@@ -29,6 +29,8 @@ export interface TokenDef {
   type: TokenType
   modeDependent: boolean
   meaning: string
+  /** When set, a value must be one of these (enum-like string tokens). */
+  allowed?: readonly string[]
   derive(ctx: DeriveCtx): string
 }
 
@@ -38,13 +40,15 @@ export function def(
   type: TokenType,
   meaning: string,
   derive: (ctx: DeriveCtx) => string,
-  opts: { tier?: Tier; modeDependent?: boolean } = {},
+  opts: { tier?: Tier; modeDependent?: boolean; allowed?: readonly string[] } = {},
 ): TokenDef {
-  return {
+  const d: TokenDef = {
     name, group, type, meaning, derive,
     tier: opts.tier ?? 'semantic',
     modeDependent: opts.modeDependent ?? type === 'color',
   }
+  if (opts.allowed) d.allowed = opts.allowed
+  return d
 }
 
 export function parseTokenValue(type: TokenType, v: string): boolean {
@@ -61,6 +65,10 @@ export function parseTokenValue(type: TokenType, v: string): boolean {
     default:
       return v.trim() !== ''
   }
+}
+
+export function isValidTokenValue(d: TokenDef, v: string): boolean {
+  return d.allowed ? d.allowed.includes(v) : parseTokenValue(d.type, v)
 }
 
 export function mixTo(a: Oklch, b: Oklch, t: number): Oklch { return mix(a, b, t) }

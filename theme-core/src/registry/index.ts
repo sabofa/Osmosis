@@ -2,6 +2,7 @@ import type { TokenDef } from './types.js'
 import { COLOUR_TOKENS } from './colour.js'
 import { COMPONENT_TOKENS } from './component.js'
 import { DOC_TOKENS, GRAPH_TOKENS } from './engines.js'
+import { MATERIAL_TOKENS } from './material.js'
 import { ELEVATION_TOKENS, MOTION_TOKENS, SHAPE_TOKENS, SPACE_TOKENS, SURFACE_TOKENS, TYPE_TOKENS } from './layout.js'
 
 export * from './types.js'
@@ -15,6 +16,7 @@ export const TOKENS: readonly TokenDef[] = [
   ...SPACE_TOKENS,
   ...ELEVATION_TOKENS,
   ...MOTION_TOKENS,
+  ...MATERIAL_TOKENS,
   ...SURFACE_TOKENS,
   ...GRAPH_TOKENS,
   ...DOC_TOKENS,
