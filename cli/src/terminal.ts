@@ -115,6 +115,9 @@ export function makeUi(api: Api, ask: Ask, baseUrl: string, write: (s: string) =
     },
     openThemeEditor: async () => false,
     setThemeMode: async () => false,
+    setThemeBlend: async () => false,
+    requestLocation: async () => null,
+    themeState: async () => null,
     confirm: async (message, typeToConfirm) => {
       if (typeToConfirm) {
         const v = await ask(`${message}\nType ${typeToConfirm} to continue: `)

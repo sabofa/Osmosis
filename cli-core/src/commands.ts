@@ -1,6 +1,8 @@
 import type { CommandContext, Page } from './types.js'
 import { Registry } from './registry.js'
 import { rank } from './fuzzy.js'
+import { resolve, sunTimes, BUILTINS } from 'theme-core'
+import type { ThemeManifest } from 'theme-core'
 
 // ----------------------------------------------------------------------------
 // The commands, and the completers they lean on. Step one of the CLI plan:
@@ -30,6 +32,14 @@ interface QuestionRow {
 interface ThemeRow {
   id: string
   name: string
+  manifest?: ThemeManifest
+  builtin?: boolean
+}
+interface ThemesRes {
+  themes?: ThemeRow[]
+  builtins?: ThemeRow[]
+  active_theme_id?: string | null
+  location?: { lat: number; lon: number; label?: string } | null
 }
 interface SessionRow {
   id: string
@@ -108,6 +118,24 @@ async function resolveAttemptId(ctx: CommandContext, query: string): Promise<str
   return null
 }
 
+// Saved themes first, then the builtins (a saved theme of the same id wins).
+async function allThemes(ctx: CommandContext): Promise<{ themes: ThemeRow[]; res: ThemesRes }> {
+  const res = await ctx.api.get<ThemesRes>('/api/themes')
+  const saved = (res.themes ?? []).map((t) => ({ ...t, builtin: false }))
+  const ids = new Set(saved.map((t) => t.id))
+  const builtins = (res.builtins ?? []).filter((b) => !ids.has(b.id)).map((b) => ({ ...b, builtin: true }))
+  return { themes: [...saved, ...builtins], res }
+}
+
+function activeManifest(all: { themes: ThemeRow[]; res: ThemesRes }): { id: string; name: string; manifest: ThemeManifest | undefined } {
+  const id = all.res.active_theme_id ?? 'builtin:osmosis'
+  const row = all.themes.find((t) => t.id === id)
+  const manifest = row?.manifest ?? BUILTINS.find((b) => b.id === id)
+  return { id, name: row?.name ?? manifest?.name ?? id, manifest }
+}
+
+const hhmm = (d: Date | null) => (d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '--:--')
+
 function needsApp(ctx: CommandContext, what: string) {
   ctx.out.text(`${what} needs the app — open it in a browser and run the same command with /.`)
 }
@@ -133,8 +161,8 @@ export function buildRegistry(): Registry {
     }))
   })
   r.completer('theme', async (ctx) => {
-    const res = await ctx.api.get<{ themes: ThemeRow[] }>('/api/themes')
-    return [{ value: 'light' }, { value: 'dark' }, { value: 'system' }, ...(res.themes ?? []).map((t) => ({ value: t.name, hint: t.id }))]
+    const all = await allThemes(ctx)
+    return [{ value: 'light' }, { value: 'dark' }, { value: 'system' }, { value: 'sun' }, ...all.themes.map((t) => ({ value: t.name, hint: t.id }))]
   })
   r.completer('session', async (ctx) => {
     const res = await ctx.api.get<{ sessions: SessionRow[] }>('/api/sessions', { limit: 50 })
@@ -422,18 +450,117 @@ export function buildRegistry(): Registry {
   r.register({
     path: ['theme'],
     args: [{ name: 'theme', kind: 'theme', rest: true }],
-    describe: 'Switch theme: light, dark, system, or a saved theme',
+    describe: 'Switch theme: light, dark, system, sun, or a saved theme',
     async run(ctx, a) {
       const name = a.theme.toLowerCase()
-      if (name === 'light' || name === 'dark' || name === 'system') {
+      if (name === 'light' || name === 'dark' || name === 'system' || name === 'sun') {
         if (!(await ctx.ui.setThemeMode(name))) needsApp(ctx, 'Switching light/dark')
         return
       }
-      const res = await ctx.api.get<{ themes: ThemeRow[] }>('/api/themes')
-      const t = await pickOne(ctx, 'theme', a.theme, res.themes ?? [], (x) => x.name)
+      const all = await allThemes(ctx)
+      const t = await pickOne(ctx, 'theme', a.theme, all.themes, (x) => x.name)
       if (!t) return
       await ctx.api.put('/api/themes/active', { id: t.id })
       ctx.out.text(`Theme: ${t.name}`)
+    },
+  })
+  r.register({
+    path: ['theme', 'list'],
+    describe: 'List every theme; the active one is starred',
+    async run(ctx) {
+      const all = await allThemes(ctx)
+      const active = activeManifest(all).id
+      for (const t of all.themes) ctx.out.text(`${t.id === active ? '*' : ' '} ${t.id}  ${t.name}${t.builtin ? '  (builtin)' : ''}`)
+    },
+  })
+  r.register({
+    path: ['theme', 'show'],
+    describe: "Show the active theme, the device mode, and today's sun times",
+    async run(ctx) {
+      const all = await allThemes(ctx)
+      const act = activeManifest(all)
+      ctx.out.text(`Theme: ${act.name} (${act.id})`)
+      const st = await ctx.ui.themeState()
+      if (!st) ctx.out.text('device mode: unknown (terminal)')
+      else
+        ctx.out.text(
+          `device mode: source ${st.source}, effective ${st.effectiveSource}, showing ${st.mode}, blend ${st.blend.toFixed(2)}, twilight blend ${st.twilightBlend ? 'on' : 'off'}`
+        )
+      const loc = all.res.location
+      if (!loc) return ctx.out.text('no location set — sun mode follows the system')
+      const s = sunTimes(new Date(), loc)
+      ctx.out.text(`location: ${loc.label ? loc.label + ' ' : ''}${loc.lat}, ${loc.lon}`)
+      ctx.out.text(`today: sunrise ${hhmm(s.sunrise)}, sunset ${hhmm(s.sunset)}, civil dusk ${hhmm(s.civilDusk)}${s.polar ? ` (polar ${s.polar})` : ''}`)
+    },
+  })
+  r.register({
+    path: ['theme', 'mode'],
+    args: [{ name: 'mode', kind: 'word' }],
+    describe: 'Set the device mode: light, dark, system or sun',
+    async run(ctx, a) {
+      const m = a.mode.toLowerCase()
+      if (m !== 'light' && m !== 'dark' && m !== 'system' && m !== 'sun') return ctx.out.error('Mode is light, dark, system or sun.')
+      if (!(await ctx.ui.setThemeMode(m))) needsApp(ctx, 'Switching the mode')
+    },
+  })
+  r.register({
+    path: ['theme', 'blend'],
+    args: [{ name: 'state', kind: 'word' }],
+    describe: 'Blend through twilight in sun mode: on or off',
+    async run(ctx, a) {
+      const v = a.state.toLowerCase()
+      if (v !== 'on' && v !== 'off') return ctx.out.error('Say on or off.')
+      if (!(await ctx.ui.setThemeBlend(v === 'on'))) needsApp(ctx, 'Twilight blending')
+    },
+  })
+  r.register({
+    path: ['theme', 'location'],
+    args: [{ name: 'where', kind: 'text', rest: true }],
+    describe: 'Set where sun mode looks: lat,lon | here | clear',
+    async run(ctx, a) {
+      const w = a.where.trim().toLowerCase()
+      if (w === 'clear') {
+        await ctx.api.put('/api/themes/location', null)
+        return ctx.out.text('Location cleared — sun mode follows the system.')
+      }
+      let lat: number
+      let lon: number
+      if (w === 'here') {
+        const here = await ctx.ui.requestLocation()
+        if (!here) return needsApp(ctx, 'Finding your location (and permission to use it)')
+        ;({ lat, lon } = here)
+      } else {
+        const m = /^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/.exec(w)
+        if (!m) return ctx.out.error('Give a location as lat,lon (e.g. 40.11,-88.24), "here", or "clear".')
+        lat = Number(m[1])
+        lon = Number(m[2])
+      }
+      if (!(lat >= -90 && lat <= 90)) return ctx.out.error(`Latitude ${lat} is out of range (-90 to 90).`)
+      if (!(lon >= -180 && lon <= 180)) return ctx.out.error(`Longitude ${lon} is out of range (-180 to 180).`)
+      await ctx.api.put('/api/themes/location', { lat, lon })
+      ctx.out.text(`Location: ${lat}, ${lon}`)
+    },
+  })
+  r.register({
+    path: ['theme', 'tokens'],
+    args: [{ name: 'filter', kind: 'text', optional: true, rest: true }],
+    describe: "List the active theme's resolved tokens: name | value | source",
+    async run(ctx, a) {
+      const all = await allThemes(ctx)
+      const act = activeManifest(all)
+      if (!act.manifest) return ctx.out.error(`No manifest found for ${act.id}.`)
+      const mode = (await ctx.ui.themeState())?.mode ?? 'light'
+      const res = resolve(act.manifest)
+      const tokens = res[mode]
+      const prov = res.provenance[mode]
+      const f = (a.filter ?? '').toLowerCase()
+      const names = Object.keys(tokens).filter((n) => n.toLowerCase().includes(f))
+      ctx.out.text(`${act.name} (${act.id}) — ${mode} tokens${f ? ` matching "${f}"` : ''}: ${names.length}`)
+      for (const n of names.slice(0, 200)) {
+        const p = prov[n]
+        ctx.out.text(`${n} | ${tokens[n]} | ${p ? p.source + (p.from ? ' from ' + p.from : '') : '?'}`)
+      }
+      if (names.length > 200) ctx.out.text(`…${names.length - 200} more, narrow the filter`)
     },
   })
   r.register({

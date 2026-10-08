@@ -41,7 +41,17 @@ export interface Ui {
   showQuestion(questionId: string): Promise<boolean>
   startAttempt(attemptId: string): Promise<boolean>
   openThemeEditor(themeId?: string): Promise<boolean>
-  setThemeMode(mode: 'light' | 'dark' | 'system'): Promise<boolean>
+  setThemeMode(mode: 'light' | 'dark' | 'system' | 'sun'): Promise<boolean>
+  setThemeBlend(on: boolean): Promise<boolean>
+  // Browser geolocation; the app only. Null when unavailable or denied.
+  requestLocation(): Promise<{ lat: number; lon: number } | null>
+  themeState(): Promise<{
+    source: 'light' | 'dark' | 'system' | 'sun'
+    effectiveSource: 'light' | 'dark' | 'system' | 'sun'
+    mode: 'light' | 'dark'
+    blend: number
+    twilightBlend: boolean
+  } | null>
   openReview(attemptId: string): Promise<boolean>
   // The shell itself: clear its output, or reload the host. `wait-for-node`
   // blocks until the node answers again (after a restart), then reloads.

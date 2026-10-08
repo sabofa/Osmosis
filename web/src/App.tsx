@@ -133,10 +133,29 @@ function App() {
       navigate('settings')
       return true
     },
+    // T13 replaces these four with the theme provider.
     setThemeMode: async (mode) => {
+      if (mode === 'sun') return false
       theme.setTheme(mode)
       return true
     },
+    setThemeBlend: async () => false,
+    requestLocation: () =>
+      new Promise((resolve) => {
+        if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null)
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          () => resolve(null),
+          { timeout: 8000 }
+        )
+      }),
+    themeState: async () => ({
+      source: theme.theme,
+      effectiveSource: theme.theme,
+      mode: theme.resolvedMode,
+      blend: theme.resolvedMode === 'dark' ? 1 : 0,
+      twilightBlend: false,
+    }),
     // clear / restart are the palette's own; reload is the page's.
     shell: async (action) => {
       if (action !== 'reload') return false
