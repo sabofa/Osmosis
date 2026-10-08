@@ -59,16 +59,54 @@ interface RawRow {
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const BUILTIN_MSG = "Built-in themes are read-only; duplicate one to edit it.";
 
-function toRow(r: RawRow, manifest: ThemeManifest): ThemeRow {
+const warned = new Set<string>();
+function warnOnce(id: string, why: string): void {
+  if (warned.has(id)) return;
+  warned.add(id);
+  console.warn(`theme "${id}" skipped: ${why}`);
+}
+
+// Never throws: a row whose manifest cannot be parsed is skipped (null); a bad
+// legacy mirror is recomputed from the manifest.
+function toRow(r: RawRow, manifest: ThemeManifest): ThemeRow | null {
+  let tokens: ThemeTokens;
+  try {
+    tokens = JSON.parse(r.tokens) as ThemeTokens;
+    if (!tokens || typeof tokens !== "object") throw new Error("mirror is not an object");
+  } catch {
+    try {
+      tokens = toLegacyTokens(resolve(manifest));
+    } catch (err) {
+      warnOnce(r.id, (err as Error).message);
+      return null;
+    }
+  }
   return {
     id: r.id,
     name: r.name,
     manifest,
-    tokens: JSON.parse(r.tokens) as ThemeTokens,
+    tokens,
     custom_css: r.custom_css ?? "",
     updated_at: r.updated_at,
     deleted_at: r.deleted_at,
   };
+}
+
+function rowFromRaw(r: RawRow): ThemeRow | null {
+  let manifest: ThemeManifest | null = null;
+  if (r.manifest) {
+    try {
+      const parsed = JSON.parse(r.manifest) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) manifest = parsed as ThemeManifest;
+    } catch {
+      // fall through
+    }
+  }
+  if (!manifest) {
+    warnOnce(r.id, "manifest cannot be parsed");
+    return null;
+  }
+  return toRow(r, manifest);
 }
 
 function mirror(m: ThemeManifest): { tokens: string; custom_css: string } {
@@ -80,13 +118,16 @@ function mapRemoved(id: string | null): string | null {
 }
 
 // Live themes only — tombstones are for sync, not for the app. Rows whose
-// legacy conversion failed (manifest NULL) are omitted.
+// legacy conversion failed (manifest NULL) or whose manifest is corrupt are omitted.
 export function listThemes(db: DatabaseSync): ThemeRow[] {
-  return (
-    db
-      .prepare("SELECT * FROM theme WHERE deleted_at IS NULL AND manifest IS NOT NULL ORDER BY name COLLATE NOCASE, id")
-      .all() as unknown as RawRow[]
-  ).map((r) => toRow(r, JSON.parse(r.manifest as string) as ThemeManifest));
+  const out: ThemeRow[] = [];
+  for (const r of db
+    .prepare("SELECT * FROM theme WHERE deleted_at IS NULL AND manifest IS NOT NULL ORDER BY name COLLATE NOCASE, id")
+    .all() as unknown as RawRow[]) {
+    const row = rowFromRaw(r);
+    if (row) out.push(row);
+  }
+  return out;
 }
 
 // Everything, tombstones included, for the pull protocol.
@@ -94,11 +135,13 @@ export function listThemesForSync(db: DatabaseSync): ThemeRow[] {
   const out: ThemeRow[] = [];
   for (const r of db.prepare("SELECT * FROM theme ORDER BY id").all() as unknown as RawRow[]) {
     if (r.manifest) {
-      out.push(toRow(r, JSON.parse(r.manifest) as ThemeManifest));
+      const row = rowFromRaw(r);
+      if (row) out.push(row);
       continue;
     }
     try {
-      out.push(toRow(r, migrateTheme({ id: r.id, name: r.name, tokens: JSON.parse(r.tokens), custom_css: r.custom_css })));
+      const row = toRow(r, migrateTheme({ id: r.id, name: r.name, tokens: JSON.parse(r.tokens), custom_css: r.custom_css }));
+      if (row) out.push(row);
     } catch {
       // unconvertible legacy row: skip
     }
@@ -109,14 +152,17 @@ export function listThemesForSync(db: DatabaseSync): ThemeRow[] {
 export function getTheme(db: DatabaseSync, id: string): ThemeRow | null {
   const r = db.prepare("SELECT * FROM theme WHERE id = ?").get(id) as unknown as RawRow | undefined;
   if (!r || !r.manifest) return null;
-  return toRow(r, JSON.parse(r.manifest) as ThemeManifest);
+  return rowFromRaw(r);
 }
 
 export function getActiveThemeId(db: DatabaseSync): string | null {
   const row = db.prepare("SELECT active_theme_id FROM theme_setting WHERE id = 1").get() as
     | { active_theme_id: string | null }
     | undefined;
-  return mapRemoved(row?.active_theme_id ?? null);
+  const id = mapRemoved(row?.active_theme_id ?? null);
+  if (id === null || isBuiltinId(id)) return id;
+  const live = db.prepare("SELECT 1 AS x FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
+  return live ? id : null;
 }
 
 function fromLegacy(input: { id: string; name: string; tokens: ThemeTokens; custom_css?: string }): ThemeManifest {
@@ -278,26 +324,28 @@ export function applyThemesFromPull(
   );
   let applied = 0;
   for (const t of themes) {
-    let manifest: ThemeManifest;
     try {
-      manifest = t.manifest
+      const manifest = t.manifest
         ? t.manifest
         : migrateTheme({ id: t.id, name: t.name, tokens: t.tokens, custom_css: t.custom_css ?? "" });
+      if (!manifest || typeof manifest !== "object" || typeof manifest.name !== "string") {
+        throw new Error("manifest has no name");
+      }
+      const checked = migrateTheme(manifest);
+      const m = mirror(checked);
+      const r = upsert.run({
+        id: t.id,
+        name: checked.name,
+        tokens: m.tokens,
+        custom_css: m.custom_css,
+        manifest: JSON.stringify(checked),
+        updated_at: t.updated_at,
+        deleted_at: t.deleted_at ?? null,
+      });
+      applied += Number(r.changes);
     } catch (err) {
       console.warn(`pulled theme "${t.id}" skipped: ${(err as Error).message}`);
-      continue;
     }
-    const m = mirror(manifest);
-    const r = upsert.run({
-      id: t.id,
-      name: manifest.name,
-      tokens: m.tokens,
-      custom_css: m.custom_css,
-      manifest: JSON.stringify(manifest),
-      updated_at: t.updated_at,
-      deleted_at: t.deleted_at ?? null,
-    });
-    applied += Number(r.changes);
   }
   if (active !== undefined) {
     db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(mapRemoved(active));

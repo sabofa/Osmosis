@@ -37,4 +37,27 @@ describe("legacy theme conversion", () => {
     expect(r).toEqual({ converted: 0, failed: ["bad"] });
     expect((db.prepare("SELECT manifest FROM theme WHERE id='bad'").get() as any).manifest).toBeNull();
   });
+
+  it("keeps an extra legacy key as an override", () => {
+    const db = openTestDb();
+    const tokens = { light: { ...mode("1"), "--heat-2": "#445566" }, dark: mode("a") };
+    db.prepare(
+      "INSERT INTO theme (id, name, tokens, custom_css, updated_at, manifest) VALUES ('heat','Heat',?,'','2020-01-01 00:00:00',NULL)"
+    ).run(JSON.stringify(tokens));
+    migrate(db);
+    const row = db.prepare("SELECT manifest FROM theme WHERE id='heat'").get() as any;
+    expect(row.manifest).not.toBeNull();
+    expect((resolve(JSON.parse(row.manifest)) as any).light["color-heat-2"]).toBe("#445566");
+  });
+
+  it("migrate(db) leaves an unconvertible row NULL and does not throw", () => {
+    const db = openTestDb();
+    db.prepare(
+      "INSERT INTO theme (id, name, tokens, custom_css, updated_at, manifest) VALUES ('bad','Bad','not json','','2020-01-01 00:00:00',NULL)"
+    ).run();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() => migrate(db)).not.toThrow();
+    warn.mockRestore();
+    expect((db.prepare("SELECT manifest FROM theme WHERE id='bad'").get() as any).manifest).toBeNull();
+  });
 });

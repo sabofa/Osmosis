@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { openTestDb } from "./helpers.js";
 import {
   listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
@@ -163,5 +163,57 @@ describe("themes as manifests", () => {
     expect(getActiveThemeId(local)).toBe("ocean");
     applyThemesFromPull(local, [], undefined, undefined);
     expect(getLocation(local)).toEqual({ lat: 1, lon: 2 });
+  });
+});
+
+describe("themes survive corrupt rows", () => {
+  const mk = (id: string) => ({ schema: 1 as const, id, name: id, seeds: { light: { accent: "#123456" } }, dials: {}, fonts: {} });
+
+  it("a corrupt manifest is skipped by list/sync/get without throwing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("good") });
+    saveTheme(db, { manifest: mk("bad") });
+    db.prepare("UPDATE theme SET manifest = '{oops' WHERE id = 'bad'").run();
+    expect(listThemes(db).map((t) => t.id)).toEqual(["good"]);
+    expect(listThemesForSync(db).map((t) => t.id)).toEqual(["good"]);
+    expect(getTheme(db, "bad")).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("a corrupt mirror is recomputed from the manifest", () => {
+    const db = openTestDb();
+    const good = saveTheme(db, { manifest: mk("mir") }).theme;
+    db.prepare("UPDATE theme SET tokens = 'nope' WHERE id = 'mir'").run();
+    expect(listThemes(db)[0].tokens).toEqual(good.tokens);
+    expect(listThemesForSync(db)[0].tokens).toEqual(good.tokens);
+    expect(getTheme(db, "mir")?.tokens).toEqual(good.tokens);
+  });
+
+  it("a pull with one poisoned row still applies the good ones", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const src = openTestDb();
+    const a = saveTheme(src, { manifest: mk("a") }).theme;
+    const b = saveTheme(src, { manifest: mk("b") }).theme;
+    const local = openTestDb();
+    const stamp = { updated_at: "2999-01-01 00:00:00", deleted_at: null };
+    const bad1 = { id: "p1", name: "p1", manifest: { id: "p1", name: "p1" }, ...stamp } as never;
+    const bad2 = { id: "p2", name: "p2", manifest: "garbage", ...stamp } as never;
+    expect(applyThemesFromPull(local, [a, bad1, bad2, b], undefined)).toBe(2);
+    expect(listThemes(local).map((t) => t.id)).toEqual(["a", "b"]);
+    warn.mockRestore();
+  });
+
+  it("getActiveThemeId is null for a tombstoned or missing active theme; builtins still return", () => {
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("mine") });
+    setActiveTheme(db, "mine");
+    db.prepare("UPDATE theme SET deleted_at = datetime('now') WHERE id = 'mine'").run();
+    expect(getActiveThemeId(db)).toBeNull();
+    db.prepare("UPDATE theme_setting SET active_theme_id = 'ghost' WHERE id = 1").run();
+    expect(getActiveThemeId(db)).toBeNull();
+    setActiveTheme(db, "builtin:forest");
+    expect(getActiveThemeId(db)).toBe("builtin:forest");
   });
 });
