@@ -59,9 +59,10 @@ export interface View2dOptions {
 export interface View2dHandle {
   // Attach to the element that receives input.
   surfaceRef: React.RefCallback<HTMLElement>
+  // Where the view is looking, for the readout. Null until `trackCamera` is on;
+  // after it goes off it keeps the last camera published.
   camera: Camera | null
-  // Where the view is looking, for the readout. Null until `trackCamera` is on.
-  // The pointer in content units, for the readout.
+  // The pointer in content units, for the readout. Null until `trackPointer` is on.
   pointer: Vec | null
   // To the start view; already there: to the fitted view.
   reset(): void
@@ -102,6 +103,9 @@ class Controller {
   // The pointer as last seen, kept whether or not anything is listening, so a
   // readout that comes on has it at once.
   private seenPointer: Vec | null = null
+  // Where the pointer last was on the screen, so that a view that moves under a
+  // still mouse (a key pan, a coast) moves the pointer's content position too.
+  private pointerScreen: Vec | null = null
   // The readouts being listened to, as of the last render.
   private tracked: Tracking = { camera: false, pointer: false }
   private teardown: (() => void) | null = null
@@ -130,6 +134,7 @@ class Controller {
       this.lastDrawn = null
       this.committed = null
       this.uncommitted = false
+      this.pointerScreen = null
       this.clearPointing()
       return
     }
@@ -395,6 +400,7 @@ class Controller {
     const { frame } = this.read()
     const m = this.motion
     if (!m || !frame) return
+    this.pointerScreen = at
     this.setPointer(at ? screenToContent(at, frame, m.current, this.screen) : null)
     const id = at ? (this.pick(at, kind)?.id ?? null) : null
     if (this.selection.hover(id)) this.read().onHover?.(id)
@@ -457,6 +463,7 @@ class Controller {
     if (changed) {
       this.lastDrawn = camera
       this.lastChangeAt = now
+      if (this.pointerScreen) this.setPointer(screenToContent(this.pointerScreen, frame, camera, this.screen))
     }
     const visible = visibleRect(frame, camera, this.screen)
     const ppu = pxPerUnit(frame, camera, this.screen)

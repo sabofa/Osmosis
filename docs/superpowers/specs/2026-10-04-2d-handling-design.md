@@ -139,7 +139,21 @@ It is on in the review harness. In the app it is behind a viewer prop (`coordina
 
 **Hover and selection look.** Hover thickens the item's stroke or ring a little and brings its own label to full strength. Selection draws a soft accent halo behind the item and its label. Both are applied as classes on the existing elements (matched by `data-object` and `data-statement`), never by changing the markup. They work in every style.
 
-**Reporting.** FigureView takes `onSelect(item | null)`, and GraphViewer passes it through. The tutor can react to "the student clicked side AB".
+**Selecting several (added 2026-10-07).** A plain click selects one item and replaces any earlier selection; shift + click toggles an item in or out of the selection; a click on empty space or Esc clears it. The selection is an ordered set (`PointerSelection`), and every selected item gets the halo. Hover still outlines only the one item under the pointer.
+
+**Reporting.** FigureView takes `onSelect(ids)`, where `ids` is the array of every selected item's id in the order added (empty when nothing is selected), and GraphViewer passes it through. The tutor can react to "the student clicked side AB", or to a set of them.
+
+## Moving a heavy drawing (added 2026-10-07)
+
+Rewriting the SVG `viewBox` re-rasterises everything in it, and a figure with chalk texture, paper noise or a scribble is dear to rasterise, so redrawing on every frame lagged. While the view is moving (a drag, a zoom, a coast, an eased move), the figure is therefore **not redrawn**: the already-drawn SVG is slid and scaled with a CSS transform (the compositor does it) and the real `viewBox` is **committed** now and then. The arithmetic is `view2d/liveTransform.ts` (`liveTransform`, `commitDue`, `growRect`); `useView2d` takes `onLive(transform)` beside `onApply`, plus `overscan`.
+
+- The committed drawing covers the screen grown by `OVERSCAN` (30%) on every side, so a pan has drawing to reveal instead of blank paper.
+- **Commit rule.** The view is committed (a) when it has been still for `SETTLE_MS` (100 ms), which makes it sharp; (b) when the live view has drifted past `COMMIT_DRIFT` (×2 in or out) from the committed one, or has left the overscanned window, though never more often than every `COMMIT_THROTTLE_MS` (250 ms); and (c) when the screen is resized, or on the first draw.
+- **Highlights are cheap.** Only the outermost matching element gets `figure-hovered` or `figure-selected`, and the filter region is the visible window plus a small margin, resized at commit only (`figure/highlight.ts`).
+- At a commit, labels, dots and halos snap to their right size for the new view.
+- Reduced motion keeps its meaning (no smoothing, no coasting) but, as built, commits on every frame; a drag then has the old lag (open, H5).
+
+The feel constants live in `view2d/feel.ts`: `COAST_TAU` 150 ms and `COAST_STOP` 20 px/s (tuned 2026-10-07 to be less slippery), and `OVERSCAN`, `SETTLE_MS`, `COMMIT_DRIFT`, `COMMIT_THROTTLE_MS` above.
 
 **Toolbar.**
 - The reset button stays, shown when the view is not at the start view.
@@ -208,5 +222,5 @@ Any test that pins behaviour is shown to fail by deleting that behaviour.
 
 - The table, flowchart and plot adapters (designed for above, not built).
 - 3D (space) handling.
-- Multi-select, dragging items and editing the figure by pointing.
+- Dragging items and editing the figure by pointing. (Multi-select was out of scope here and was built on 2026-10-07.)
 - Persisting a reader's view between visits.

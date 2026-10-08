@@ -204,7 +204,9 @@ export function figureHitItems(input: FigureHitInput): FigureHitItem[] {
       case 'spaceArc':
       case 'spaceRightAngle':
       case 'centralAngle':
-        // Marks annotate; they are not things to point at.
+        // Marks annotate; they are not things to point at. (A label's leader
+        // line, data-object "leader-…", is the same: pointing at the label
+        // already lights its object.)
         break
       case 'measureLabel':
       case 'netLabel':

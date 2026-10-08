@@ -1073,6 +1073,14 @@ FigureView.tsx       the adapter: renderFigure's frame + items + useView2d + the
 ```
 
 **Rules worth knowing.**
+- **Shift + click selects several** (2026-10-07): `PointerSelection` is an
+  ordered set, and `onSelect` (FigureView, GraphViewer) reports an array of ids.
+- **A moving view is not redrawn.** The drawn SVG is slid and scaled with a CSS
+  transform (`view2d/liveTransform.ts`) and the `viewBox` is committed when the
+  view has rested `SETTLE_MS`, or has drifted ×2, or left the 30% overscan
+  (never more than every 250 ms); highlights go on the outermost element only.
+  The constants (`OVERSCAN`, `SETTLE_MS`, `COMMIT_DRIFT`, `COMMIT_THROTTLE_MS`,
+  `COAST_TAU`, `COAST_STOP`) are in `feel.ts`. Spec: "Moving a heavy drawing".
 - **`renderFigure`'s SVG did not change.** It now also returns `frame` and
   `items`; the markup is byte-identical (a sweep of every figure example, in
   clean, ink, pencil and marker, light and dark, is the check). Hover and

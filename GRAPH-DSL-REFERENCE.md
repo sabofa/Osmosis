@@ -633,7 +633,8 @@ with the whole figure still one reset away.
 | `… zoom k` | how far in, relative to the fitted view: `zoom 1` (the default) is the whole figure, `zoom 4` is four times closer, `zoom 0.5` is further out. The reader's own limits still apply (about 0.1 to 64) |
 
 The numbers are plain decimals (`-1.5`, `.5`, `2e3`); commas separate them and
-spaces are free. `view` is a word, not a function.
+spaces inside the brackets are free. `zoom` needs a space after it (`zoom 4`);
+a space before it is optional. `view` is a word, not a function.
 
 **Refusals.** A spec whose `@focus` is not one of the forms above, or whose
 `zoom` is not greater than 0, is refused with a message naming the form it
