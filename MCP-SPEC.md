@@ -129,7 +129,7 @@ becoming one larger tool.
 
 | Tool | Purpose |
 |---|---|
-| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 9 — the workspace tools, §3.6; 8 was the retention loop changing `set_retention_target`, `get_due_items`, `present_item` and the template tools), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes; `retention_conventions` documents the retention loop (§3.5) |
+| `readme` | Universal conventions, called once per session. `node` carries `protocol_version`, `tools_version` (bumped whenever a tool is added, removed, or changes shape; now 10 — the theme tools on manifests, §3.7; 9 was the workspace tools, §3.6; 8 was the retention loop changing `set_retention_target`, `get_due_items`, `present_item` and the template tools), the sorted `tools` list *for the caller's scope*, and `push` (now `true` — see §3.3). Top-level `scope` is `full` or `presenter` — see §1. `tag_conventions` documents the three reserved slug prefixes; `retention_conventions` documents the retention loop (§3.5) |
 | `bootstrap` | Subject-scoped taxonomy + results pointer + graph DSL reference, called once per subject. Returns `taxonomy: { seeded, seed_available, tag_count }`; `seed: true` creates the subject's shipped taxonomy (`server/src/domain/taxonomies/`, currently `chemistry` — Ebbing 11e ch. 1-12 plus `tech:mhchem`/`tech:calculator` — and `math`), idempotently, so an empty bank gets standard slugs instead of invented near-duplicates |
 | `list_tags` | Controlled vocabulary listing. Every row carries `kind`, derived from the slug's leading segment: `node` (one teachable idea — the same string a question's `node_keys` carry), `tech` (a rendering/tooling requirement), `topic` (a cross-subject theme), else `subject`. Filters `prefix` (a slug and its descendants, cut only at `:` — `_` and `.` are literal, so `a_b` never reaches `a.b`) and `kind` compose — both are ANDed. Paginated (`limit`/`offset`, default 50); response is `{ total, tags, has_more }` |
 | `create_tag` | One tag at a time, by design. Slug grammar: lowercase ascii segments joined by `:`, words within a segment joined by `_` or `.` — a separator always sits between alphanumerics, so `a..b`, `.a`, `a.` and `a-b` are rejected as `invalid_slug_format`. The `.` exists so a textbook section number survives into the slug (`node:ebbing11e:2.4:atomic_weight`) |
@@ -161,6 +161,7 @@ becoming one larger tool.
 | `get_due_items` | One row per due item (`id` = its `lineage_id`, `question_id` = the live version), most overdue first — overdue measured against the gap the item was meant to survive (`overdue_ratio`). Rows carry `node_key`/`node_keys`, `targets[]` (each with `role` `draw`/`reserve` and the draw's `probe` state), SM2 state (`easiness`, `repetitions`, `interval_days`, `retention_reviews`, `last_quality`), and `reason`: `never_demonstrated` (no retention review yet), `relearn` (reserve a failed draw brought forward, or never passed — go teach it), `lapsed` (failed after passing — resurface sooner), `decayed` (passed, interval run). The identity-keyed fields stay: `identity_key` (primary node key), `retention_target`/`target_source` (nearest open target), `last_result`. Filters `before`, `node_key` (segment-aware); paginated |
 | `ws_list` / `ws_read` / `ws_search` | Read Ben's workspace (§3.6). `ws_list` with no `container_id` is the roots (every trajectory, track and course, each flagged `top_level` when it is placed nowhere) plus `unplaced` (the files and folders placed nowhere); with one it is that container's live children, containers first, under their local names. `ws_read` is a node's summary, `appears_in` and, for a file, its `content` (`format`, `body`, `version`, `saved_at`, `author`, `asset_id`); the `version` it shows is the one to hand back to `ws_write`. `ws_search` is text (placement names, titles, and a file's search text) with optional `scope` and `kind_tag`, one row per placement, and never lists an unplaced node |
 | `ws_create` / `ws_write` / `ws_append` / `ws_place` | Write to it (§3.6). Each content write takes `as: tutor` or `planner`, no default, and that is recorded as the version's `author`. `ws_create` makes a trajectory, track, course, folder or file (a file needs `format`) and places it with `container_id`; `ws_write` replaces a file against the `version` you read (`stale_version` means Ben or the other agent saved it since); `ws_append` adds to a file whose format has an append hook (`markdown` does), with no version; `ws_place` puts an existing node in one more container. When `ws_create` or `ws_place` meets a taken name it answers `name_taken` with a message that points at the node already there (`ws_list` the container; for USERNOTES, `ws_append` to it) and never offers a numbered copy |
+| `list_themes` / `get_theme` / `theme_tokens` / `save_theme` / `patch_theme` / `validate_theme` / `set_active_theme` / `delete_theme` | Themes as manifests (§3.7). `save_theme` takes a `manifest`, returns the validation `report`, and refuses an invalid one with the report attached; read each `warnings[].suggestion` and apply it with `patch_theme`. `theme_tokens` is the token reference |
 
 Plus one plain (non-JSON-RPC) HTTP route on the same route family, `POST
 /mcp/:token/upload`, which accepts either token — see §5.
@@ -397,6 +398,77 @@ tool for them, and no way to read an old version's body.
 `spec/osmosis/workspace/02-data-layer.md` (operations §5, queries §6, format
 hooks §7, uploads §8) and `01-shell.md` for the shell around it, with Ben's
 answers in `ruling-2026-10-03-shell-answers.md` beside them.
+
+### 3.7 Themes (tools_version 10)
+
+A theme is a **manifest** (theme-core): a handful of seeds, dials, named font
+stacks and optional token overrides. Everything else is derived. `tools_version`
+is 10: the theme tools below replace the old `{id, name, tokens, custom_css}`
+`save_theme`; `builtin:slate` and `builtin:plum` are gone (they resolve to
+`builtin:osmosis`).
+
+| Tool | Args | Result |
+|---|---|---|
+| `list_themes` | none | `{ themes: [{id, name, description, builtin, active}], active_theme_id }`. The four built-ins (`builtin:osmosis`, `builtin:forest`, `builtin:ocean`, `builtin:ember`) plus saved custom themes. |
+| `get_theme` | `id`, `resolved?` | `{ id, name, builtin, manifest, resolved?: { light, dark, provenance } }`. `resolved` maps token name to final value per mode; `provenance` says whether each came from default, seed, dial or override. Unknown id: `not_found`. |
+| `theme_tokens` | `group?` | `{ count, tokens: [{name, tier, group, type, modeDependent, allowed?, meaning}] }`, the author's reference. An unknown group fails and lists the valid ones. |
+| `save_theme` | `manifest`, `make_active?` | `{ saved: true, theme: {id, name, updated_at}, report, active }`. |
+| `patch_theme` | `id`, `patch`, `make_active?` | Same as `save_theme`. JSON merge patch onto the stored manifest (`null` deletes a key). Built-ins and unknown ids fail. |
+| `validate_theme` | `manifest` | The `report` alone; stores nothing. |
+| `set_active_theme` | `id` (`null` = `builtin:osmosis`) | `{ active_theme_id }`. |
+| `delete_theme` | `id` | `{ id }`. Built-ins fail `builtin_theme`. |
+
+`report` is `{ ok, errors: [{path, message, suggestion?}], warnings: [...] }`.
+A manifest with errors is **not saved**: the call returns `isError` with
+`{ saved: false, error: "invalid_theme", message, report }` so the author can read
+`report.errors[].path` and fix it. Warnings (e.g. low contrast) still save;
+read each `warnings[].suggestion` and apply it with `patch_theme`. Dials are
+0..1 except `typeScale` 1.125..1.333 and `baseSize` 13..18 (px); fonts are named
+stacks (`space-grotesk`, `inter`, `system-sans`, `system-serif`, `system-mono`,
+`stix-two`, `latin-modern-math`). Give one mode's seeds and the other is
+derived. `ambience`, `sounds`, `assets` and `graph.papers` are reserved slots:
+stored and returned unchanged, no effect yet.
+
+Worked example, `save_theme` with a 6-seed manifest:
+
+```json
+{
+  "manifest": {
+    "schema": 1, "id": "harbour", "name": "Harbour",
+    "seeds": {
+      "light": { "canvas": "#eef2f4", "surface": "#ffffff", "ink": "#16222b",
+                 "accent": "#1f6f8b", "secondary": "#c9852b", "good": "#3f7d5a" }
+    },
+    "dials": { "roundness": 0.7, "warmth": 0.3 },
+    "fonts": { "display": { "stack": "inter" } },
+    "overrides": { "any": { "radius-md": "10px" } }
+  },
+  "make_active": true
+}
+```
+
+The manifest above validates clean (`warnings: []`). The report below is
+illustrative of the shape when a seed has low contrast:
+
+```json
+{
+  "saved": true,
+  "theme": { "id": "harbour", "name": "Harbour", "updated_at": "2026-10-07 23:40:12" },
+  "report": {
+    "ok": true,
+    "errors": [],
+    "warnings": [
+      { "path": "seeds.light.secondary",
+        "message": "secondary on surface has contrast 2.9:1 (< 3:1)",
+        "suggestion": "#a8691a" }
+    ]
+  },
+  "active": true
+}
+```
+
+The warning's suggestion is applied with
+`patch_theme { id: "harbour", patch: { seeds: { light: { secondary: "#a8691a" } } } }`.
 
 ## 3a. Bulk authoring: `scripts/mcp-batch`
 

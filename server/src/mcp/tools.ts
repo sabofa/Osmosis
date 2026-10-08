@@ -16,15 +16,12 @@ import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDe
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
-import { listThemes, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
+import { listThemes, saveTheme, patchTheme, getTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
+import {
+  BUILTINS, builtinById, isBuiltinId, DEFAULT_THEME_ID, FONT_STACKS, TOKENS, resolve as resolveTheme, validate as validateManifest,
+  type ThemeManifest,
+} from "theme-core";
 import { registerWorkspaceTools } from "./workspaceTools.js";
-
-// Mirrors web/src/lib/themeTokens.ts TOKEN_FIELDS — the only custom properties
-// a theme's token sets may name. Anything else belongs in custom_css.
-const THEME_TOKEN_KEYS = ["--accent", "--accent-wash", "--bg", "--surface", "--ink", "--muted", "--line", "--line-strong"] as const;
-const themeTokenSetShape = z
-  .record(z.enum(THEME_TOKEN_KEYS), z.string().regex(/^#[0-9a-fA-F]{6}$/, "hex colour like #c65d22"))
-  .describe("Map of CSS custom property → hex colour. Omitted keys fall back to the app's defaults for that mode.");
 
 const tagQueryShape = z
   .object({
@@ -1123,16 +1120,96 @@ export function registerTools(
     }
   );
 
+  // ---- Themes: a theme is a manifest (seeds + dials + fonts + overrides). ----
+  const themeResult = (saved: { theme: { id: string; name: string; updated_at: string }; report: unknown }, makeActive: boolean | undefined) => {
+    if (makeActive) setActiveTheme(db, saved.theme.id);
+    return ok({
+      saved: true,
+      theme: { id: saved.theme.id, name: saved.theme.name, updated_at: saved.theme.updated_at },
+      report: saved.report,
+      active: getActiveThemeId(db) === saved.theme.id,
+    });
+  };
+  // An invalid manifest is an authoring result, not a crash: hand back the report so the author can fix it.
+  const themeFail = (err: unknown) => {
+    if (err instanceof DomainError && err.code === "invalid_theme" && err.detail) {
+      return {
+        isError: true,
+        content: [{ type: "text" as const, text: JSON.stringify({ saved: false, error: err.code, message: err.message, report: err.detail }) }],
+      };
+    }
+    return fail(err);
+  };
+  const FONT_NAMES = Object.keys(FONT_STACKS).join(", ");
+
   registerTool(
     "list_themes",
     {
       description:
-        "List the app's colour themes and which one is active. Custom themes live on the server and sync to every device. " +
-        "Built-in themes (ids builtin:slate, builtin:forest, builtin:ember, builtin:plum) are not listed here but can be made active.",
+        "List colour themes: your saved custom themes plus the four built-ins (builtin:osmosis, builtin:forest, builtin:ocean, builtin:ember), " +
+        "with which one is active. Custom themes live on the server and sync to every device. Use get_theme to read one.",
     },
     async () => {
       try {
-        return ok({ themes: listThemes(db), active_theme_id: getActiveThemeId(db), builtin_ids: ["builtin:slate", "builtin:forest", "builtin:ember", "builtin:plum"] });
+        const active = getActiveThemeId(db) ?? DEFAULT_THEME_ID;
+        const themes = [
+          ...BUILTINS.map((m) => ({ id: m.id, name: m.name, description: m.description ?? "", builtin: true, active: m.id === active })),
+          ...listThemes(db).map((t) => ({ id: t.id, name: t.name, description: t.manifest.description ?? "", builtin: false, active: t.id === active })),
+        ];
+        return ok({ themes, active_theme_id: active });
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "get_theme",
+    {
+      description:
+        "Read one theme (custom id or builtin:*): its manifest, and with resolved: true every token's final value for light and dark plus " +
+        "provenance (default / seed / dial / override) so you can see what a seed or dial produced. Read a built-in to learn by example, " +
+        "then save your own (built-ins are read-only).",
+      inputSchema: { id: z.string(), resolved: z.boolean().optional() },
+    },
+    async ({ id, resolved }) => {
+      try {
+        const builtin = builtinById(id);
+        const row = builtin ? null : getTheme(db, id);
+        const manifest = builtin ?? (row && !row.deleted_at ? row.manifest : undefined);
+        if (!manifest) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
+        const out: Record<string, unknown> = { id: manifest.id, name: manifest.name, builtin: builtin !== undefined, manifest };
+        if (resolved) {
+          const r = resolveTheme(manifest);
+          out.resolved = { light: r.light, dark: r.dark, provenance: r.provenance };
+        }
+        return ok(out);
+      } catch (err) {
+        return fail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "theme_tokens",
+    {
+      description:
+        "The token reference for authoring: every themeable token with its name, tier, group, type, whether it differs by mode, allowed " +
+        "values (enum tokens), and meaning. Names are what manifest overrides use (e.g. overrides.any['radius-md'], overrides.light['color-surface']). " +
+        "Pass group to narrow: " + [...new Set(TOKENS.map((t) => t.group))].join(", ") + ". Call this before writing overrides.",
+      inputSchema: { group: z.string().optional() },
+    },
+    async ({ group }) => {
+      try {
+        const groups = [...new Set(TOKENS.map((t) => t.group as string))];
+        if (group !== undefined && !groups.includes(group)) {
+          throw new DomainError("unknown_group", `Unknown group "${group}". Valid groups: ${groups.join(", ")}.`);
+        }
+        const tokens = TOKENS.filter((t) => group === undefined || t.group === group).map((t) => ({
+          name: t.name, tier: t.tier, group: t.group, type: t.type, modeDependent: t.modeDependent,
+          ...(t.allowed ? { allowed: t.allowed } : {}), meaning: t.meaning,
+        }));
+        return ok({ count: tokens.length, tokens });
       } catch (err) {
         return fail(err);
       }
@@ -1143,25 +1220,52 @@ export function registerTools(
     "save_theme",
     {
       description:
-        "Create or replace a colour theme (same id = replace). tokens.light and tokens.dark each map any of " +
-        THEME_TOKEN_KEYS.join(", ") +
-        " to a hex colour; omitted keys keep the app default for that mode. custom_css is optional CSS applied in both " +
-        "modes on top of the tokens — use it for things tokens don't cover (e.g. `:root:not([data-theme=\"light\"]), " +
-        ":root[data-theme=\"light\"] { --heat-4: #3b6ea8; --good: #3f7d5a; --bad: #b0473f; }` for the heatmap ramp and " +
-        "good/bad colours, or `.panel { ... }` for cards). Pass make_active: true to switch to it immediately.",
-      inputSchema: {
-        id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "lowercase letters, digits, _ or -").describe("Stable slug, e.g. 'midnight'."),
-        name: z.string(),
-        tokens: z.object({ light: themeTokenSetShape, dark: themeTokenSetShape }),
-        custom_css: z.string().optional(),
-        make_active: z.boolean().optional(),
-      },
+        "Create or replace a theme from a manifest {id, name, seeds:{light?,dark?}, dials, fonts, overrides?, css?}. Start small: a few seeds " +
+        "(canvas, surface, ink, accent, per mode) plus dials; everything else is derived. Give one mode and the other is derived. Call theme_tokens " +
+        "for token names and override only what you must. Dials: contrast, warmth, saturation, roundness, density, elevation, borders, " +
+        "translucency, texture, motion are 0..1; typeScale 1.125..1.333; baseSize 13..18px. Fonts are named stacks: " + FONT_NAMES + ". " +
+        "ALWAYS read report.warnings[].suggestion (e.g. low contrast) and apply them with patch_theme. ambience, sounds, assets, graph.papers " +
+        "are reserved: stored, no effect yet. Invalid manifests are not saved; the result carries report.errors. make_active switches to it.",
+      inputSchema: { manifest: z.record(z.string(), z.unknown()), make_active: z.boolean().optional() },
     },
-    async ({ id, name, tokens, custom_css, make_active }) => {
+    async ({ manifest, make_active }) => {
       try {
-        const saved = saveTheme(db, { id, name, tokens: { light: tokens.light ?? {}, dark: tokens.dark ?? {} }, custom_css });
-        if (make_active) setActiveTheme(db, id);
-        return ok({ ...saved.theme, active: make_active === true || getActiveThemeId(db) === id });
+        return themeResult(saveTheme(db, { manifest: manifest as unknown as ThemeManifest }), make_active);
+      } catch (err) {
+        return themeFail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "patch_theme",
+    {
+      description:
+        "Edit a saved theme with a JSON merge patch: objects merge, null deletes a key, anything else replaces. E.g. {dials:{roundness:0.2}, " +
+        "overrides:{any:{'radius-md':null}}}. Use it to apply report.warnings[].suggestion after save_theme. Same validation and result as " +
+        "save_theme; built-ins and unknown ids fail. make_active switches to it.",
+      inputSchema: { id: z.string(), patch: z.record(z.string(), z.unknown()), make_active: z.boolean().optional() },
+    },
+    async ({ id, patch, make_active }) => {
+      try {
+        return themeResult(patchTheme(db, id, patch), make_active);
+      } catch (err) {
+        return themeFail(err);
+      }
+    }
+  );
+
+  registerTool(
+    "validate_theme",
+    {
+      description:
+        "Dry-run a manifest: returns the report {ok, errors[], warnings[]} (each with path, message, suggestion) and stores nothing. " +
+        "Use it to iterate before save_theme. Checks dial ranges, colours, font names, token names, contrast of ink on canvas and accent on surface.",
+      inputSchema: { manifest: z.record(z.string(), z.unknown()) },
+    },
+    async ({ manifest }) => {
+      try {
+        return ok(validateManifest(manifest));
       } catch (err) {
         return fail(err);
       }
@@ -1171,11 +1275,12 @@ export function registerTools(
   registerTool(
     "delete_theme",
     {
-      description: "Delete a custom theme on every device. If it was active, the app falls back to 'mode only'. Built-ins can't be deleted.",
+      description: "Delete a custom theme on every device. If it was active, the app falls back to the default (builtin:osmosis). Built-ins can't be deleted.",
       inputSchema: { id: z.string() },
     },
     async ({ id }) => {
       try {
+        if (isBuiltinId(id)) throw new DomainError("builtin_theme", "Built-in themes are read-only and cannot be deleted.");
         return ok(deleteTheme(db, id));
       } catch (err) {
         return fail(err);
@@ -1186,12 +1291,12 @@ export function registerTools(
   registerTool(
     "set_active_theme",
     {
-      description: "Make a theme active on every device: a custom theme id, a builtin:* id, or null for 'mode only'.",
+      description: "Make a theme active on every device: a custom theme id or a builtin:* id. null means the default, builtin:osmosis.",
       inputSchema: { id: z.string().nullable() },
     },
     async ({ id }) => {
       try {
-        return ok(setActiveTheme(db, id));
+        return ok(setActiveTheme(db, id ?? DEFAULT_THEME_ID));
       } catch (err) {
         return fail(err);
       }
