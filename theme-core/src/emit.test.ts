@@ -25,11 +25,15 @@ describe('emit', () => {
   })
   it('stylesheet', () => {
     const s = toStylesheet(r.light, 'light', '.x{y:z}')
-    expect(s.startsWith(':root{')).toBe(true)
+    expect(s.startsWith('html:root[data-theme]{')).toBe(true)
     expect(s.endsWith('.x{y:z}')).toBe(true)
     expect(s).toContain('--color-canvas:')
-    expect(s).toContain(':root{color-scheme:light}\n')
-    expect(toStylesheet({ a: '1', b: '2' }, 'dark')).toBe(':root{--a:1;--b:2}\n:root{color-scheme:dark}\n')
+    expect(s).toContain('html:root[data-theme]{color-scheme:light}\n')
+    expect(toStylesheet({ a: '1', b: '2' }, 'dark')).toBe('html:root[data-theme]{--a:1;--b:2}\nhtml:root[data-theme]{color-scheme:dark}\n')
+  })
+  it('selector defaults to html:root[data-theme] and is overridable', () => {
+    expect(toStylesheet({ a: '1' }, 'light')).toBe('html:root[data-theme]{--a:1}\nhtml:root[data-theme]{color-scheme:light}\n')
+    expect(toStylesheet({ a: '1' }, 'light', undefined, '.t')).toBe('.t{--a:1}\n.t{color-scheme:light}\n')
   })
   it('legacy exactness', () => {
     const rr = resolve(migrate({ id: 'f', name: 'F', tokens: { light, dark } }))

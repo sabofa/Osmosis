@@ -31,9 +31,13 @@ export function toCssVars(map: TokenMap): Record<string, string> {
   return out
 }
 
-export function toStylesheet(map: TokenMap, mode: Mode, css?: string): string {
+// Default selector: specificity (0,2,1) beats every :root / :root[data-theme] rule in the
+// static fallback stylesheet, whatever the stylesheet order.
+export const DEFAULT_SELECTOR = 'html:root[data-theme]'
+
+export function toStylesheet(map: TokenMap, mode: Mode, css?: string, selector: string = DEFAULT_SELECTOR): string {
   const decl = Object.entries(toCssVars(map)).map(([k, v]) => `${k}:${v}`).join(';')
-  return `:root{${decl}}\n:root{color-scheme:${mode}}\n${css ?? ''}`
+  return `${selector}{${decl}}\n${selector}{color-scheme:${mode}}\n${css ?? ''}`
 }
 
 const LEGACY_KEYS = ['--accent', '--accent-wash', '--bg', '--surface', '--ink', '--muted', '--line', '--line-strong'] as const
