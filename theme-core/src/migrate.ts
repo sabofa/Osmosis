@@ -22,7 +22,7 @@ const SEED_KEYS: Record<string, 'canvas' | 'surface' | 'ink' | 'accent'> = {
   '--bg': 'canvas', '--surface': 'surface', '--ink': 'ink', '--accent': 'accent',
 }
 
-const MANIFEST_FIELDS = new Set(['schema', 'id', 'name', 'description', 'author', 'seeds', 'dials', 'fonts', 'overrides', 'css', 'graph', 'ambience', 'sounds', 'assets'])
+const MANIFEST_FIELDS = new Set(['schema', 'id', 'name', 'description', 'author', 'seeds', 'dials', 'fonts', 'overrides', 'css', 'graph', 'layer', 'workspace', 'ambience', 'sounds', 'assets'])
 
 const own = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -46,6 +46,7 @@ function checkShape(raw: Record<string, unknown>): void {
   }
   if (raw.css !== undefined && typeof raw.css !== 'string') bad('css must be a string')
   if (raw.description !== undefined && typeof raw.description !== 'string') bad('description must be a string')
+  if (raw.layer !== undefined && raw.layer !== 'workspace' && raw.layer !== 'ambience') bad("layer must be 'workspace' or 'ambience'")
   if (raw.author !== undefined && raw.author !== 'human' && raw.author !== 'claude') bad("author must be 'human' or 'claude'")
 }
 

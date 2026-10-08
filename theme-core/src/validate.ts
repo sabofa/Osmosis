@@ -7,7 +7,7 @@ export interface Issue { path: string; message: string; suggestion?: string }
 export interface Report { ok: boolean; errors: Issue[]; warnings: Issue[] }
 export const MAX_CSS_BYTES = 64 * 1024
 
-const TOP = new Set(['schema', 'id', 'name', 'description', 'author', 'seeds', 'dials', 'fonts', 'overrides', 'css', 'graph', 'ambience', 'sounds', 'assets'])
+const TOP = new Set(['schema', 'id', 'name', 'description', 'author', 'seeds', 'dials', 'fonts', 'overrides', 'css', 'graph', 'layer', 'workspace', 'ambience', 'sounds', 'assets'])
 const SEED_KEYS = new Set(['canvas', 'surface', 'ink', 'accent', 'secondary', 'good', 'bad', 'warn', 'info'])
 const UNIT_DIALS = ['contrast', 'warmth', 'saturation', 'roundness', 'density', 'elevation', 'borders', 'translucency', 'texture', 'motion']
 const ROLES = new Set(['display', 'body', 'mono', 'math'])
@@ -54,6 +54,7 @@ function structural(raw: unknown, errors: Issue[]): void {
   for (const k of Object.keys(raw)) if (!TOP.has(k)) err(k, `unknown top-level field: ${trunc(k)}`)
   if (raw.description !== undefined && typeof raw.description !== 'string') err('description', 'description must be a string')
   if (raw.author !== undefined && raw.author !== 'human' && raw.author !== 'claude') err('author', "author must be 'human' or 'claude'")
+  if (raw.layer !== undefined && raw.layer !== 'workspace' && raw.layer !== 'ambience') err('layer', "layer must be 'workspace' or 'ambience'")
   for (const f of ['seeds', 'dials', 'fonts', 'overrides', 'graph']) {
     if (raw[f] !== undefined && !isObj(raw[f])) err(f, `${f} must be an object`)
   }

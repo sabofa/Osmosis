@@ -33,6 +33,8 @@ export type FontSeeds = Partial<Record<FontRole, FontRef>>
 export const DEFAULT_FONTS: Record<FontRole, FontRef> = {
   display: { stack: 'space-grotesk' }, body: { stack: 'inter' }, mono: { stack: 'system-mono' }, math: { stack: 'stix-two' },
 }
+export type LayerKind = 'workspace' | 'ambience'
+export const DEFAULT_WORKSPACE_THEME_ID = 'builtin:ws-clean'
 export interface ThemeManifest {
   schema: 1
   id: string; name: string; description?: string; author?: 'human' | 'claude'
@@ -40,6 +42,9 @@ export interface ThemeManifest {
   overrides?: { any?: Record<string, string>; light?: Record<string, string>; dark?: Record<string, string> }
   css?: string
   graph?: { styles?: unknown; boards?: Partial<Record<'blackboard' | 'greenboard' | 'whiteboard', string>>; media?: Record<string, unknown>; papers?: unknown }
+  layer?: LayerKind
+  /** RESERVED slot: stored/returned by identity, never interpreted. Future: region hooks, Home module/layout, icon-sheet refs, the ambience adapter. */
+  workspace?: unknown
   ambience?: unknown; sounds?: unknown; assets?: unknown // RESERVED slots: stored/returned unchanged, never interpreted
 }
 export const DEFAULT_SEEDS: Record<Mode, { canvas: string; surface: string; ink: string; accent: string }> = {

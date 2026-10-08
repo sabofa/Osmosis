@@ -96,3 +96,18 @@ describe('migrate', () => {
     expect(m.fonts).toEqual({ body: 'inter' })
   })
 })
+
+describe('migrate: layer + workspace', () => {
+  const m = (extra: Record<string, unknown>) => ({ schema: 1, id: 'a', name: 'A', ...extra })
+  it('accepts layer workspace and ambience', () => {
+    expect(migrate(m({ layer: 'workspace' })).layer).toBe('workspace')
+    expect(migrate(m({ layer: 'ambience' })).layer).toBe('ambience')
+  })
+  it('rejects a bad layer', () => {
+    try { migrate(m({ layer: 'nope' })); expect.unreachable() } catch (e) { expect((e as MigrateError).code).toBe('invalid_manifest') }
+  })
+  it('keeps the workspace slot unchecked and by identity', () => {
+    const ws = { x: 1 }
+    expect(migrate(m({ workspace: ws })).workspace).toBe(ws)
+  })
+})

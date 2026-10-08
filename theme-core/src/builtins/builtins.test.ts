@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { BUILTINS, DEFAULT_THEME_ID, REMOVED_BUILTINS, builtinById, isBuiltinId } from './index.js'
+import { BUILTINS, DEFAULT_THEME_ID, DEFAULT_WORKSPACE_THEME_ID, REMOVED_BUILTINS, builtinById, isBuiltinId } from './index.js'
+import { validate } from '../validate.js'
 import { resolve } from '../resolve.js'
 import { toCssVars, toLegacyTokens } from '../emit.js'
 import { contrast, parseColour } from '../colour.js'
@@ -16,7 +17,7 @@ const get = (id: string) => builtinById(id)!
 describe('builtins registry', () => {
   it('has unique ids in order', () => {
     const ids = BUILTINS.map((b) => b.id)
-    expect(ids).toEqual(['builtin:osmosis', 'builtin:forest', 'builtin:ocean', 'builtin:ember'])
+    expect(ids).toEqual(['builtin:osmosis', 'builtin:forest', 'builtin:ocean', 'builtin:ember', 'builtin:ws-clean'])
     expect(new Set(ids).size).toBe(ids.length)
   })
   it('resolves every builtin without throwing', () => {
@@ -28,6 +29,15 @@ describe('builtins registry', () => {
     expect(isBuiltinId('builtin:x')).toBe(true)
     expect(isBuiltinId('custom-1')).toBe(false)
     expect(builtinById(DEFAULT_THEME_ID)).toBeDefined()
+  })
+  it('ws-clean is the workspace-layer default', () => {
+    expect(DEFAULT_WORKSPACE_THEME_ID).toBe('builtin:ws-clean')
+    expect(builtinById('builtin:ws-clean')?.layer).toBe('workspace')
+    const b = get('builtin:ws-clean')
+    expect(() => resolve(b)).not.toThrow()
+    const r = validate({ ...b, id: 'copy-ws-clean' })
+    expect(r.ok).toBe(true)
+    expect(r.warnings).toEqual([])
   })
   it('removed builtins are gone', () => {
     expect(REMOVED_BUILTINS).toContain('builtin:slate')

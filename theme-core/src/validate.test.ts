@@ -276,3 +276,16 @@ describe('validate: reserved ids', () => {
     expect(RESERVED_THEME_IDS).toEqual(['active', 'location', 'validate'])
   })
 })
+
+describe('validate: layer + workspace', () => {
+  it('layer nope is an error at layer', () => {
+    const r = validate(base({ layer: 'nope' }))
+    expect(r.ok).toBe(false)
+    expect(r.errors.some((e) => e.path === 'layer')).toBe(true)
+  })
+  it('accepts layer workspace with any workspace slot', () => {
+    const r = validate(base({ layer: 'workspace', workspace: { anything: [1, { a: 2 }] } }))
+    expect(r.errors).toEqual([])
+    expect(r.ok).toBe(true)
+  })
+})

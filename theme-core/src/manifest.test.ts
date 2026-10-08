@@ -34,3 +34,12 @@ describe('manifest', () => {
       for (const h of Object.values(DEFAULT_SEEDS[m])) expect(() => parseColour(h)).not.toThrow()
   })
 })
+
+describe('manifest layer + workspace slot', () => {
+  it('normalise keeps workspace by identity and layer', () => {
+    const ws = { anything: [1] }
+    const m = normalise({ id: 'a', name: 'A', layer: 'workspace', workspace: ws })
+    expect(m.workspace).toBe(ws)
+    expect(m.layer).toBe('workspace')
+  })
+})
