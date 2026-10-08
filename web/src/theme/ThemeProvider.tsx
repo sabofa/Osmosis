@@ -11,7 +11,7 @@ import {
 import type { ThemePreset } from '../hooks/useThemePresets'
 import { Ctx, type CustomTheme, type ThemeContextValue } from './context'
 import { buildThemeSheet } from './applyTheme'
-import { activeManifest, presetToManifest, readCache, writeCache, toPresetView } from './themeState'
+import { activeManifest, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
 
 const SOURCE_KEY = 'osmosis:theme'
 const BLEND_KEY = 'osmosis:theme-blend'
@@ -21,9 +21,20 @@ const LEGACY_PROPS = ['--accent', '--accent-wash', '--bg', '--surface', '--ink',
 const REFRESH_MS = 5 * 60_000
 const SUN_TICK_MS = 60_000
 
+const NO_STORAGE: StorageLike = { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+
+// Even reaching for window.localStorage throws when site data is blocked.
+function safeStorage(): StorageLike {
+  try {
+    return typeof localStorage === 'undefined' ? NO_STORAGE : localStorage
+  } catch {
+    return NO_STORAGE
+  }
+}
+
 function readSource(): ModeSource {
   try {
-    const s = localStorage.getItem(SOURCE_KEY)
+    const s = safeStorage().getItem(SOURCE_KEY)
     return s === 'light' || s === 'dark' || s === 'system' || s === 'sun' ? s : 'system'
   } catch {
     return 'system'
@@ -32,7 +43,7 @@ function readSource(): ModeSource {
 
 function readBlend(): boolean {
   try {
-    return localStorage.getItem(BLEND_KEY) === 'on'
+    return safeStorage().getItem(BLEND_KEY) === 'on'
   } catch {
     return false
   }
@@ -44,14 +55,14 @@ function systemDarkNow(): boolean {
 
 function safeStore(key: string, value: string) {
   try {
-    localStorage.setItem(key, value)
+    safeStorage().setItem(key, value)
   } catch {
     // private mode / full: the choice just won't persist
   }
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [cache] = useState(() => readCache(localStorage))
+  const [cache] = useState(() => readCache(safeStorage()))
   const [custom, setCustom] = useState<CustomTheme[]>(cache?.themes ?? [])
   const [activeId, setActiveIdState] = useState<string | null>(cache?.active_theme_id ?? null)
   const [location, setLocationState] = useState<Location | null>(cache?.location ?? null)
@@ -119,9 +130,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [manifest, mode, blend])
 
   // ---- server sync ----
+  const confirmedActive = useRef<string | null>(cache?.active_theme_id ?? null)
+  const activeReq = useRef(0)
+
   const refresh = useCallback(async () => {
+    const req = activeReq.current
     try {
       const p = await getThemes()
+      if (req !== activeReq.current) return // a newer choice was made while this was in flight
+      confirmedActive.current = p.active_theme_id
       setCustom(p.themes.map((t) => ({ id: t.id, name: t.name, manifest: t.manifest, updated_at: t.updated_at })))
       setActiveIdState(p.active_theme_id)
       setLocationState(p.location ?? null)
@@ -143,7 +160,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   useEffect(() => {
-    writeCache(localStorage, { themes: custom, active_theme_id: activeId, location })
+    writeCache(safeStorage(), { themes: custom, active_theme_id: activeId, location })
   }, [custom, activeId, location])
 
   // ---- actions ----
@@ -157,19 +174,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTwilightBlendState(b)
   }, [])
 
-  const setActiveId = useCallback(
-    (id: string | null) => {
-      const previous = activeId
-      setActiveIdState(id)
-      putActiveTheme(id)
-        .then(() => setError(null))
-        .catch((err) => {
-          setActiveIdState(previous)
-          setError(err instanceof Error ? err.message : String(err))
-        })
-    },
-    [activeId]
-  )
+  const setActiveId = useCallback((id: string | null) => {
+    const req = ++activeReq.current
+    setActiveIdState(id)
+    putActiveTheme(id)
+      .then(() => {
+        if (req !== activeReq.current) return
+        confirmedActive.current = id
+        setError(null)
+      })
+      .catch((err) => {
+        if (req !== activeReq.current) return // superseded by a newer choice
+        setActiveIdState(confirmedActive.current)
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }, [])
 
   const saveTheme = useCallback(async (p: ThemePreset): Promise<boolean> => {
     try {

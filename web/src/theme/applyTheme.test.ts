@@ -49,3 +49,22 @@ describe('buildThemeSheet', () => {
     expect(a.key.endsWith(':dark:1.000')).toBe(true)
   })
 })
+
+describe('sheet key covers css', () => {
+  it('differs when only css differs, matches when css is the same', () => {
+    const a = { ...osmosis, css: 'body{color:red}' }
+    const b = { ...osmosis, css: 'body{color:blue}' }
+    const c = { ...osmosis, css: 'body{color:red}' }
+    const ka = buildThemeSheet({ manifest: a, mode: 'light', blend: 0 })
+    const kb = buildThemeSheet({ manifest: b, mode: 'light', blend: 0 })
+    const kc = buildThemeSheet({ manifest: c, mode: 'light', blend: 0 })
+    expect(ka.key).not.toBe(kb.key)
+    expect(ka.css).not.toBe(kb.css)
+    expect(ka.key).toBe(kc.key)
+  })
+  it('falls back to osmosis for a manifest that cannot resolve', () => {
+    const bad = { id: 'x', name: 'x' } as never
+    const s = buildThemeSheet({ manifest: bad, mode: 'light', blend: 0 })
+    expect(s.css).toBe(buildThemeSheet({ manifest: osmosis, mode: 'light', blend: 0 }).css)
+  })
+})

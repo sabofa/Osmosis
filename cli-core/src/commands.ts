@@ -92,6 +92,15 @@ async function pickOne<T>(
   return null
 }
 
+async function switchTheme(ctx: CommandContext, query: string): Promise<void> {
+  const all = await allThemes(ctx)
+  const byId = all.themes.find((x) => x.id.toLowerCase() === query.toLowerCase())
+  const t = byId ?? (await pickOne(ctx, 'theme', query, all.themes, (x) => x.name))
+  if (!t) return
+  await ctx.api.put('/api/themes/active', { id: t.id })
+  ctx.out.text(`Theme: ${t.name}`)
+}
+
 async function findTag(ctx: CommandContext, query: string): Promise<TagRow | null> {
   const all = await tags(ctx)
   const exact = all.find((t) => t.slug.toLowerCase() === query.toLowerCase() || t.label.toLowerCase() === query.toLowerCase())
@@ -457,11 +466,15 @@ export function buildRegistry(): Registry {
         if (!(await ctx.ui.setThemeMode(name))) needsApp(ctx, 'Switching light/dark')
         return
       }
-      const all = await allThemes(ctx)
-      const t = await pickOne(ctx, 'theme', a.theme, all.themes, (x) => x.name)
-      if (!t) return
-      await ctx.api.put('/api/themes/active', { id: t.id })
-      ctx.out.text(`Theme: ${t.name}`)
+      await switchTheme(ctx, a.theme)
+    },
+  })
+  r.register({
+    path: ['theme', 'set'],
+    args: [{ name: 'theme', kind: 'theme', rest: true }],
+    describe: "Switch to a saved theme by name or exact id. Use this for a theme named like a subcommand ('list', 'show', 'mode', ...) or to pick builtin:forest",
+    async run(ctx, a) {
+      await switchTheme(ctx, a.theme)
     },
   })
   r.register({
@@ -555,6 +568,7 @@ export function buildRegistry(): Registry {
       const prov = res.provenance[mode]
       const f = (a.filter ?? '').toLowerCase()
       const names = Object.keys(tokens).filter((n) => n.toLowerCase().includes(f))
+      if (f && names.length === 0) return ctx.out.text(`no tokens match "${a.filter}"`)
       ctx.out.text(`${act.name} (${act.id}) — ${mode} tokens${f ? ` matching "${f}"` : ''}: ${names.length}`)
       for (const n of names.slice(0, 200)) {
         const p = prov[n]

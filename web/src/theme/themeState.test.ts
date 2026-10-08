@@ -68,3 +68,46 @@ describe('cache', () => {
     expect(readCache(mem())).toBeNull()
   })
 })
+
+describe('readCache drops poisoned themes', () => {
+  it('keeps good entries', () => {
+    const st = mem()
+    const good = { id: 'g', name: 'G', manifest: { ...forest, id: 'g', name: 'G' }, updated_at: 't' }
+    const bad = { id: 'b', name: 'B', manifest: { id: 'b', name: 'B' }, updated_at: 't' }
+    writeCache(st, { themes: [bad, good] as never, active_theme_id: 'g', location: null })
+    const c = readCache(st)!
+    expect(c.themes.map((t) => t.id)).toEqual(['g'])
+  })
+})
+
+describe('presetToManifest keeps authored fields', () => {
+  const rich = {
+    ...forest,
+    id: 'rich',
+    name: 'Rich',
+    dials: { ...forest.dials },
+    fonts: { display: { stack: 'inter' as const } },
+    graph: { styles: { a: 1 } },
+    ambience: { x: 1 },
+  } as typeof forest
+  it('writes only the edited light accent', () => {
+    const p = toPresetView('rich', 'Rich', rich)
+    p.tokens = { ...p.tokens, light: { ...p.tokens.light, '--accent': '#112233' } }
+    const m = presetToManifest(p)
+    expect(m.dials).toEqual(rich.dials)
+    expect(m.fonts).toEqual(rich.fonts)
+    expect(m.graph).toEqual(rich.graph)
+    expect(m.ambience).toEqual(rich.ambience)
+    expect(m.seeds.light?.accent).toBe('#112233')
+    expect(m.overrides?.light?.['color-accent']).toBe('#112233')
+    expect(Object.keys(m.overrides?.light ?? {})).toEqual([...new Set([...Object.keys(rich.overrides?.light ?? {}), 'color-accent'])])
+    expect(m.overrides?.dark).toEqual(rich.overrides?.dark)
+  })
+  it('no-change edit is deep-equal', () => {
+    expect(presetToManifest(toPresetView('rich', 'Rich', rich))).toEqual(rich)
+  })
+  it('css-only edit changes only css', () => {
+    const p = { ...toPresetView('rich', 'Rich', rich), customCss: 'a{b:c}' }
+    expect(presetToManifest(p)).toEqual({ ...rich, css: 'a{b:c}' })
+  })
+})

@@ -148,8 +148,8 @@ function App() {
         if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null)
         navigator.geolocation.getCurrentPosition(
           (p) => {
+            // The palette's post-command refresh picks up the stored location.
             resolve({ lat: p.coords.latitude, lon: p.coords.longitude })
-            setTimeout(() => void theme.refresh(), 1500)
           },
           () => resolve(null),
           { timeout: 8000 }

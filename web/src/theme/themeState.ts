@@ -1,4 +1,4 @@
-import { builtinById, DEFAULT_THEME_ID, migrate as migrateTheme, resolve, toLegacyTokens } from 'theme-core'
+import { builtinById, DEFAULT_THEME_ID, LEGACY_TOKEN_MAP, migrate as migrateTheme, resolve, toLegacyTokens } from 'theme-core'
 import type { Location, ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
 
@@ -15,12 +15,29 @@ export function toPresetView(id: string, name: string, manifest: ThemeManifest, 
   return { id, name, tokens: toLegacyTokens(resolve(manifest)), customCss: manifest.css ?? '', builtin, manifest }
 }
 
+const SEED_OF: Record<string, 'canvas' | 'surface' | 'ink' | 'accent'> = {
+  '--bg': 'canvas', '--surface': 'surface', '--ink': 'ink', '--accent': 'accent',
+}
+
+// An edit through the legacy editor writes only the tokens that changed, on
+// top of the manifest's own fields; everything else stays authored/derived.
 export function presetToManifest(p: ThemePreset): ThemeManifest {
-  if (p.manifest) {
-    const same = JSON.stringify(p.tokens) === JSON.stringify(toLegacyTokens(resolve(p.manifest)))
-    if (same && (p.manifest.css ?? '') === p.customCss) return { ...p.manifest, id: p.id, name: p.name }
+  if (!p.manifest) return migrateTheme({ id: p.id, name: p.name, tokens: p.tokens, custom_css: p.customCss })
+  const base = p.manifest
+  const out: ThemeManifest = { ...base, id: p.id, name: p.name }
+  const orig = toLegacyTokens(resolve(base))
+  for (const mode of ['light', 'dark'] as const) {
+    for (const [tok, value] of Object.entries(p.tokens[mode] ?? {})) {
+      if (orig[mode]?.[tok] === value) continue
+      const sem = LEGACY_TOKEN_MAP[tok]
+      if (!sem) continue
+      out.overrides = { ...out.overrides, [mode]: { ...out.overrides?.[mode], [sem]: value } }
+      const seed = SEED_OF[tok]
+      if (seed) out.seeds = { ...out.seeds, [mode]: { ...out.seeds?.[mode], [seed]: value } }
+    }
   }
-  return migrateTheme({ id: p.id, name: p.name, tokens: p.tokens, custom_css: p.customCss })
+  if ((base.css ?? '') !== p.customCss) out.css = p.customCss
+  return out
 }
 
 export interface StorageLike {
@@ -44,7 +61,17 @@ export function readCache(s: StorageLike): ThemeCache | null {
     const c = JSON.parse(raw)
     if (!c || !Array.isArray(c.themes)) return null
     if (!c.themes.every((t: { manifest?: unknown }) => t && typeof t.manifest === 'object' && t.manifest)) return null
-    return { themes: c.themes, active_theme_id: c.active_theme_id ?? null, location: c.location ?? null }
+    const themes = c.themes.flatMap((t: { id?: unknown; name?: unknown; manifest?: unknown; updated_at?: unknown }) => {
+      try {
+        if (!t || typeof t.manifest !== 'object' || !t.manifest) return []
+        const manifest = migrateTheme(t.manifest)
+        resolve(manifest)
+        return [{ ...t, manifest }]
+      } catch {
+        return []
+      }
+    })
+    return { themes, active_theme_id: c.active_theme_id ?? null, location: c.location ?? null }
   } catch {
     return null
   }

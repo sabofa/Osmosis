@@ -184,6 +184,23 @@ describe('theme commands', () => {
     expect(lines.at(-1)).toMatch(/^Theme: /)
   })
 
+  it('theme set switches by exact id or name', async () => {
+    const r = buildRegistry()
+    const a = fakeCtx()
+    await r.run(a.ctx, 'theme set builtin:forest')
+    expect(put(a.calls)).toEqual([{ method: 'PUT', path: '/api/themes/active', body: { id: 'builtin:forest' } }])
+    const b = fakeCtx()
+    await r.run(b.ctx, 'theme set Mine')
+    expect(put(b.calls)).toEqual([{ method: 'PUT', path: '/api/themes/active', body: { id: 'mine' } }])
+  })
+
+  it('theme tokens says when nothing matches', async () => {
+    const r = buildRegistry()
+    const { ctx, lines } = fakeCtx()
+    await r.run(ctx, 'theme tokens zzzqqq')
+    expect(lines.at(-1)).toBe('no tokens match "zzzqqq"')
+  })
+
   it('theme location validates and stores', async () => {
     const r = buildRegistry()
     const a = fakeCtx()
