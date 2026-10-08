@@ -111,3 +111,42 @@ describe('presetToManifest keeps authored fields', () => {
     expect(presetToManifest(p)).toEqual({ ...rich, css: 'a{b:c}' })
   })
 })
+
+describe('presetToManifest preserves every legacy token the editor showed', () => {
+  const keys = ['--bg', '--surface', '--ink', '--muted', '--line', '--line-strong', '--accent', '--accent-wash']
+  for (const id of ['builtin:osmosis', 'builtin:forest', 'builtin:ocean', 'builtin:ember']) {
+    const m = builtinById(id)
+    if (!m) continue
+    it(`${id}: any single-token edit round-trips all legacy tokens`, () => {
+      for (const mode of ['light', 'dark'] as const) {
+        for (const key of keys) {
+          for (const hex of ['#336699', '#ffeecc']) {
+            const p = toPresetView(id, 'T', m)
+            if (p.tokens[mode][key] === undefined) continue
+            const tokens = { light: { ...p.tokens.light }, dark: { ...p.tokens.dark } }
+            tokens[mode][key] = hex
+            const edited = { ...p, tokens }
+            const back = toLegacyTokens(resolve(presetToManifest(edited)))
+            expect(back, `${id} ${mode} ${key} ${hex}`).toEqual(tokens)
+          }
+        }
+      }
+    })
+    it(`${id}: a no-op edit leaves the manifest deep-equal`, () => {
+      expect(presetToManifest(toPresetView(m.id, m.name, m))).toEqual(m)
+    })
+  }
+})
+
+describe('readCache validates entries individually', () => {
+  const good = { id: 'g', name: 'G', manifest: { ...forest, id: 'g', name: 'G' }, updated_at: 't' }
+  it('keeps a good theme beside a null manifest', () => {
+    const raw = JSON.stringify({ themes: [{ id: 'n', name: 'N', manifest: null, updated_at: 't' }, good], active_theme_id: 'g', location: null })
+    expect(readCache(mem({ 'osmosis:theme-cache': raw }))!.themes.map((t) => t.id)).toEqual(['g'])
+  })
+  it('returns null for invalid json, null, arrays and non-array themes', () => {
+    for (const raw of ['{x', 'null', '[]', JSON.stringify({ themes: 'no' }), JSON.stringify({ themes: {} })]) {
+      expect(readCache(mem({ 'osmosis:theme-cache': raw }))).toBeNull()
+    }
+  })
+})

@@ -37,6 +37,17 @@ export function presetToManifest(p: ThemePreset): ThemeManifest {
     }
   }
   if ((base.css ?? '') !== p.customCss) out.css = p.customCss
+  // The editor showed 8 colours; those 8 are what gets saved. Pin any token a
+  // changed seed re-derived away from the value the user saw.
+  const got = toLegacyTokens(resolve(out))
+  for (const mode of ['light', 'dark'] as const) {
+    for (const [tok, value] of Object.entries(p.tokens[mode] ?? {})) {
+      if (got[mode]?.[tok] === value) continue
+      const sem = LEGACY_TOKEN_MAP[tok]
+      if (!sem) continue
+      out.overrides = { ...out.overrides, [mode]: { ...out.overrides?.[mode], [sem]: value } }
+    }
+  }
   return out
 }
 
@@ -60,7 +71,6 @@ export function readCache(s: StorageLike): ThemeCache | null {
     if (!raw) return null
     const c = JSON.parse(raw)
     if (!c || !Array.isArray(c.themes)) return null
-    if (!c.themes.every((t: { manifest?: unknown }) => t && typeof t.manifest === 'object' && t.manifest)) return null
     const themes = c.themes.flatMap((t: { id?: unknown; name?: unknown; manifest?: unknown; updated_at?: unknown }) => {
       try {
         if (!t || typeof t.manifest !== 'object' || !t.manifest) return []
@@ -71,6 +81,7 @@ export function readCache(s: StorageLike): ThemeCache | null {
         return []
       }
     })
+    if (c.themes.length > 0 && themes.length === 0) return null
     return { themes, active_theme_id: c.active_theme_id ?? null, location: c.location ?? null }
   } catch {
     return null
