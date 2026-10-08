@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_CSS_BYTES, validate } from './validate.js'
 import { BUILTINS } from './builtins/index.js'
+import { RESERVED_THEME_IDS } from './manifest.js'
 
 const base = (extra: Record<string, unknown> = {}) => ({ schema: 1, id: 'a', name: 'A', seeds: {}, dials: {}, fonts: {}, ...extra })
 
@@ -263,5 +264,15 @@ describe('validate: message hygiene', () => {
       expect(r.errors.some((e) => e.path.includes(k))).toBe(true)
     }
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+  })
+})
+
+describe('validate: reserved ids', () => {
+  it('rejects ids that collide with static theme routes', () => {
+    for (const id of RESERVED_THEME_IDS) {
+      const r = validate(base({ id }))
+      expect(r.errors.some((e) => e.path === 'id' && e.message === 'id is reserved')).toBe(true)
+    }
+    expect(RESERVED_THEME_IDS).toEqual(['active', 'location', 'validate'])
   })
 })

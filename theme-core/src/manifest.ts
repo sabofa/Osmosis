@@ -50,3 +50,5 @@ export function normalise(m: Partial<ThemeManifest> & { id: string; name: string
   return { ...m, schema: 1, seeds: m.seeds ?? {}, dials: m.dials ?? {}, fonts: m.fonts ?? {} } as ThemeManifest
 }
 export const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+/** Ids that match ID_RE but collide with static REST routes under /api/themes. */
+export const RESERVED_THEME_IDS = ['active', 'location', 'validate'] as const

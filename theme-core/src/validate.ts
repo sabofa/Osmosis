@@ -1,5 +1,5 @@
 import { contrast, fitLightness, parseColour, toHex, type Oklch } from './colour.js'
-import { FONT_STACKS, ID_RE, normalise, type Mode } from './manifest.js'
+import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type Mode } from './manifest.js'
 import { tokenByName, isValidTokenValue } from './registry/index.js'
 import { mirrorSeed, resolve } from './resolve.js'
 
@@ -49,6 +49,7 @@ function structural(raw: unknown, errors: Issue[]): void {
   if (typeof raw.id !== 'string') err('id', 'id must be a string')
   else if (raw.id.startsWith('builtin:')) err('id', 'builtin ids are reserved')
   else if (!ID_RE.test(raw.id)) err('id', 'id must match ' + ID_RE.source)
+  else if ((RESERVED_THEME_IDS as readonly string[]).includes(raw.id)) err('id', 'id is reserved')
   if (typeof raw.name !== 'string' || raw.name === '') err('name', 'name must be a non-empty string')
   for (const k of Object.keys(raw)) if (!TOP.has(k)) err(k, `unknown top-level field: ${trunc(k)}`)
   if (raw.description !== undefined && typeof raw.description !== 'string') err('description', 'description must be a string')

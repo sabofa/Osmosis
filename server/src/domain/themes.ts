@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   migrate as migrateTheme, builtinById, normalise, resolve, validate, toLegacyTokens, isBuiltinId, REMOVED_BUILTINS,
-  DEFAULT_THEME_ID, type ThemeManifest, type Report, type Location,
+  DEFAULT_THEME_ID, RESERVED_THEME_IDS, type ThemeManifest, type Report, type Location,
 } from "theme-core";
 import { DomainError } from "./errors.js";
 
@@ -199,12 +199,19 @@ function persist(db: DatabaseSync, manifest: ThemeManifest): SaveResult {
   return { theme: getTheme(db, manifest.id)!, report };
 }
 
+function assertNotReserved(id: string): void {
+  if ((RESERVED_THEME_IDS as readonly string[]).includes(id)) {
+    throw new DomainError("invalid_theme_id", `Theme id "${id}" is reserved (it collides with a theme route).`);
+  }
+}
+
 export function saveTheme(db: DatabaseSync, input: ThemeSaveInput): SaveResult {
   const id = "manifest" in input ? input.manifest?.id : input.id;
   if (typeof id === "string" && isBuiltinId(id)) throw new DomainError("builtin_theme", BUILTIN_MSG);
   if (typeof id !== "string" || !ID_RE.test(id)) {
     throw new DomainError("invalid_theme_id", `Theme id "${String(id)}" must be 1-64 lowercase letters, digits, "_" or "-".`);
   }
+  assertNotReserved(id);
   let manifest: ThemeManifest;
   try {
     manifest = "manifest" in input ? migrateTheme(normalise(input.manifest)) : fromLegacy(input);
@@ -229,6 +236,7 @@ function mergePatch(target: unknown, patch: unknown): unknown {
 // RFC 7386 merge patch onto the stored manifest, then the same validation as a save.
 export function patchTheme(db: DatabaseSync, id: string, patch: unknown): SaveResult {
   if (isBuiltinId(id)) throw new DomainError("builtin_theme", BUILTIN_MSG);
+  assertNotReserved(id);
   const cur = getTheme(db, id);
   if (!cur || cur.deleted_at) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
   if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {

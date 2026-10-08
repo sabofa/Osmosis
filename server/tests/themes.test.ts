@@ -271,3 +271,51 @@ describe("themes survive corrupt rows", () => {
     expect(getActiveThemeId(db)).toBe("builtin:forest");
   });
 });
+
+describe("reserved theme ids", () => {
+  const manifest = (id: string) => ({
+    id, name: "X", schema: 1 as const,
+    seeds: { light: { accent: "#2a5db0", canvas: "#f4f1ea", ink: "#1b1b1b" } }, dials: {}, fonts: {},
+  });
+
+  it("saveTheme and patchTheme reject ids that collide with static routes", () => {
+    const db = openTestDb();
+    for (const id of ["active", "location", "validate"]) {
+      expect(() => saveTheme(db, { manifest: manifest(id) } as never)).toThrow(/invalid_theme_id|reserved/i);
+      try { saveTheme(db, { id, name: "X", tokens }); expect.unreachable(); }
+      catch (e) { expect((e as DomainError).code).toBe("invalid_theme_id"); }
+      try { patchTheme(db, id, { name: "Y" }); expect.unreachable(); }
+      catch (e) { expect((e as DomainError).code).toBe("invalid_theme_id"); }
+    }
+    expect(listThemes(db)).toEqual([]);
+  });
+
+  it("the save_theme MCP tool returns an error for id 'active'", async () => {
+    const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+    const { registerTools } = await import("../src/mcp/tools.js");
+    const db = openTestDb();
+    const server = new McpServer({ name: "t", version: "1.0.0" });
+    registerTools(server, db, "/tmp/osmosis-test-uploads", "test-node");
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "c", version: "1.0.0" });
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    const r = await client.callTool({ name: "save_theme", arguments: { manifest: manifest("active") } });
+    expect((r as { isError?: boolean }).isError).toBe(true);
+    expect(listThemes(db)).toEqual([]);
+  });
+
+  it("PUT /api/themes/active stays the active-theme route", async () => {
+    const { buildApp } = await import("../src/http/app.js");
+    const { bootstrapNode } = await import("../src/node.js");
+    const { createSyncRuntime } = await import("../src/sync/client.js");
+    const db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
+                  uploadsDir: "/tmp", mcpAuthToken: "t", webDistDir: null };
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
+    await app.ready();
+    const res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:forest" } });
+    expect(res.json().active_theme_id).toBe("builtin:forest");
+  });
+});
