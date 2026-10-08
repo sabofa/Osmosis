@@ -147,6 +147,17 @@ Update canonical before any local node: local nodes call `/sync/*` routes
 local node ahead of canonical sees cloud tests fail as "needs a connection".
 
 
+## Theming foundation (branch `theming/foundation`)
+
+Notes for the deploy that carries the theming foundation.
+
+- **Migration 024** (`024_theme_manifest.sql`) adds `theme.manifest`, `theme.schema_version` and `theme_setting.location`. The legacy theme rows are converted to manifests by a TypeScript step that runs inside `migrate()` after the SQL loop, on the first start of the new build. Nothing to run by hand.
+- **Check the migration number first.** This branch adds 024. Before deploying, confirm canonical has no stray `024_*` from another branch (compare the `schema_migrations` table on the host with `server/migrations/`); renumber here if one landed.
+- **Build order:** `theme-core` -> `cli-core` -> `cli` -> `web` -> `server`. `deploy/install.sh` already does this (it also copies `theme-core/src` and builds it before `cli-core`). A hand build that skips `theme-core` fails to resolve the package.
+- **Wire versions:** `PROTOCOL_VERSION` 2 and `TOOLS_VERSION` 10. The theme MCP tools now speak manifests (`list_themes`, `get_theme`, `theme_tokens`, `save_theme`, `patch_theme`, `validate_theme`, `set_active_theme`, `delete_theme`), so MCP clients must re-read the tool list after the deploy. The sync payload carries the protocol version too, so update local nodes right after the canonical.
+- **Old nodes can still sync.** The legacy `tokens` / `custom_css` columns stay as a derived mirror of each manifest, so a local node that has not updated keeps reading usable themes (it sees the legacy eight tokens only).
+- **Rollback.** Deploy the previous build. The old code tolerates the new schema: it reads the legacy columns, which are still kept up to date, and ignores `manifest`, `schema_version` and `theme_setting.location`. No down-migration is needed. Themes saved on the new build after the deploy appear to the old build with their mirrored legacy tokens only.
+
 ## The command line
 
 The same commands the app runs from its `/` bar run in a terminal against any
