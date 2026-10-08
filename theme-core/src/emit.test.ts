@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALIASES, toCssVars, toLegacyTokens, toStylesheet } from './emit.js'
+import { ALIASES, UnsafeValueError, toCssVars, toLegacyTokens, toStylesheet } from './emit.js'
 import { migrate } from './migrate.js'
 import { resolve } from './resolve.js'
 import { tokenByName } from './registry/index.js'
@@ -38,5 +38,22 @@ describe('emit', () => {
   it('heat override round-trips', () => {
     const rr = resolve(migrate({ id: 'f', name: 'F', tokens: { light: { ...light, '--heat-2': '#abcdef' }, dark } }))
     expect(toCssVars(rr.light)['--heat-2']).toBe('#abcdef')
+  })
+})
+
+describe('emit guard', () => {
+  it('refuses values that could break out of a declaration', () => {
+    expect(() => toStylesheet({ 'color-x': 'red;}body{x:y' }, 'light')).toThrow(UnsafeValueError)
+    for (const bad of ['a{b', 'a}b', 'a\nb', 'a/*b', 'a*/b']) {
+      expect(() => toCssVars({ 'color-x': bad })).toThrow(UnsafeValueError)
+    }
+    try { toCssVars({ 'color-x': 'a;b' }) } catch (e) {
+      expect((e as UnsafeValueError).token).toBe('color-x')
+      expect((e as UnsafeValueError).value).toBe('a;b')
+    }
+  })
+  it('still emits a normal map, and does not guard the css argument', () => {
+    expect(toStylesheet({ 'color-x': 'oklch(0.5 0.1 20)' }, 'dark')).toContain('--color-x:oklch(0.5 0.1 20)')
+    expect(toStylesheet({ 'color-x': 'red' }, 'light', 'a{b:c;} /* ok */')).toContain('a{b:c;} /* ok */')
   })
 })
