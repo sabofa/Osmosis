@@ -131,3 +131,26 @@ describe('colour tokens', () => {
     expect(parseTokenValue('color', r.get('color-surface'))).toBe(true)
   })
 })
+
+describe('overrides flow through the semantic tier', () => {
+  const cases: [string, string, string[]][] = [
+    ['color-accent', '#123456', ['color-link', 'color-text-on-accent', 'color-focus', 'color-accent-hover', 'color-accent-wash', 'color-accent-text', 'color-selection']],
+    ['color-canvas', '#ffeedd', ['color-surface-sunken', 'color-border', 'color-border-strong', 'color-divider', 'color-good-wash', 'color-highlight-1']],
+    ['color-text', '#102030', ['color-text-muted', 'color-border', 'color-scrim', 'color-shadow']],
+    ['color-surface', '#ff00aa', ['color-surface-raised', 'color-text-muted', 'color-series-1']],
+  ]
+  for (const mode of modes) for (const [tok, val, deps] of cases) {
+    it(`${mode} ${tok}`, () => {
+      const base = make(mode), o = make(mode, {}, { [tok]: val })
+      expect(o.get(tok)).toBe(val)
+      for (const d of deps) {
+        if (tok === 'color-surface' && d === 'color-series-1') continue
+        expect(o.get(d), d).not.toBe(base.get(d))
+      }
+    })
+  }
+  it('saturation dial raises generated chroma', () => {
+    const mk = (s: number) => createResolver({ mode: 'light', defs: COLOUR_TOKENS, seeds: seedsFor('light'), dials: { ...DEFAULT_DIALS, saturation: s }, fonts: DEFAULT_FONTS })
+    expect(parseColour(mk(1).get('color-series-2')).c).toBeGreaterThan(parseColour(mk(0).get('color-series-2')).c)
+  })
+})

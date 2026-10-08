@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { def, parseTokenValue, onColour, mixTo, hex, type TokenType } from './types.js'
-import { parseColour } from '../colour.js'
+import { contrast, parseColour } from '../colour.js'
 
 describe('parseTokenValue', () => {
   const table: [TokenType, string[], string[]][] = [
     ['color', ['#fff', '#112233', '#11223344', 'oklch(0.5 0.1 200)'], ['nope', '']],
     ['length', ['0', '4px', '1.5rem', '.5em', '-2px', '50%', '60ch'], ['4', 'px', '1 px', 'auto', '']],
-    ['number', ['0', '1.2', '-3', '1e2'], ['', ' ', 'abc', 'Infinity']],
+    ['number', ['0', '1.2', '-3', '.5'], ['', ' ', 'abc', 'Infinity', '1e3', '0x10']],
     ['duration', ['120ms', '.2s', '1s'], ['120', 'ms', '1 s', '']],
-    ['shadow', ['0 1px 2px #000'], ['', '  ']],
-    ['easing', ['ease', 'cubic-bezier(.2,0,0,1)'], ['']],
+    ['shadow', ['0 1px 2px #000', 'none'], ['', '  ', 'banana']],
+    ['easing', ['ease', 'linear', 'cubic-bezier(.2,0,0,1)', 'steps(4)'], ['', 'banana']],
     ['font', ['Inter, sans-serif'], ['']],
     ['string', ['x'], ['']],
   ]
@@ -19,6 +19,25 @@ describe('parseTokenValue', () => {
       for (const v of bad) expect(parseTokenValue(type, v), `${type} ${v}`).toBe(false)
     })
   }
+})
+
+describe('parseTokenValue injection guard', () => {
+  it('rejects ; { } everywhere', () => {
+    const types: TokenType[] = ['color', 'length', 'number', 'font', 'shadow', 'duration', 'easing', 'string']
+    for (const ty of types) for (const v of ['red;}', 'a{b', '1px 1px 2px #000;', 'x}']) expect(parseTokenValue(ty, v), `${ty} ${v}`).toBe(false)
+  })
+})
+
+describe('onColour accessibility', () => {
+  it('reaches 4.5:1 for 200 accents', () => {
+    let n = 0
+    for (let h = 0; h < 360; h += 15) for (let l = 0.2; l <= 0.91; l += 0.1) for (const c of [0.05, 0.15]) {
+      const a = { l, c, h, a: 1 }
+      expect(contrast(onColour(a), a), `${l} ${c} ${h}`).toBeGreaterThanOrEqual(4.5)
+      n++
+    }
+    expect(n).toBeGreaterThanOrEqual(200)
+  })
 })
 
 describe('def', () => {

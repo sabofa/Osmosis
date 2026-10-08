@@ -53,15 +53,21 @@ export function def(
 
 export function parseTokenValue(type: TokenType, v: string): boolean {
   if (typeof v !== 'string') return false
+  if (/[;{}]/.test(v)) return false
   switch (type) {
     case 'color':
       try { parseColour(v); return true } catch { return false }
     case 'length':
       return /^-?\d*\.?\d+(px|rem|em|%|ch)$|^0$/.test(v)
     case 'number':
-      return v.trim() !== '' && Number.isFinite(Number(v))
+      return /^-?(\d+\.?\d*|\.\d+)$/.test(v)
     case 'duration':
       return /^\d*\.?\d+(ms|s)$/.test(v)
+    case 'easing':
+      return ['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out'].includes(v) ||
+        (/^(cubic-bezier|steps|linear)\(/.test(v) && v.endsWith(')'))
+    case 'shadow':
+      return v === 'none' || (v.includes('px') && v.trim() !== '')
     default:
       return v.trim() !== ''
   }
@@ -75,8 +81,12 @@ export function mixTo(a: Oklch, b: Oklch, t: number): Oklch { return mix(a, b, t
 
 const NEAR_BLACK: Oklch = { l: 0.2, c: 0.01, h: 90, a: 1 }
 const WHITE: Oklch = { l: 1, c: 0, h: 0, a: 1 }
+const BLACK: Oklch = { l: 0, c: 0, h: 0, a: 1 }
+/** Text colour for use on `bg`, guaranteed >= 4.5:1 for any opaque bg. */
 export function onColour(bg: Oklch): Oklch {
-  return contrast(NEAR_BLACK, bg) >= contrast(WHITE, bg) ? NEAR_BLACK : WHITE
+  if (contrast(NEAR_BLACK, bg) >= 4.55) return NEAR_BLACK
+  if (contrast(WHITE, bg) >= 4.55) return WHITE
+  return contrast(BLACK, bg) >= contrast(WHITE, bg) ? BLACK : WHITE
 }
 
 export function hex(c: Oklch): string { return toHex(c) }

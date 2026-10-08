@@ -32,13 +32,14 @@ const PASS_THROUGH: Record<string, Field> = {
   'color-secondary': 'secondary', 'color-good': 'good', 'color-bad': 'bad', 'color-warn': 'warn', 'color-info': 'info',
 }
 
-function buildSeeds(m: ThemeManifest, mode: Mode): { seeds: ModeSeeds; present: Set<Field> } {
+function buildSeeds(m: ThemeManifest, mode: Mode): { seeds: ModeSeeds; present: Set<Field>; mirrored: Set<Field> } {
   const other: Mode = mode === 'light' ? 'dark' : 'light'
   const mine = m.seeds[mode] ?? {}
   const theirs = m.seeds[other] ?? {}
+  const mirrored = new Set<Field>()
   const pick = (f: Field): Oklch | undefined => {
     if (mine[f] !== undefined) return parseColour(mine[f]!)
-    if (theirs[f] !== undefined) return mirrorSeed(f, parseColour(theirs[f]!), mode)
+    if (theirs[f] !== undefined) { mirrored.add(f); return mirrorSeed(f, parseColour(theirs[f]!), mode) }
     return undefined
   }
   const v: Partial<Record<Field, Oklch>> = {}
@@ -59,7 +60,7 @@ function buildSeeds(m: ThemeManifest, mode: Mode): { seeds: ModeSeeds; present: 
   }
   if (mine.series) seeds.series = mine.series.map((s) => parseColour(s))
   else if (theirs.series) seeds.series = theirs.series.map((s) => mirrorSeed('accent', parseColour(s), mode))
-  return { seeds, present }
+  return { seeds, present, mirrored }
 }
 
 function run(m: ThemeManifest, mode: Mode, dials: Dials, seeds: ModeSeeds, overrides: Record<string, string>) {
@@ -67,23 +68,26 @@ function run(m: ThemeManifest, mode: Mode, dials: Dials, seeds: ModeSeeds, overr
 }
 
 export function resolveMode(m: ThemeManifest, mode: Mode): { tokens: TokenMap; provenance: Record<string, Provenance> } {
-  const { seeds, present } = buildSeeds(m, mode)
+  const { seeds, present, mirrored } = buildSeeds(m, mode)
   const overrides = { ...m.overrides?.any, ...m.overrides?.[mode] }
   const dials: Dials = { ...DEFAULT_DIALS, ...m.dials }
   const tokens = run(m, mode, dials, seeds, overrides).all()
-  const baseline = run(m, mode, DEFAULT_DIALS, seeds, overrides).all()
+  const noDial = run(m, mode, DEFAULT_DIALS, seeds, overrides).all()
+  // the total default: the mode's default seeds, default dials, default fonts, no overrides
+  const base = run({ ...m, fonts: {} }, mode, DEFAULT_DIALS, buildSeeds({ ...m, seeds: {} }, mode).seeds, {}).all()
   const provenance: Record<string, Provenance> = {}
   for (const d of TOKENS) {
     const name = d.name
     let p: Provenance
     if (name in overrides) {
       p = { source: 'override', tier: d.tier, from: m.overrides?.[mode] && name in m.overrides[mode]! ? mode : 'any' }
-    } else {
+    } else if (tokens[name] === base[name]) {
+      p = { source: 'default', tier: d.tier }
+    } else if (tokens[name] === noDial[name]) {
       const f = PASS_THROUGH[name]
-      if (f && present.has(f)) p = { source: 'seed', tier: d.tier, from: f }
-      else if (tokens[name] !== baseline[name]) p = { source: 'dial', tier: d.tier }
-      else p = { source: 'default', tier: d.tier }
-    }
+      const direct = f !== undefined && present.has(f)
+      p = { source: 'seed', tier: d.tier, from: direct ? (mirrored.has(f!) ? `${f} (mirrored)` : f) : 'derived' }
+    } else p = { source: 'dial', tier: d.tier }
     provenance[name] = p
   }
   return { tokens, provenance }
