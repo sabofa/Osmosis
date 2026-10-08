@@ -150,7 +150,7 @@ local node ahead of canonical sees cloud tests fail as "needs a connection".
 ## The command line
 
 The same commands the app runs from its `/` bar run in a terminal against any
-node. After a build (`npm run build --workspace=cli-core --workspace=cli`, which
+node. After a build (`npm run build --workspace=theme-core --workspace=cli-core --workspace=cli`, which
 `install.sh` and `install-local.ps1` do), from the repo root:
 
 ```bash

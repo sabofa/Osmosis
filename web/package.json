@@ -16,7 +16,8 @@
     "katex": "^0.18.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "cli-core": "*"
+    "cli-core": "*",
+    "theme-core": "*"
   },
   "devDependencies": {
     "@types/katex": "^0.16.8",

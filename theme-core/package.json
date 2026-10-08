@@ -1,5 +1,5 @@
 {
-  "name": "cli-core",
+  "name": "theme-core",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -14,10 +14,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "theme-core": "*"
+    "test": "vitest run --maxWorkers=2"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

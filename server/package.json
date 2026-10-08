@@ -19,6 +19,7 @@
     "document-engine": "*",
     "fastify": "^5.2.0",
     "graph-engine": "*",
+    "theme-core": "*",
     "pdfjs-dist": "^6.2.108",
     "uuid": "^11.0.5",
     "zod": "^3.24.1"
