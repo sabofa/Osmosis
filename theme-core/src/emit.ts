@@ -19,7 +19,7 @@ export class UnsafeValueError extends Error {
   }
 }
 
-const UNSAFE_RE = /[;{}\r\n]|\/\*|\*\//
+const UNSAFE_RE = new RegExp('[;{}\\r\\n\\f' + String.fromCharCode(0x2028, 0x2029) + ']|/\\*|\\*/')
 
 export function toCssVars(map: TokenMap): Record<string, string> {
   for (const [k, v] of Object.entries(map)) if (UNSAFE_RE.test(v)) throw new UnsafeValueError(k, v)

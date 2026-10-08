@@ -57,3 +57,9 @@ describe('emit guard', () => {
     expect(toStylesheet({ 'color-x': 'red' }, 'light', 'a{b:c;} /* ok */')).toContain('a{b:c;} /* ok */')
   })
 })
+
+describe('emit guard: other line terminators', () => {
+  it.each([0x0c, 0x2028, 0x2029])('rejects code point %i', (cp) => {
+    expect(() => toCssVars({ 'color-x': 'a' + String.fromCharCode(cp) + 'b' })).toThrow(UnsafeValueError)
+  })
+})
