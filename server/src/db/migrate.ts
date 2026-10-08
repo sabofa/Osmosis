@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { convertLegacyThemes } from "./themeMigration.js";
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 
@@ -40,6 +41,8 @@ export function migrate(db: DatabaseSync): { applied: string[] } {
     }
     applied.push(file);
   }
+
+  convertLegacyThemes(db);
 
   return { applied };
 }
