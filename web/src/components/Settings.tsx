@@ -260,8 +260,9 @@ export default function Settings({
   themePresets: ReturnType<typeof useThemePresets>
 }) {
   const { theme, setTheme, resolvedMode } = themeApi
-  const { themes, activeId, setActiveId, saveTheme, deleteTheme, error: themeError } = themePresets
+  const { themes, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
+  const [dupSource, setDupSource] = useState<ThemePreset | undefined>(undefined)
   const { font: docFont, setFont: setDocFont } = useDocumentFont()
   // Which panel is showing. Remembered so a refresh lands where you were.
   const [tab, setTab] = useState<Tab>(() => {
@@ -631,12 +632,17 @@ export default function Settings({
 
         {editing !== null ? (
           <ThemeEditor
-            initial={editing === 'new' ? null : editing}
-            onCancel={() => setEditing(null)}
-            onSave={async (t) => {
-              if (await saveTheme(t)) {
-                setActiveId(t.id)
+            initial={editing === 'new' || dupSource ? null : editing}
+            builtinSource={dupSource}
+            onCancel={() => {
+              setEditing(null)
+              setDupSource(undefined)
+            }}
+            onSave={async (manifest) => {
+              if (await saveManifest(manifest)) {
+                setActiveId(manifest.id)
                 setEditing(null)
+                setDupSource(undefined)
               }
             }}
           />
@@ -666,9 +672,10 @@ export default function Settings({
                   // Built-ins are read-only; editing one means editing a copy.
                   <button
                     className="settings-btn"
-                    onClick={() =>
-                      setEditing({ id: crypto.randomUUID(), name: `${t.name} copy`, tokens: t.tokens, customCss: t.customCss })
-                    }
+                    onClick={() => {
+                      setDupSource(t)
+                      setEditing('new')
+                    }}
                   >
                     Duplicate
                   </button>

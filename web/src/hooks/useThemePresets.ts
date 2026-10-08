@@ -25,6 +25,8 @@ export function useThemePresets(_mode?: ResolvedMode) {
     activeId: c.activeId,
     setActiveId: c.setActiveId,
     saveTheme: c.saveTheme,
+    saveManifest: c.saveManifest,
+    previewManifest: c.previewManifest,
     deleteTheme: c.deleteTheme,
     error: c.error,
     refresh: c.refresh,

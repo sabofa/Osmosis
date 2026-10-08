@@ -20,6 +20,7 @@ export interface ThemeContextValue {
   setActiveId(id: string | null): void
   previewManifest(m: ThemeManifest | null): void
   saveTheme(p: ThemePreset): Promise<boolean>
+  saveManifest(m: ThemeManifest): Promise<boolean>
   deleteTheme(id: string): Promise<boolean>
   presets: ThemePreset[]
   error: string | null

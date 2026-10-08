@@ -157,3 +157,66 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* --- manifest editor additions --- */
+.theme-editor-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.theme-editor-dials {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.theme-dial-row {
+  display: grid;
+  grid-template-columns: 96px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-dial-value {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.theme-dial-num,
+.theme-font-select {
+  grid-column: 2 / 4;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px 8px;
+}
+
+.theme-editor-overrides {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.theme-editor-report {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.theme-report-error {
+  color: var(--bad);
+}
+
+.theme-report-warn {
+  color: var(--muted);
+}

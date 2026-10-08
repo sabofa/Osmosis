@@ -190,9 +190,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       })
   }, [])
 
-  const saveTheme = useCallback(async (p: ThemePreset): Promise<boolean> => {
+  const saveManifest = useCallback(async (m: ThemeManifest): Promise<boolean> => {
     try {
-      const { theme } = await putThemeManifest(presetToManifest(p))
+      const { theme } = await putThemeManifest(m)
       const row: CustomTheme = { id: theme.id, name: theme.name, manifest: theme.manifest, updated_at: theme.updated_at }
       setCustom((prev) => [...prev.filter((t) => t.id !== row.id), row])
       setPreview(null)
@@ -203,6 +203,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       return false
     }
   }, [])
+
+  const saveTheme = useCallback((p: ThemePreset): Promise<boolean> => saveManifest(presetToManifest(p)), [saveManifest])
 
   const deleteTheme = useCallback(async (id: string): Promise<boolean> => {
     try {
@@ -260,6 +262,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setActiveId,
     previewManifest,
     saveTheme,
+    saveManifest,
     deleteTheme,
     presets,
     error,
