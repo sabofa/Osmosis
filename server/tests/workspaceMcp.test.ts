@@ -460,8 +460,8 @@ describe("ws_* MCP tools", () => {
       expect(description).not.toMatch(/which name is free/);
     });
 
-    it("keeps TOOLS_VERSION where this branch introduced it", () => {
-      expect(TOOLS_VERSION).toBe(9);
+    it("pins TOOLS_VERSION (10 since the theming overhaul changed the theme tools)", () => {
+      expect(TOOLS_VERSION).toBe(10);
     });
   });
 });
