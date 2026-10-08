@@ -24,9 +24,6 @@ describe('manifest', () => {
   it('font stacks have exactly the seven keys', () => {
     expect(Object.keys(FONT_STACKS).sort()).toEqual(['inter', 'latin-modern-math', 'space-grotesk', 'stix-two', 'system-mono', 'system-sans', 'system-serif'])
   })
-  it('font stacks have exactly the seven keys', () => {
-    expect(Object.keys(FONT_STACKS).sort()).toEqual(['inter', 'latin-modern-math', 'space-grotesk', 'stix-two', 'system-mono', 'system-sans', 'system-serif'])
-  })
   it('ID_RE', () => {
     expect(ID_RE.test('forest')).toBe(true)
     expect(ID_RE.test('a_b-1')).toBe(true)

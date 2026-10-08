@@ -74,3 +74,37 @@ describe('altitudeAt', () => {
     }
   });
 });
+
+describe('sunTimes edge cases', () => {
+  it('near-pole day with noon altitude between -0.833 and 0 and no crossing is day', () => {
+    const loc = { lat: 89.99, lon: 0 };
+    const date = new Date('2026-09-23T12:00:00Z');
+    const alt = altitudeAt(date, loc);
+    expect(alt).toBeLessThan(0);
+    expect(alt).toBeGreaterThan(-0.833);
+    const t = sunTimes(date, loc);
+    expect(t.sunrise).toBeNull();
+    expect(t.sunset).toBeNull();
+    expect(t.polar).toBe('day');
+  });
+  for (const lon of [170, -170]) {
+    it(`lon ${lon}: rise before set, within 24h of solar noon`, () => {
+      const date = new Date('2026-06-21T12:00:00Z');
+      const t = sunTimes(date, { lat: 40, lon });
+      expect(t.sunrise).not.toBeNull();
+      expect(t.sunset).not.toBeNull();
+      expect(t.sunrise!.getTime()).toBeLessThan(t.sunset!.getTime());
+      const noon = Date.UTC(2026, 5, 21, 12) - (lon / 15) * 3600000;
+      for (const d of [t.sunrise!, t.sunset!]) expect(Math.abs(d.getTime() - noon)).toBeLessThanOrEqual(12 * 3600000);
+    });
+  }
+  it('southern hemisphere: December day longer than June day', () => {
+    const loc = { lat: -34, lon: 151 };
+    const len = (day: string) => {
+      const t = sunTimes(new Date(`${day}T12:00:00Z`), loc);
+      expect(t.sunrise!.getTime()).toBeLessThan(t.sunset!.getTime());
+      return t.sunset!.getTime() - t.sunrise!.getTime();
+    };
+    expect(len('2026-12-21')).toBeGreaterThan(len('2026-06-21'));
+  });
+});

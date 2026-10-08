@@ -39,7 +39,8 @@ function oklabToLinear(L: number, a: number, b: number): Rgb {
 
 function fromOklab(L: number, a: number, b: number, alpha: number): Oklch {
   const c = Math.hypot(a, b)
-  return { l: L, c, h: c < 1e-9 ? 0 : norm360((Math.atan2(b, a) * 180) / Math.PI), a: alpha }
+  if (c < 1e-6) return { l: L, c: 0, h: 0, a: alpha }
+  return { l: L, c, h: norm360((Math.atan2(b, a) * 180) / Math.PI), a: alpha }
 }
 
 function toOklab(c: Oklch): [number, number, number] {
@@ -84,7 +85,8 @@ export function parseColour(s: string): Oklch {
   if (!m) throw new Error(`parseColour: cannot parse "${s}"`)
   const num = (t: string, pctScale: number): number => {
     const pct = t.endsWith('%')
-    const v = Number(pct ? t.slice(0, -1) : t.replace(/deg$/i, ''))
+    const body = pct ? t.slice(0, -1) : t.replace(/deg$/i, '')
+    const v = body.trim() === '' ? NaN : Number(body)
     if (!Number.isFinite(v)) throw new Error(`parseColour: cannot parse "${s}"`)
     return pct ? (v / 100) * pctScale : v
   }
@@ -100,12 +102,13 @@ export function hexToOklch(h: string): Oklch {
 }
 
 export function toHex(c: Oklch): string {
+  const alphaSuffix = c.a < 1 ? Math.round(clamp01(c.a) * 255).toString(16).padStart(2, '0') : ''
+  if (c.l <= 0) return `#000000${alphaSuffix}`
+  if (c.l >= 1) return `#ffffff${alphaSuffix}`
   const rgb = gamutLinear(c)
   const byte = (v: number): string =>
     Math.round(clamp01(fromLinear(v)) * 255).toString(16).padStart(2, '0')
-  let out = `#${byte(rgb[0])}${byte(rgb[1])}${byte(rgb[2])}`
-  if (c.a < 1) out += Math.round(clamp01(c.a) * 255).toString(16).padStart(2, '0')
-  return out
+  return `#${byte(rgb[0])}${byte(rgb[1])}${byte(rgb[2])}${alphaSuffix}`
 }
 
 export function mix(a: Oklch, b: Oklch, t: number): Oklch {

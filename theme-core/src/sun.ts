@@ -60,7 +60,13 @@ export function altitudeAt(date: Date, loc: Location): number {
   return Math.asin(Math.max(-1, Math.min(1, s))) * DEG;
 }
 
-/** Sunrise/sunset and civil dawn/dusk for the solar day containing `date`. */
+/**
+ * Sunrise/sunset and civil dawn/dusk for the solar day containing `date`.
+ * The window is anchored to the UTC day of `date`: it spans local solar noon of that UTC date
+ * +/- 12h, so at |lon| > ~150 "today" is the date whose UTC day matches the local solar day.
+ * Polar test: with no sunrise/sunset in the window, the sun is 'day' if its noon altitude is
+ * above the -0.833 degree horizon (the same level used for crossings), else 'night'.
+ */
 export function sunTimes(date: Date, loc: Location): SunTimes {
   const noon =
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12) -
@@ -95,7 +101,7 @@ export function sunTimes(date: Date, loc: Location): SunTimes {
       sunset: null,
       civilDawn: null,
       civilDusk: null,
-      polar: altitudeAt(new Date(noon), loc) > 0 ? 'day' : 'night',
+      polar: altitudeAt(new Date(noon), loc) > -0.833 ? 'day' : 'night',
     };
   }
   const toDate = (v: number | null): Date | null => (v === null ? null : new Date(v));
