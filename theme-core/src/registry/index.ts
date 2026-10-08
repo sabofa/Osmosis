@@ -1,5 +1,6 @@
 import type { TokenDef } from './types.js'
 import { COLOUR_TOKENS } from './colour.js'
+import { DOC_TOKENS, GRAPH_TOKENS } from './engines.js'
 import { ELEVATION_TOKENS, MOTION_TOKENS, SHAPE_TOKENS, SPACE_TOKENS, SURFACE_TOKENS, TYPE_TOKENS } from './layout.js'
 
 export * from './types.js'
@@ -14,6 +15,8 @@ export const TOKENS: readonly TokenDef[] = [
   ...ELEVATION_TOKENS,
   ...MOTION_TOKENS,
   ...SURFACE_TOKENS,
+  ...GRAPH_TOKENS,
+  ...DOC_TOKENS,
 ]
 
 export const tokenByName: ReadonlyMap<string, TokenDef> = (() => {
