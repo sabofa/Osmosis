@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { COLOUR_TOKENS } from './colour.js'
 import { DOC_TOKENS, FEATURE_KINDS, GRAPH_TOKENS } from './engines.js'
+import { TYPE_TOKENS } from './layout.js'
 import { createResolver } from './resolver.js'
 import { parseTokenValue } from './types.js'
 import { parseColour } from '../colour.js'
@@ -10,7 +11,7 @@ const ALL = [...GRAPH_TOKENS, ...DOC_TOKENS]
 function make(mode: Mode = 'light', overrides?: Record<string, string>) {
   const s = DEFAULT_SEEDS[mode]
   return createResolver({
-    mode, defs: [...COLOUR_TOKENS, ...ALL], dials: DEFAULT_DIALS, fonts: DEFAULT_FONTS, overrides,
+    mode, defs: [...COLOUR_TOKENS, ...TYPE_TOKENS, ...ALL], dials: DEFAULT_DIALS, fonts: DEFAULT_FONTS, overrides,
     seeds: { canvas: parseColour(s.canvas), surface: parseColour(s.surface), ink: parseColour(s.ink), accent: parseColour(s.accent) },
   })
 }

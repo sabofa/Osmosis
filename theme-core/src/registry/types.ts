@@ -31,6 +31,10 @@ export interface TokenDef {
   meaning: string
   /** When set, a value must be one of these (enum-like string tokens). */
   allowed?: readonly string[]
+  /** When set, a value must match this grammar (and pass the injection guard). */
+  pattern?: RegExp
+  /** Short human description of the pattern, used in error messages. */
+  patternHint?: string
   derive(ctx: DeriveCtx): string
 }
 
@@ -40,7 +44,7 @@ export function def(
   type: TokenType,
   meaning: string,
   derive: (ctx: DeriveCtx) => string,
-  opts: { tier?: Tier; modeDependent?: boolean; allowed?: readonly string[] } = {},
+  opts: { tier?: Tier; modeDependent?: boolean; allowed?: readonly string[]; pattern?: RegExp; patternHint?: string } = {},
 ): TokenDef {
   const d: TokenDef = {
     name, group, type, meaning, derive,
@@ -48,6 +52,8 @@ export function def(
     modeDependent: opts.modeDependent ?? type === 'color',
   }
   if (opts.allowed) d.allowed = opts.allowed
+  if (opts.pattern) d.pattern = opts.pattern
+  if (opts.patternHint) d.patternHint = opts.patternHint
   return d
 }
 
@@ -73,7 +79,10 @@ export function parseTokenValue(type: TokenType, v: string): boolean {
   }
 }
 
+const INJECTION_RE = /[;{}\r\n\f]|\/\*|\*\//
+
 export function isValidTokenValue(d: TokenDef, v: string): boolean {
+  if (d.pattern) return typeof v === 'string' && !INJECTION_RE.test(v) && d.pattern.test(v)
   return d.allowed ? d.allowed.includes(v) : parseTokenValue(d.type, v)
 }
 

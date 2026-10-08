@@ -76,7 +76,7 @@ export function toDocumentTokens(r: ResolvedTheme, manifest: ThemeManifest, mode
       tableHeader: tok(m, 'doc-table-header'), tableStripe: tok(m, 'doc-table-stripe'), accent: tok(m, 'color-accent'),
     },
     fonts: {
-      body: tok(m, 'font-body'), display: tok(m, 'font-display'), mono: tok(m, 'font-mono'), math: tok(m, 'font-math'),
+      body: tok(m, 'doc-font-body'), display: tok(m, 'font-display'), mono: tok(m, 'font-mono'), math: tok(m, 'font-math'),
       cjk: "'Noto Sans JP', 'Noto Serif JP', system-ui, sans-serif",
     },
     scale: {

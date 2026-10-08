@@ -50,5 +50,7 @@ export const DOC_TOKENS: TokenDef[] = [
   ]),
   ...build('document', 'length', false, [
     ['doc-measure', 'Maximum line length of document text, for comfortable reading.', () => '68ch'],
+  ]),  ...build('document', 'font', false, [
+    ['doc-font-body', "Font stack for document body text. Defaults to the UI body font; the document engine's reading themes override it without touching UI fonts.", alias('font-body')],
   ]),
 ]

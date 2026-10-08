@@ -41,7 +41,7 @@ export function createResolver(i: ResolverInput): {
     const d = byName.get(name)
     if (!d) throw new ResolveError(name, `override names unknown token "${name}"`)
     if (!isValidTokenValue(d, v)) {
-      throw new ResolveError(name, `override for "${name}" is not a valid ${d.type}${d.allowed ? ` (one of ${d.allowed.join(', ')})` : ''}: ${JSON.stringify(v)}`)
+      throw new ResolveError(name, `override for "${name}" is not a valid ${d.type}${d.allowed ? ` (one of ${d.allowed.join(', ')})` : ''}${d.pattern ? ` (does not match the allowed format${d.patternHint ? `: ${d.patternHint}` : ''})` : ''}: ${JSON.stringify(v)}`)
     }
     overridden.add(name)
   }

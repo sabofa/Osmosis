@@ -109,6 +109,7 @@ Every token is a CSS custom property `--<name>`. There are two tiers: semantic t
 | `border-width` | semantic | length | same | Default border thickness; 0 when the theme wants borderless surfaces. | `1px` | `1px` |
 | `border-width-strong` | semantic | length | same | Thickness of emphasised borders and focus outlines. | `2px` | `2px` |
 | `corner-shape` | semantic | string | same | Corner geometry of panels and controls: round, squircle, bevel, notch, scoop or square. Consumed by components (var(--name) or component tokens); does not restyle anything by itself. Allowed: round | squircle | bevel | notch | scoop | square | `round` | `round` |
+| `icon-sheet` | semantic | string | same | Which icon sheet the frame draws icons from: 'default' (the built-in line icons), 'builtin:<slug>' (a sprite shipped with the app) or 'asset:<hash>' (an uploaded sprite). The frame falls back to the default line icon for any icon name the sheet lacks. | `default` | `default` |
 
 ## space
 
@@ -188,6 +189,7 @@ Every token is a CSS custom property `--<name>`. There are two tiers: semantic t
 | `doc-table-header` | semantic | color | both | Background of table header rows in documents. | `#e4e7db` | `#1e1d16` |
 | `doc-table-stripe` | semantic | color | both | Background of alternate (striped) table rows in documents. | `#f7f7f7` | `#25231a` |
 | `doc-measure` | semantic | length | same | Maximum line length of document text, for comfortable reading. | `68ch` | `68ch` |
+| `doc-font-body` | semantic | font | same | Font stack for document body text. Defaults to the UI body font; the document engine's reading themes override it without touching UI fonts. | `'Inter', system-ui, sans-serif` | `'Inter', system-ui, sans-serif` |
 
 ## component
 
