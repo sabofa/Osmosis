@@ -1,3 +1,4 @@
+/* Static fallback = builtin:osmosis for the first paint before JS; the ThemeProvider's <style id="osmosis-theme"> overrides these. */
 :root {
   --bg: #eef1e5;
   --surface: #ffffff;

@@ -1,55 +1,22 @@
-import { useCallback, useEffect, useState } from 'react'
+import type { Mode, ModeSource } from 'theme-core'
+import { useThemeContext } from '../theme/context'
 
-export type ThemeChoice = 'light' | 'dark' | 'system'
-export type ResolvedMode = 'light' | 'dark'
+export type ThemeChoice = ModeSource
+export type ResolvedMode = Mode
 
-const STORAGE_KEY = 'osmosis:theme'
-
-function applyTheme(choice: ThemeChoice) {
-  const root = document.documentElement
-  if (choice === 'system') {
-    root.removeAttribute('data-theme')
-  } else {
-    root.setAttribute('data-theme', choice)
-  }
-}
-
-function readStored(): ThemeChoice {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
-}
-
-function systemPrefersDark(): boolean {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-}
-
-// Persisted light/dark/system choice. 'system' clears the data-theme attribute
-// so the prefers-color-scheme rules in index.css take over. Also resolves the
-// *actual* light/dark mode (following the OS when the choice is 'system') so
-// theme presets know which of their light/dark token sets to apply.
+// Thin view of the ThemeProvider: the persisted light/dark/system/sun choice
+// and the mode it resolves to right now (plus the twilight blend).
 export function useTheme() {
-  const [theme, setThemeState] = useState<ThemeChoice>(() => readStored())
-  const [resolvedMode, setResolvedMode] = useState<ResolvedMode>(() =>
-    (theme === 'system' ? systemPrefersDark() : theme === 'dark') ? 'dark' : 'light'
-  )
-
-  useEffect(() => {
-    applyTheme(theme)
-    if (theme !== 'system') {
-      setResolvedMode(theme)
-      return
-    }
-    setResolvedMode(systemPrefersDark() ? 'dark' : 'light')
-    const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = () => setResolvedMode(mql.matches ? 'dark' : 'light')
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
-  }, [theme])
-
-  const setTheme = useCallback((choice: ThemeChoice) => {
-    localStorage.setItem(STORAGE_KEY, choice)
-    setThemeState(choice)
-  }, [])
-
-  return { theme, setTheme, resolvedMode }
+  const c = useThemeContext()
+  return {
+    theme: c.source,
+    setTheme: c.setSource,
+    resolvedMode: c.mode,
+    blend: c.blend,
+    twilightBlend: c.twilightBlend,
+    setTwilightBlend: c.setTwilightBlend,
+    location: c.location,
+    state: c.state,
+    refresh: c.refresh,
+  }
 }

@@ -51,6 +51,7 @@ const THEME_OPTIONS: { value: ThemeChoice; label: string; icon: React.ReactNode 
   { value: 'light', label: 'Light', icon: <SunIcon size={14} /> },
   { value: 'dark', label: 'Dark', icon: <MoonIcon size={14} /> },
   { value: 'system', label: 'System', icon: <MonitorIcon size={14} /> },
+  { value: 'sun', label: 'Sun', icon: <SunIcon size={14} /> },
 ]
 
 function NumberSetting({
@@ -572,7 +573,7 @@ export default function Settings({
           <div className="settings-row-main">
             <div>
               <div className="settings-row-title">Mode</div>
-              <div className="settings-row-sub">system follows your OS setting</div>
+              <div className="settings-row-sub">system follows your OS setting; sun follows sunrise and sunset</div>
             </div>
           </div>
           <div className="theme-toggle">

@@ -45,7 +45,7 @@ describe('preset view', () => {
   })
   it('migrates a legacy-edited preset back to the same values', () => {
     const p = toPresetView('x', 'X', osmosis)
-    const tokens = { light: { ...p.tokens.light, '--accent': '#112233' }, dark: p.tokens.dark }
+    const tokens: Record<'light' | 'dark', Record<string, string>> = { light: { ...p.tokens.light, '--accent': '#112233' }, dark: p.tokens.dark }
     const m = presetToManifest({ ...p, tokens })
     expect(m.id).toBe('x')
     const back = toLegacyTokens(resolve(m))

@@ -1,3 +1,4 @@
+import type { Location, Report, ThemeManifest } from 'theme-core'
 import type { SessionStreamData, StreamContext } from './sessionStream'
 export interface NodeStatus {
   online: boolean
@@ -708,6 +709,9 @@ export function timeAgo(iso: string | null): string {
 
 // ---- Themes (synced through the node; canonical is authoritative) ----
 
+export type ThemeReport = Report
+export type ThemeLocation = Location
+
 export interface ThemeTokens {
   light: Record<string, string>
   dark: Record<string, string>
@@ -716,9 +720,17 @@ export interface ThemeTokens {
 export interface ThemeRecord {
   id: string
   name: string
+  manifest: ThemeManifest
   tokens: ThemeTokens
   custom_css: string
   updated_at: string
+}
+
+export interface ThemesPayload {
+  themes: ThemeRecord[]
+  builtins: Array<{ id: string; name: string; manifest: ThemeManifest }>
+  active_theme_id: string | null
+  location: ThemeLocation | null
 }
 
 async function themeError(res: Response, fallback: string): Promise<Error> {
@@ -727,7 +739,7 @@ async function themeError(res: Response, fallback: string): Promise<Error> {
   return new Error(body.message || body.error || fallback)
 }
 
-export async function getThemes(): Promise<{ themes: ThemeRecord[]; active_theme_id: string | null }> {
+export async function getThemes(): Promise<ThemesPayload> {
   const res = await fetch('/api/themes')
   if (!res.ok) throw new Error(`GET /api/themes ${res.status}`)
   return res.json()
@@ -740,6 +752,46 @@ export async function putTheme(theme: { id: string; name: string; tokens: ThemeT
     body: JSON.stringify({ name: theme.name, tokens: theme.tokens, custom_css: theme.custom_css }),
   })
   if (!res.ok) throw await themeError(res, `PUT /api/themes/${theme.id} ${res.status}`)
+  return res.json()
+}
+
+export async function putThemeManifest(manifest: ThemeManifest): Promise<{ theme: ThemeRecord; report: ThemeReport }> {
+  const res = await fetch(`/api/themes/${encodeURIComponent(manifest.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest }),
+  })
+  if (!res.ok) throw await themeError(res, `PUT /api/themes/${manifest.id} ${res.status}`)
+  return res.json()
+}
+
+export async function patchThemeApi(id: string, patch: Record<string, unknown>): Promise<{ theme: ThemeRecord; report: ThemeReport }> {
+  const res = await fetch(`/api/themes/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) throw await themeError(res, `PATCH /api/themes/${id} ${res.status}`)
+  return res.json()
+}
+
+export async function validateThemeApi(manifest: ThemeManifest): Promise<ThemeReport> {
+  const res = await fetch('/api/themes/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest }),
+  })
+  if (!res.ok) throw await themeError(res, `POST /api/themes/validate ${res.status}`)
+  return res.json()
+}
+
+export async function putThemeLocation(loc: ThemeLocation | null): Promise<{ location: ThemeLocation | null }> {
+  const res = await fetch('/api/themes/location', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(loc),
+  })
+  if (!res.ok) throw await themeError(res, `PUT /api/themes/location ${res.status}`)
   return res.json()
 }
 

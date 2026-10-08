@@ -37,7 +37,7 @@ function App() {
   // Applied here, not inside Settings, so the theme/preset stay in effect
   // on every screen — not just while Settings itself happens to be mounted.
   const theme = useTheme()
-  const themePresets = useThemePresets(theme.resolvedMode)
+  const themePresets = useThemePresets()
   // What the command line asked a page to show (a tag, a test, a subject).
   const [navParams, setNavParams] = useState<NavigateParams>({})
   const [pageHistory, setPageHistory] = useState<Page[]>([])
@@ -133,29 +133,29 @@ function App() {
       navigate('settings')
       return true
     },
-    // T13 replaces these four with the theme provider.
     setThemeMode: async (mode) => {
-      if (mode === 'sun') return false
       theme.setTheme(mode)
       return true
     },
-    setThemeBlend: async () => false,
+    setThemeBlend: async (on) => {
+      theme.setTwilightBlend(on)
+      return true
+    },
+    // Coordinates only: the command stores them (PUT /api/themes/location),
+    // and the provider picks them up on its next refresh.
     requestLocation: () =>
       new Promise((resolve) => {
         if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null)
         navigator.geolocation.getCurrentPosition(
-          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          (p) => {
+            resolve({ lat: p.coords.latitude, lon: p.coords.longitude })
+            setTimeout(() => void theme.refresh(), 1500)
+          },
           () => resolve(null),
           { timeout: 8000 }
         )
       }),
-    themeState: async () => ({
-      source: theme.theme,
-      effectiveSource: theme.theme,
-      mode: theme.resolvedMode,
-      blend: theme.resolvedMode === 'dark' ? 1 : 0,
-      twilightBlend: false,
-    }),
+    themeState: async () => theme.state(),
     // clear / restart are the palette's own; reload is the page's.
     shell: async (action) => {
       if (action !== 'reload') return false
