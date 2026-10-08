@@ -33,14 +33,14 @@ describe("theme routes on canonical", () => {
 
     res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "ocean" } });
     expect(res.json().active_theme_id).toBe("ocean");
-    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:slate" } });
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:paper" } });
     expect(res.statusCode).toBe(200);
     res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "missing" } });
     expect(res.statusCode).toBe(404);
 
     res = await app.inject({ method: "GET", url: "/api/themes" });
     expect(res.json().themes.map((t: { id: string }) => t.id)).toEqual(["ocean"]);
-    expect(res.json().active_theme_id).toBe("builtin:slate");
+    expect(res.json().active_theme_id).toBe("builtin:paper");
 
     res = await app.inject({ method: "PUT", url: "/api/themes/builtin:x", payload: { name: "x", tokens } });
     expect(res.statusCode).toBe(400);

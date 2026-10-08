@@ -1161,7 +1161,7 @@ export function registerTools(
       try {
         const saved = saveTheme(db, { id, name, tokens: { light: tokens.light ?? {}, dark: tokens.dark ?? {} }, custom_css });
         if (make_active) setActiveTheme(db, id);
-        return ok({ ...saved, active: make_active === true || getActiveThemeId(db) === id });
+        return ok({ ...saved.theme, active: make_active === true || getActiveThemeId(db) === id });
       } catch (err) {
         return fail(err);
       }

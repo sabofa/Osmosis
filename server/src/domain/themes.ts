@@ -1,11 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  migrate as migrateTheme, normalise, resolve, validate, toLegacyTokens, isBuiltinId, REMOVED_BUILTINS,
+  DEFAULT_THEME_ID, type ThemeManifest, type Report, type Location,
+} from "theme-core";
 import { DomainError } from "./errors.js";
 
 // ----------------------------------------------------------------------------
-// Themes: named palettes (one token set per light/dark mode plus optional
-// custom CSS) that follow the user across devices. See migration 016. The
-// app also ships built-in themes with "builtin:" ids that never hit this
-// table; only the active-theme pointer can reference them.
+// Themes are stored as manifests (theme-core, migration 024). The legacy
+// tokens/custom_css columns are a derived mirror so older readers keep
+// working. Built-in themes ("builtin:*") never hit this table; only the
+// active-theme pointer can reference them.
 // ----------------------------------------------------------------------------
 
 export interface ThemeTokens {
@@ -16,22 +20,36 @@ export interface ThemeTokens {
 export interface ThemeRow {
   id: string;
   name: string;
+  manifest: ThemeManifest;
   tokens: ThemeTokens;
   custom_css: string;
   updated_at: string;
   deleted_at: string | null;
 }
 
-export interface ThemeInput {
+export interface SaveResult {
+  theme: ThemeRow;
+  report: Report;
+}
+
+export type ThemeSaveInput =
+  | { manifest: ThemeManifest }
+  | { id: string; name: string; tokens: ThemeTokens; custom_css?: string };
+
+export interface PulledTheme {
   id: string;
   name: string;
-  tokens: ThemeTokens;
+  manifest?: ThemeManifest;
+  tokens?: ThemeTokens;
   custom_css?: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 interface RawRow {
   id: string;
   name: string;
+  manifest: string | null;
   tokens: string;
   custom_css: string;
   updated_at: string;
@@ -39,22 +57,72 @@ interface RawRow {
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const MAX_CSS = 64 * 1024;
+const BUILTIN_MSG = "Built-in themes are read-only; duplicate one to edit it.";
 
-function parse(r: RawRow): ThemeRow {
-  return { ...r, tokens: JSON.parse(r.tokens) as ThemeTokens };
+function toRow(r: RawRow, manifest: ThemeManifest): ThemeRow {
+  return {
+    id: r.id,
+    name: r.name,
+    manifest,
+    tokens: JSON.parse(r.tokens) as ThemeTokens,
+    custom_css: r.custom_css ?? "",
+    updated_at: r.updated_at,
+    deleted_at: r.deleted_at,
+  };
 }
 
-function validate(input: ThemeInput): void {
-  if (!ID_RE.test(input.id)) {
-    throw new DomainError("invalid_theme_id", `Theme id "${input.id}" must be 1-64 lowercase letters, digits, "_" or "-".`);
+function mirror(m: ThemeManifest): { tokens: string; custom_css: string } {
+  return { tokens: JSON.stringify(toLegacyTokens(resolve(m))), custom_css: m.css ?? "" };
+}
+
+function mapRemoved(id: string | null): string | null {
+  return id !== null && (REMOVED_BUILTINS as readonly string[]).includes(id) ? DEFAULT_THEME_ID : id;
+}
+
+// Live themes only — tombstones are for sync, not for the app. Rows whose
+// legacy conversion failed (manifest NULL) are omitted.
+export function listThemes(db: DatabaseSync): ThemeRow[] {
+  return (
+    db
+      .prepare("SELECT * FROM theme WHERE deleted_at IS NULL AND manifest IS NOT NULL ORDER BY name COLLATE NOCASE, id")
+      .all() as unknown as RawRow[]
+  ).map((r) => toRow(r, JSON.parse(r.manifest as string) as ThemeManifest));
+}
+
+// Everything, tombstones included, for the pull protocol.
+export function listThemesForSync(db: DatabaseSync): ThemeRow[] {
+  const out: ThemeRow[] = [];
+  for (const r of db.prepare("SELECT * FROM theme ORDER BY id").all() as unknown as RawRow[]) {
+    if (r.manifest) {
+      out.push(toRow(r, JSON.parse(r.manifest) as ThemeManifest));
+      continue;
+    }
+    try {
+      out.push(toRow(r, migrateTheme({ id: r.id, name: r.name, tokens: JSON.parse(r.tokens), custom_css: r.custom_css })));
+    } catch {
+      // unconvertible legacy row: skip
+    }
   }
-  if (input.id.startsWith("builtin")) {
-    throw new DomainError("builtin_theme", "Built-in themes are read-only; duplicate one to edit it.");
-  }
-  if (!input.name || input.name.trim() === "") throw new DomainError("invalid_name", "A theme needs a name.");
+  return out;
+}
+
+export function getTheme(db: DatabaseSync, id: string): ThemeRow | null {
+  const r = db.prepare("SELECT * FROM theme WHERE id = ?").get(id) as unknown as RawRow | undefined;
+  if (!r || !r.manifest) return null;
+  return toRow(r, JSON.parse(r.manifest) as ThemeManifest);
+}
+
+export function getActiveThemeId(db: DatabaseSync): string | null {
+  const row = db.prepare("SELECT active_theme_id FROM theme_setting WHERE id = 1").get() as
+    | { active_theme_id: string | null }
+    | undefined;
+  return mapRemoved(row?.active_theme_id ?? null);
+}
+
+function fromLegacy(input: { id: string; name: string; tokens: ThemeTokens; custom_css?: string }): ThemeManifest {
   const t = input.tokens;
-  if (!t || typeof t !== "object" || typeof t.light !== "object" || typeof t.dark !== "object") {
+  if (!input.name || input.name.trim() === "") throw new DomainError("invalid_name", "A theme needs a name.");
+  if (!t || typeof t !== "object" || !t.light || !t.dark || typeof t.light !== "object" || typeof t.dark !== "object") {
     throw new DomainError("invalid_tokens", "tokens must be { light: {...}, dark: {...} }.");
   }
   for (const mode of ["light", "dark"] as const) {
@@ -64,40 +132,71 @@ function validate(input: ThemeInput): void {
       }
     }
   }
-  if ((input.custom_css ?? "").length > MAX_CSS) {
-    throw new DomainError("css_too_large", `custom_css is capped at ${MAX_CSS} characters.`);
+  return migrateTheme({ id: input.id, name: input.name.trim(), tokens: t, custom_css: input.custom_css ?? "" });
+}
+
+function persist(db: DatabaseSync, manifest: ThemeManifest): SaveResult {
+  const report = validate(manifest);
+  if (!report.ok) {
+    throw new DomainError("invalid_theme", report.errors[0]?.message ?? "Invalid theme.", report);
   }
-}
-
-// Live themes only — tombstones are for sync, not for the app.
-export function listThemes(db: DatabaseSync): ThemeRow[] {
-  return (
-    db.prepare("SELECT * FROM theme WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE, id").all() as unknown as RawRow[]
-  ).map(parse);
-}
-
-// Everything, tombstones included, for the pull protocol.
-export function listThemesForSync(db: DatabaseSync): ThemeRow[] {
-  return (db.prepare("SELECT * FROM theme ORDER BY id").all() as unknown as RawRow[]).map(parse);
-}
-
-export function getActiveThemeId(db: DatabaseSync): string | null {
-  const row = db.prepare("SELECT active_theme_id FROM theme_setting WHERE id = 1").get() as
-    | { active_theme_id: string | null }
-    | undefined;
-  return row?.active_theme_id ?? null;
-}
-
-export function saveTheme(db: DatabaseSync, input: ThemeInput): ThemeRow {
-  validate(input);
+  const m = mirror(manifest);
   db.prepare(
-    `INSERT INTO theme (id, name, tokens, custom_css, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, datetime('now'), NULL)
+    `INSERT INTO theme (id, name, tokens, custom_css, manifest, schema_version, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, 1, datetime('now'), NULL)
      ON CONFLICT (id) DO UPDATE SET
        name = excluded.name, tokens = excluded.tokens, custom_css = excluded.custom_css,
+       manifest = excluded.manifest, schema_version = 1,
        updated_at = datetime('now'), deleted_at = NULL`
-  ).run(input.id, input.name.trim(), JSON.stringify(input.tokens), input.custom_css ?? "");
-  return parse(db.prepare("SELECT * FROM theme WHERE id = ?").get(input.id) as unknown as RawRow);
+  ).run(manifest.id, manifest.name, m.tokens, m.custom_css, JSON.stringify(manifest));
+  return { theme: getTheme(db, manifest.id)!, report };
+}
+
+export function saveTheme(db: DatabaseSync, input: ThemeSaveInput): SaveResult {
+  const id = "manifest" in input ? input.manifest?.id : input.id;
+  if (typeof id === "string" && isBuiltinId(id)) throw new DomainError("builtin_theme", BUILTIN_MSG);
+  if (typeof id !== "string" || !ID_RE.test(id)) {
+    throw new DomainError("invalid_theme_id", `Theme id "${String(id)}" must be 1-64 lowercase letters, digits, "_" or "-".`);
+  }
+  let manifest: ThemeManifest;
+  try {
+    manifest = "manifest" in input ? migrateTheme(normalise(input.manifest)) : fromLegacy(input);
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    throw new DomainError("invalid_theme", (err as Error).message);
+  }
+  return persist(db, manifest);
+}
+
+function mergePatch(target: unknown, patch: unknown): unknown {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
+  const base: Record<string, unknown> =
+    target !== null && typeof target === "object" && !Array.isArray(target) ? { ...(target as Record<string, unknown>) } : {};
+  for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+    if (v === null) delete base[k];
+    else base[k] = mergePatch(base[k], v);
+  }
+  return base;
+}
+
+// RFC 7386 merge patch onto the stored manifest, then the same validation as a save.
+export function patchTheme(db: DatabaseSync, id: string, patch: unknown): SaveResult {
+  if (isBuiltinId(id)) throw new DomainError("builtin_theme", BUILTIN_MSG);
+  const cur = getTheme(db, id);
+  if (!cur || cur.deleted_at) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new DomainError("invalid_theme", "A theme patch must be an object.");
+  }
+  const merged = mergePatch(cur.manifest, patch) as Record<string, unknown>;
+  merged.id = cur.id;
+  merged.schema = 1;
+  let manifest: ThemeManifest;
+  try {
+    manifest = migrateTheme(normalise(merged as unknown as ThemeManifest));
+  } catch (err) {
+    throw new DomainError("invalid_theme", (err as Error).message);
+  }
+  return persist(db, manifest);
 }
 
 export function deleteTheme(db: DatabaseSync, id: string): { id: string } {
@@ -121,45 +220,92 @@ export function deleteTheme(db: DatabaseSync, id: string): { id: string } {
 }
 
 export function setActiveTheme(db: DatabaseSync, id: string | null): { active_theme_id: string | null } {
-  if (id !== null && !id.startsWith("builtin:")) {
-    const row = db.prepare("SELECT id FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
-    if (!row) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
+  const stored = mapRemoved(id);
+  if (stored !== null && !stored.startsWith("builtin:")) {
+    const row = db.prepare("SELECT id FROM theme WHERE id = ? AND deleted_at IS NULL").get(stored);
+    if (!row) throw new DomainError("not_found", `Theme "${stored}" does not exist.`);
   }
-  db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(id);
-  return { active_theme_id: id };
+  db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(stored);
+  return { active_theme_id: stored };
+}
+
+export function getLocation(db: DatabaseSync): Location | null {
+  const row = db.prepare("SELECT location FROM theme_setting WHERE id = 1").get() as { location: string | null } | undefined;
+  if (!row?.location) return null;
+  try {
+    return JSON.parse(row.location) as Location;
+  } catch {
+    return null;
+  }
+}
+
+export function setLocation(db: DatabaseSync, loc: Location | null): { location: Location | null } {
+  let stored: Location | null = null;
+  if (loc !== null) {
+    const ok =
+      typeof loc === "object" &&
+      typeof loc.lat === "number" && Number.isFinite(loc.lat) && loc.lat >= -90 && loc.lat <= 90 &&
+      typeof loc.lon === "number" && Number.isFinite(loc.lon) && loc.lon >= -180 && loc.lon <= 180 &&
+      (loc.label === undefined || typeof loc.label === "string");
+    if (!ok) throw new DomainError("invalid_location", "location needs a finite lat in -90..90 and lon in -180..180.");
+    stored = loc.label === undefined ? { lat: loc.lat, lon: loc.lon } : { lat: loc.lat, lon: loc.lon, label: loc.label };
+  }
+  db.prepare("UPDATE theme_setting SET location = ?, updated_at = datetime('now') WHERE id = 1").run(
+    stored === null ? null : JSON.stringify(stored)
+  );
+  return { location: stored };
 }
 
 // Pull-side apply: canonical's rows win whenever they are at least as new as
 // ours (a local node never edits without canonical accepting first, so a
 // strictly-newer local row only exists during the few seconds between a
-// forwarded write and its echo). The active pointer is copied as-is.
+// forwarded write and its echo). A pulled manifest is trusted as-is (no
+// validate); a legacy-only row from an older canonical is migrated.
 export function applyThemesFromPull(
   db: DatabaseSync,
-  themes: ThemeRow[],
-  activeThemeId: string | null | undefined
+  themes: PulledTheme[],
+  active: string | null | undefined,
+  location?: Location | null
 ): number {
   const upsert = db.prepare(
-    `INSERT INTO theme (id, name, tokens, custom_css, updated_at, deleted_at)
-     VALUES (@id, @name, @tokens, @custom_css, @updated_at, @deleted_at)
+    `INSERT INTO theme (id, name, tokens, custom_css, manifest, schema_version, updated_at, deleted_at)
+     VALUES (@id, @name, @tokens, @custom_css, @manifest, 1, @updated_at, @deleted_at)
      ON CONFLICT (id) DO UPDATE SET
        name = excluded.name, tokens = excluded.tokens, custom_css = excluded.custom_css,
+       manifest = excluded.manifest, schema_version = 1,
        updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
      WHERE excluded.updated_at >= theme.updated_at`
   );
   let applied = 0;
   for (const t of themes) {
+    let manifest: ThemeManifest;
+    try {
+      manifest = t.manifest
+        ? t.manifest
+        : migrateTheme({ id: t.id, name: t.name, tokens: t.tokens, custom_css: t.custom_css ?? "" });
+    } catch (err) {
+      console.warn(`pulled theme "${t.id}" skipped: ${(err as Error).message}`);
+      continue;
+    }
+    const m = mirror(manifest);
     const r = upsert.run({
       id: t.id,
-      name: t.name,
-      tokens: JSON.stringify(t.tokens),
-      custom_css: t.custom_css ?? "",
+      name: manifest.name,
+      tokens: m.tokens,
+      custom_css: m.custom_css,
+      manifest: JSON.stringify(manifest),
       updated_at: t.updated_at,
       deleted_at: t.deleted_at ?? null,
     });
     applied += Number(r.changes);
   }
-  if (activeThemeId !== undefined) {
-    db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(activeThemeId);
+  if (active !== undefined) {
+    db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(mapRemoved(active));
+  }
+  if (location !== undefined) {
+    db.prepare("UPDATE theme_setting SET location = ?, updated_at = datetime('now') WHERE id = 1").run(
+      location === null ? null : JSON.stringify(location)
+    );
   }
   return applied;
 }

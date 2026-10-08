@@ -38,14 +38,14 @@ import { addSlice, removeSlice } from "../domain/sync.js";
 import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw, forwardToCanonical, ForwardError } from "../sync/client.js";
 import {
   listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
-  type ThemeRow, type ThemeInput, type ThemeTokens,
+  type ThemeRow, type ThemeTokens,
 } from "../domain/themes.js";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
   if (err instanceof DomainError) {
     const status = err.code === "not_found" ? 404 : 400;
-    reply.code(status).send({ error: err.code, message: err.message });
+    reply.code(status).send({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) });
     return;
   }
   throw err;
@@ -942,7 +942,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.put("/api/themes/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = (request.body ?? {}) as { name?: string; tokens?: ThemeTokens; custom_css?: string };
-    const input: ThemeInput = { id, name: body.name ?? "", tokens: body.tokens as ThemeTokens, custom_css: body.custom_css };
+    const input = { id, name: body.name ?? "", tokens: body.tokens as ThemeTokens, custom_css: body.custom_css };
     try {
       return await forwardOrLocal(
         reply,
@@ -954,7 +954,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
             applyThemesFromPull(db, [fromCanonical], undefined);
             return fromCanonical;
           }
-          return saveTheme(db, input);
+          return saveTheme(db, input).theme;
         }
       );
     } catch (err) {

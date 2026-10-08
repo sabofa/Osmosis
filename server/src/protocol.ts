@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // Bumped whenever a tool is added, removed, or changes shape. The tutor's
 // health check compares it against what it was written for and names a
