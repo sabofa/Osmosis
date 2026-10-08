@@ -37,15 +37,16 @@ import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
 import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw, forwardToCanonical, ForwardError } from "../sync/client.js";
 import {
-  listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
-  type ThemeRow, type ThemeTokens,
+  listThemes, listThemesForSync, saveTheme, patchTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
+  getLocation, setLocation, type ThemeRow, type ThemeTokens, type SaveResult,
 } from "../domain/themes.js";
+import { BUILTINS, validate as validateTheme, type Location, type ThemeManifest } from "theme-core";
 import type { AppContext } from "./app.js";
 
 function sendDomainError(reply: { code: (n: number) => { send: (body: unknown) => void } }, err: unknown) {
   if (err instanceof DomainError) {
     const status = err.code === "not_found" ? 404 : 400;
-    reply.code(status).send({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) });
+    reply.code(status).send({ error: err.code, reason: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) });
     return;
   }
   throw err;
@@ -922,7 +923,37 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
     return local(fromCanonical);
   }
 
-  app.get("/api/themes", async () => ({ themes: listThemes(db), active_theme_id: getActiveThemeId(db) }));
+  app.get("/api/themes", async () => ({
+    themes: listThemes(db).map(({ id, name, manifest, tokens, custom_css, updated_at }) => ({ id, name, manifest, tokens, custom_css, updated_at })),
+    builtins: BUILTINS.map((m) => ({ id: m.id, name: m.name, manifest: m })),
+    active_theme_id: getActiveThemeId(db),
+    location: getLocation(db),
+  }));
+
+  // Pure: stores nothing, never forwarded, works offline.
+  app.post("/api/themes/validate", async (request, reply) => {
+    const body = request.body as { manifest?: unknown } | null | undefined;
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      reply.code(400).send({ error: "invalid_body", reason: "invalid_body", message: "Body must be a JSON object with a manifest." });
+      return;
+    }
+    return validateTheme(body.manifest as ThemeManifest);
+  });
+
+  app.put("/api/themes/location", async (request, reply) => {
+    const body = request.body as Location | null | undefined;
+    const loc = body === undefined ? null : body;
+    try {
+      return await forwardOrLocal(
+        reply,
+        () => forwardToCanonical<{ location: Location | null }>(ctx, "PUT", "/api/themes/location", loc),
+        (fromCanonical) => setLocation(db, fromCanonical ? fromCanonical.location : loc)
+      );
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
 
   app.put("/api/themes/active", async (request, reply) => {
     const body = (request.body ?? {}) as { id?: string | null };
@@ -941,20 +972,46 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.put("/api/themes/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { name?: string; tokens?: ThemeTokens; custom_css?: string };
-    const input = { id, name: body.name ?? "", tokens: body.tokens as ThemeTokens, custom_css: body.custom_css };
+    const body = (request.body ?? {}) as { manifest?: ThemeManifest; name?: string; tokens?: ThemeTokens; custom_css?: string };
     try {
+      if (body.manifest !== undefined && body.manifest?.id !== id) {
+        throw new DomainError("id_mismatch", `The path id "${id}" must equal manifest.id.`);
+      }
+      const input = body.manifest !== undefined
+        ? { manifest: body.manifest }
+        : { id, name: body.name ?? "", tokens: body.tokens as ThemeTokens, custom_css: body.custom_css };
       return await forwardOrLocal(
         reply,
-        () => forwardToCanonical<ThemeRow>(ctx, "PUT", `/api/themes/${encodeURIComponent(id)}`, body),
+        () => forwardToCanonical<SaveResult>(ctx, "PUT", `/api/themes/${encodeURIComponent(id)}`, body),
         (fromCanonical) => {
           if (fromCanonical) {
             // Mirror canonical's row verbatim (its clock, not ours) so the
             // next pull's newer-wins compare treats it as already applied.
-            applyThemesFromPull(db, [fromCanonical], undefined);
+            applyThemesFromPull(db, [fromCanonical.theme], undefined);
             return fromCanonical;
           }
-          return saveTheme(db, input).theme;
+          return saveTheme(db, input);
+        }
+      );
+    } catch (err) {
+      sendDomainError(reply, err);
+      return;
+    }
+  });
+
+  app.patch("/api/themes/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const patch = request.body;
+    try {
+      return await forwardOrLocal(
+        reply,
+        () => forwardToCanonical<SaveResult>(ctx, "PATCH", `/api/themes/${encodeURIComponent(id)}`, patch),
+        (fromCanonical) => {
+          if (fromCanonical) {
+            applyThemesFromPull(db, [fromCanonical.theme], undefined);
+            return fromCanonical;
+          }
+          return patchTheme(db, id, patch);
         }
       );
     } catch (err) {

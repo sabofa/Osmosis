@@ -287,7 +287,7 @@ export class ForwardError extends Error {
 
 export async function forwardToCanonical<T>(
   ctx: AppContext,
-  method: "PUT" | "DELETE",
+  method: "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown
 ): Promise<T> {
