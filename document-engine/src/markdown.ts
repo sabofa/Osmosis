@@ -10,17 +10,36 @@
 // can't land exactly on a stripped character (an acceptable, rare edge
 // case), but everything else resolves exactly like plain text did.
 
-export type BlockType = 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'oli'
+export type BlockType = 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'oli' | 'math' | 'fence'
 
 export interface MdBlock {
   type: BlockType
+  // For `math` and `fence` blocks this is the raw range of the BODY only
+  // (between the delimiter lines); the delimiters themselves are omitted.
   start: number
   end: number
+  // Fence info string (e.g. "graph", "python"); '' when absent. Fences only.
+  info?: string
 }
 
 const HEADING_RE = /^(#{1,3})\s+/
 const OLI_RE = /^\d+\.\s+/
 const LI_RE = /^[-*]\s+/
+const FENCE_OPEN_RE = /^\s*```(.*)$/
+const FENCE_CLOSE_RE = /^\s*```\s*$/
+const MATH_FENCE_RE = /^\s*\$\$/
+
+function isBlockStart(t: string): boolean {
+  return HEADING_RE.test(t) || OLI_RE.test(t) || LI_RE.test(t) || FENCE_OPEN_RE.test(t) || MATH_FENCE_RE.test(t)
+}
+
+function hasMathClose(lines: { text: string }[], from: number): boolean {
+  const t = lines[from].text
+  const open = t.indexOf('$$')
+  if (t.lastIndexOf('$$') > open + 1) return true
+  for (let j = from + 1; j < lines.length; j++) if (lines[j].text.trim() === '$$') return true
+  return false
+}
 
 export function parseBlocks(text: string): MdBlock[] {
   const lines: { start: number; end: number; text: string }[] = []
@@ -41,6 +60,47 @@ export function parseBlocks(text: string): MdBlock[] {
     if (line.text.trim().length === 0) {
       i++
       continue
+    }
+    const fence = FENCE_OPEN_RE.exec(line.text)
+    if (fence) {
+      let j = i + 1
+      while (j < lines.length && !FENCE_CLOSE_RE.test(lines[j].text)) j++
+      // j is the closing line, or lines.length when unterminated.
+      const bodyLines = j - (i + 1)
+      let start: number
+      let end: number
+      if (bodyLines > 0) {
+        start = lines[i + 1].start
+        end = lines[j - 1].end
+      } else {
+        start = end = Math.min(line.end + 1, len)
+      }
+      blocks.push({ type: 'fence', start, end, info: fence[1].trim() })
+      i = j + 1
+      continue
+    }
+    if (MATH_FENCE_RE.test(line.text)) {
+      const open = line.text.indexOf('$$')
+      const rest = line.text.slice(open + 2)
+      const sameClose = rest.lastIndexOf('$$')
+      if (sameClose > 0) {
+        blocks.push({ type: 'math', start: line.start + open + 2, end: line.start + open + 2 + sameClose })
+        i++
+        continue
+      }
+      let j = i + 1
+      while (j < lines.length && lines[j].text.trim() !== '$$') j++
+      if (j < lines.length) {
+        // Body starts right after the opening `$$` (same line) when it has
+        // content, else at the next line.
+        const firstLineBody = rest.trim().length > 0
+        const start = firstLineBody ? line.start + open + 2 : j > i + 1 ? lines[i + 1].start : lines[j].start
+        const end = j > i + 1 ? lines[j - 1].end : firstLineBody ? line.end : start
+        blocks.push({ type: 'math', start, end: Math.max(start, end) })
+        i = j + 1
+        continue
+      }
+      // No closing `$$`: fall through and treat as ordinary text.
     }
     const heading = HEADING_RE.exec(line.text)
     if (heading) {
@@ -69,7 +129,7 @@ export function parseBlocks(text: string): MdBlock[] {
     while (i < lines.length) {
       const next = lines[i]
       if (next.text.trim().length === 0) break
-      if (HEADING_RE.test(next.text) || OLI_RE.test(next.text) || LI_RE.test(next.text)) break
+      if (isBlockStart(next.text) && !(MATH_FENCE_RE.test(next.text) && !hasMathClose(lines, i))) break
       pEnd = next.end
       i++
     }
@@ -84,6 +144,29 @@ export interface InlineRun {
   bold?: boolean
   italic?: boolean
   code?: boolean
+  // Inline math: start/end cover the TeX source between the dollars.
+  math?: boolean
+}
+
+// Pandoc-style inline math: the opening `$` is followed by a non-space, the
+// closing `$` is preceded by a non-space and not followed by a digit. Only
+// the FIRST unescaped `$` after the opener is a candidate, so "$5 and $x$"
+// reads as a price followed by math rather than one big span.
+function findMathClose(text: string, open: number): number {
+  const first = text[open + 1]
+  if (first === undefined || first === '$' || /\s/.test(first)) return -1
+  for (let j = open + 1; j < text.length; j++) {
+    if (text[j] === '\\') {
+      j++
+      continue
+    }
+    if (text[j] === '$') {
+      if (/\s/.test(text[j - 1])) return -1
+      if (/\d/.test(text[j + 1] ?? '')) return -1
+      return j
+    }
+  }
+  return -1
 }
 
 // Scans one block's text left-to-right for `code`, **bold**, and
@@ -104,6 +187,16 @@ export function parseInline(text: string, offset: number): InlineRun[] {
       if (close !== -1 && close > i + 1) {
         flushPlain(i)
         runs.push({ start: offset + i + 1, end: offset + close, code: true })
+        i = close + 1
+        plainStart = i
+        continue
+      }
+    }
+    if (text[i] === '$') {
+      const close = findMathClose(text, i)
+      if (close !== -1) {
+        flushPlain(i)
+        runs.push({ start: offset + i + 1, end: offset + close, math: true })
         i = close + 1
         plainStart = i
         continue
@@ -143,6 +236,8 @@ export const BLOCK_TAG: Record<BlockType, string> = {
   p: 'p',
   li: 'div',
   oli: 'div',
+  math: 'div',
+  fence: 'pre',
 }
 
 export const BLOCK_CLASS: Record<BlockType, string> = {
@@ -152,4 +247,6 @@ export const BLOCK_CLASS: Record<BlockType, string> = {
   p: '',
   li: 'document-viewer-md-li',
   oli: 'document-viewer-md-li',
+  math: 'document-viewer-math-block',
+  fence: 'document-viewer-md-fence',
 }
