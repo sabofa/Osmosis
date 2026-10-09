@@ -94,6 +94,22 @@ function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | 
   return { root, entries }
 }
 
+// Perf A/B switches for hands-on testing, read from the page's query string
+// (e.g. :5181/?live=0): `live=0` redraws the figure on every frame instead of
+// moving it with a CSS transform and committing now and then; `wc=0` leaves out
+// the `will-change` hint on the moved layer; `overscan=<fraction>` replaces
+// OVERSCAN. Absent: the defaults. To be removed once the lag is settled.
+const queryFlag = (name: string): string | null => {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').get(name)
+  } catch {
+    return null
+  }
+}
+const LIVE = queryFlag('live') !== '0'
+const WILL_CHANGE = queryFlag('wc') !== '0'
+const OVERSCAN_USED = LIVE ? (Number.isFinite(Number(queryFlag('overscan') ?? NaN)) && queryFlag('overscan') !== null ? Number(queryFlag('overscan')) : OVERSCAN) : 0
+
 const NONE: readonly string[] = []
 
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
@@ -147,8 +163,8 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     (visible: Rect, zoom: number) => {
       const root = containerRef.current?.querySelector('svg')
       if (!root) return
-      const window = growRect(visible, OVERSCAN)
-      applyOverscan(root, OVERSCAN)
+      const window = growRect(visible, OVERSCAN_USED)
+      applyOverscan(root, OVERSCAN_USED)
       applySvgViewBox(root, window)
       root.style.transform = ''
       root.style.willChange = ''
@@ -162,7 +178,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   const paintLive = useCallback((transform: LiveTransform) => {
     const root = containerRef.current?.querySelector('svg')
     if (!root) return
-    root.style.willChange = 'transform'
+    root.style.willChange = WILL_CHANGE ? 'transform' : ''
     root.style.transform = liveTransformValue(transform)
     liveScale.current = transform.scale
   }, [])
@@ -172,11 +188,11 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     start,
     items,
     onApply: (camera, visible, pxPerUnit) => {
-      applied.current = { zoom: camera.zoom, visible, window: growRect(visible, OVERSCAN), pxPerUnit }
+      applied.current = { zoom: camera.zoom, visible, window: growRect(visible, OVERSCAN_USED), pxPerUnit }
       paint(visible, camera.zoom)
     },
-    onLive: paintLive,
-    overscan: OVERSCAN,
+    onLive: LIVE ? paintLive : undefined,
+    overscan: OVERSCAN_USED,
     onHover: setHovered,
     onSelect: (ids) => {
       setSelected(ids)
