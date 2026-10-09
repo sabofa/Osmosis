@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, normalizeProps, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, resolveLayers } from './viewerModel'
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
@@ -29,39 +29,6 @@ describe('interaction matrix', () => {
   it('edit shows the stub message and keeps selection (read-only content)', () => {
     expect(capabilities('edit', 'full').selection).toBe(true)
     expect(EDIT_STUB_MESSAGE).toBe('Editing arrives in a later release')
-  })
-})
-
-describe('normalizeProps', () => {
-  it('defaults to annotate/full with no layers', () => {
-    expect(normalizeProps({})).toEqual({ interaction: 'annotate', chrome: 'full', layers: [] })
-  })
-  it('passes new props through', () => {
-    const layers = [{ markers: [{ id: 'a', offset: 1 }] }]
-    expect(normalizeProps({ interaction: 'view', chrome: 'embedded', layers })).toEqual({ interaction: 'view', chrome: 'embedded', layers })
-  })
-  it('maps legacy full', () => {
-    const jump = vi.fn()
-    const n = normalizeProps({ mode: 'full', anchor: { start: 1, end: 2 }, markers: [{ id: 'q', offset: 3 }], onJumpToQuestion: jump })
-    expect(n.interaction).toBe('annotate')
-    expect(n.chrome).toBe('full')
-    expect(n.layers).toHaveLength(1)
-    expect(n.layers[0].anchor).toEqual({ start: 1, end: 2 })
-    expect(n.layers[0].markers).toEqual([{ id: 'q', offset: 3 }])
-    n.layers[0].onMarkerActivate?.('q')
-    expect(jump).toHaveBeenCalledWith('q')
-  })
-  it('maps legacy simple', () => {
-    const n = normalizeProps({ mode: 'simple' })
-    expect(n.interaction).toBe('view')
-    expect(n.chrome).toBe('embedded')
-    expect(n.layers).toEqual([])
-  })
-  it('appends legacy layer after explicit layers', () => {
-    const own = { markers: [{ id: 'x', offset: 0 }] }
-    const n = normalizeProps({ layers: [own], markers: [{ id: 'y', offset: 5 }] })
-    expect(n.layers).toHaveLength(2)
-    expect(n.layers[0]).toBe(own)
   })
 })
 

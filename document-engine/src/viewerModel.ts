@@ -1,4 +1,4 @@
-import type { Chrome, DocumentAnchor, DocumentLayer, DocumentMarker, Interaction } from './types'
+import type { Chrome, DocumentAnchor, DocumentLayer, Interaction } from './types'
 
 export interface Capabilities {
   selection: boolean
@@ -21,42 +21,6 @@ export function capabilities(interaction: Interaction, chrome: Chrome): Capabili
     settingsMenu: full,
     layers: full,
     editStub: interaction === 'edit',
-  }
-}
-
-// TODO(T3.6): remove adapter. Legacy props from before layers existed; the
-// legacy marker callback is a question-jump and is only named here.
-export interface LegacyViewerProps {
-  mode?: 'full' | 'simple'
-  anchor?: DocumentAnchor | null
-  markers?: DocumentMarker[]
-  onJumpToQuestion?: (questionId: string) => void
-}
-
-export interface NormalizableProps extends LegacyViewerProps {
-  interaction?: Interaction
-  chrome?: Chrome
-  layers?: DocumentLayer[]
-}
-
-export interface NormalizedProps {
-  interaction: Interaction
-  chrome: Chrome
-  layers: DocumentLayer[]
-}
-
-// TODO(T3.6): remove adapter — keep only the interaction/chrome/layers part.
-export function normalizeProps(p: NormalizableProps): NormalizedProps {
-  const legacyInteraction: Interaction | undefined = p.mode === 'simple' ? 'view' : p.mode === 'full' ? 'annotate' : undefined
-  const legacyChrome: Chrome | undefined = p.mode === 'simple' ? 'embedded' : p.mode === 'full' ? 'full' : undefined
-  const layers = [...(p.layers ?? [])]
-  if (p.anchor || (p.markers && p.markers.length > 0) || p.onJumpToQuestion) {
-    layers.push({ anchor: p.anchor ?? null, markers: p.markers ?? [], onMarkerActivate: p.onJumpToQuestion })
-  }
-  return {
-    interaction: p.interaction ?? legacyInteraction ?? 'annotate',
-    chrome: p.chrome ?? legacyChrome ?? 'full',
-    layers,
   }
 }
 

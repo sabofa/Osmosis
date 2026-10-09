@@ -100,10 +100,19 @@ export default function DocumentPanel({
           <DocumentViewer
             asset={engineAsset}
             theme={resolvedMode}
-            mode={mode}
-            anchor={hasAnchor ? { start: anchorStart!, end: anchorEnd!, label: anchorLabel } : null}
-            markers={markers.map((m) => ({ id: m.id, offset: m.document_marker_offset }))}
-            onJumpToQuestion={onJumpToQuestion}
+            interaction={mode === 'simple' ? 'view' : 'annotate'}
+            chrome={mode === 'simple' ? 'embedded' : 'full'}
+            layers={
+              mode === 'simple'
+                ? []
+                : [
+                    {
+                      anchor: hasAnchor ? { start: anchorStart!, end: anchorEnd!, label: anchorLabel } : null,
+                      markers: markers.map((m) => ({ id: m.id, offset: m.document_marker_offset })),
+                      onMarkerActivate: onJumpToQuestion,
+                    },
+                  ]
+            }
             onErrors={handleErrors}
           />
         </Suspense>

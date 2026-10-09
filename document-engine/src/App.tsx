@@ -290,7 +290,7 @@ export default function App() {
         </section>
 
         <section className="app-section">
-          <div className="app-section-label">onJumpToQuestion log</div>
+          <div className="app-section-label">marker activation log</div>
           <ul className="app-jump-log">
             {jumpLog.length === 0 && <li className="app-hint">Click a marker to see it fire.</li>}
             {jumpLog.map((entry, i) => (
@@ -304,12 +304,17 @@ export default function App() {
         <DocumentViewer
           asset={engineAsset}
           theme={theme}
-          mode={mode}
-          anchor={anchor}
-          markers={markers}
+          interaction={mode === 'simple' ? 'view' : 'annotate'}
+          chrome={mode === 'simple' ? 'embedded' : 'full'}
+          layers={[
+            {
+              anchor,
+              markers,
+              onMarkerActivate: (id) => setJumpLog((prev) => [`${new Date().toLocaleTimeString()} → ${id}`, ...prev].slice(0, 20)),
+            },
+          ]}
           highlights={highlights}
           onHighlightsChange={setHighlights}
-          onJumpToQuestion={(id) => setJumpLog((prev) => [`${new Date().toLocaleTimeString()} → ${id}`, ...prev].slice(0, 20))}
           onErrors={(errors) => errors.length > 0 && console.warn('document render errors', errors)}
         />
       </main>

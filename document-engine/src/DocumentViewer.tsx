@@ -8,7 +8,7 @@ import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -19,7 +19,7 @@ import type {
 } from './types'
 import './DocumentViewer.css'
 
-export interface DocumentViewerProps extends LegacyViewerProps {
+export interface DocumentViewerProps {
   asset: DocumentViewerAsset
   // Initializes the viewer's theme; the built-in settings menu can then
   // flip it locally without the host having to re-render this prop (same
@@ -76,9 +76,7 @@ let instanceCounter = 0
 export default function DocumentViewer(props: DocumentViewerProps) {
   const { asset, theme, highlights, onHighlightsChange, onErrors, gated, gatedLabel } = props
   const gate = gatedPresentation(gated, gatedLabel)
-  // TODO(T3.6): remove adapter — normalizeProps also maps the legacy
-  // mode/anchor/markers/onJumpToQuestion props onto interaction/chrome/layers.
-  const { interaction, chrome, layers } = normalizeProps(props)
+  const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome)
   const embedded = chrome === 'embedded'
   const resolved = useMemo(
