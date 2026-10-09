@@ -460,8 +460,8 @@ describe("ws_* MCP tools", () => {
       expect(description).not.toMatch(/which name is free/);
     });
 
-    it("pins TOOLS_VERSION (10 since the theming overhaul changed the theme tools)", () => {
-      expect(TOOLS_VERSION).toBe(10);
+    it("pins TOOLS_VERSION (11 since the theming overhaul changed the theme tools)", () => {
+      expect(TOOLS_VERSION).toBe(11);
     });
   });
 });

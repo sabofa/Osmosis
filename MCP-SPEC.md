@@ -399,23 +399,33 @@ tool for them, and no way to read an old version's body.
 hooks §7, uploads §8) and `01-shell.md` for the shell around it, with Ben's
 answers in `ruling-2026-10-03-shell-answers.md` beside them.
 
-### 3.7 Themes (tools_version 10)
+### 3.7 Themes (tools_version 11)
 
 A theme is a **manifest** (theme-core): a handful of seeds, dials, named font
 stacks and optional token overrides. Everything else is derived. `tools_version`
-is 10: the theme tools below replace the old `{id, name, tokens, custom_css}`
-`save_theme`; `builtin:slate` and `builtin:plum` are gone (they resolve to
-`builtin:osmosis`).
+is 11: themes gained a **layer** and a second active slot. (10 introduced the
+manifest-based theme tools, which replaced the old `{id, name, tokens, custom_css}`
+`save_theme`; `builtin:slate` and `builtin:plum` are gone and resolve to
+`builtin:osmosis`.)
+
+A manifest carries an optional `layer`: `workspace` (shape, type, space,
+material and component tokens, plus chrome css), `ambience` (colour, graph,
+ambience, sound), or absent for a full theme that sets both. Two pointers are
+active at once: the ambience slot (`active_theme_id`) and the workspace slot
+(`active_workspace_theme_id`, `null` = no workspace theme). A workspace-layer
+theme cannot go in the ambience slot, nor an ambience-layer theme in the
+workspace slot (`wrong_layer`); full themes fit either. Every token has an
+`owner` (`workspace`, `ambience` or `shared`).
 
 | Tool | Args | Result |
 |---|---|---|
-| `list_themes` | none | `{ themes: [{id, name, description, builtin, active}], active_theme_id }`. The four built-ins (`builtin:osmosis`, `builtin:forest`, `builtin:ocean`, `builtin:ember`) plus saved custom themes. |
-| `get_theme` | `id`, `resolved?` | `{ id, name, builtin, manifest, resolved?: { light, dark, provenance } }`. `resolved` maps token name to final value per mode; `provenance` says whether each came from default, seed, dial or override. Unknown id: `not_found`. |
-| `theme_tokens` | `group?` | `{ count, tokens: [{name, tier, group, type, modeDependent, allowed?, meaning}] }`, the author's reference. An unknown group fails and lists the valid ones. |
+| `list_themes` | `layer?` (`workspace`\|`ambience`) | `{ themes: [{id, name, description, builtin, layer, active, slot}], active_theme_id, active_workspace_theme_id }`. The built-ins (`builtin:osmosis`, `builtin:forest`, `builtin:ocean`, `builtin:ember`, `builtin:ws-clean`) plus saved custom themes. `layer` is `null` for a full theme; `slot` lists the pointers the theme is active in (`[]`, `["ambience"]`, `["workspace"]` or both). With `layer`, only themes usable in that slot (that layer or full). |
+| `get_theme` | `id`, `resolved?` | `{ id, name, builtin, layer, manifest, resolved?: { light, dark, provenance } }`. `resolved` maps token name to final value per mode; `provenance` says whether each came from default, seed, dial or override. Unknown id: `not_found`. |
+| `theme_tokens` | `group?`, `layer?` (`workspace`\|`ambience`) | `{ count, tokens: [{name, owner, tier, group, type, modeDependent, allowed?, meaning}] }`, the author's reference. `owner` is `workspace`, `ambience` or `shared`; `layer: workspace` returns workspace + shared tokens, `layer: ambience` ambience + shared. An unknown group fails and lists the valid ones. |
 | `save_theme` | `manifest`, `make_active?` | `{ saved: true, theme: {id, name, updated_at}, report, active }`. |
 | `patch_theme` | `id`, `patch`, `make_active?` | Same as `save_theme`. JSON merge patch onto the stored manifest (`null` deletes a key). Built-ins and unknown ids fail. |
-| `validate_theme` | `manifest` | The `report` alone; stores nothing. |
-| `set_active_theme` | `id` (`null` = `builtin:osmosis`) | `{ active_theme_id }`. |
+| `validate_theme` | `manifest` | The `report` alone; stores nothing. Includes layer-ownership warnings (a layered theme setting tokens or dials its layer does not own). |
+| `set_active_theme` | `id`, `layer?` (`ambience` default \| `workspace`) | `{ active_theme_id, active_workspace_theme_id }`. Ambience: `null` = `builtin:osmosis`. Workspace: `null` clears the slot. A theme of the other layer fails `wrong_layer`. |
 | `delete_theme` | `id` | `{ id }`. Built-ins fail `builtin_theme`. |
 
 `report` is `{ ok, errors: [{path, message, suggestion?}], warnings: [...] }`.

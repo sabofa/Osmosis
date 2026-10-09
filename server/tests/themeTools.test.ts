@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { TOKENS } from "theme-core";
 import { registerTools } from "../src/mcp/tools.js";
 import { openTestDb } from "./helpers.js";
-import { getActiveThemeId, listThemes } from "../src/domain/themes.js";
+import { getActiveThemeId, getActiveWorkspaceThemeId, listThemes } from "../src/domain/themes.js";
 
 async function connectedClient(db: ReturnType<typeof openTestDb>): Promise<Client> {
   const server = new McpServer({ name: "osmosis-test", version: "1.0.0" });
@@ -153,5 +153,84 @@ describe("theme MCP tools", () => {
     r = await callTool(client, "delete_theme", { id: "midnight" });
     expect(r.isError).toBe(false);
     expect(listThemes(db)).toEqual([]);
+  });
+
+  it("list_themes carries layer and slot, filters by layer, and reports the workspace pointer", async () => {
+    const db = openTestDb();
+    const client = await connectedClient(db);
+    await callTool(client, "save_theme", { manifest: { ...small("amb"), layer: "ambience" } });
+    await callTool(client, "set_active_theme", { id: "builtin:ws-clean", layer: "workspace" });
+    await callTool(client, "set_active_theme", { id: "amb" });
+    let r = await callTool(client, "list_themes", {});
+    expect(r.body.active_workspace_theme_id).toBe("builtin:ws-clean");
+    const by = (id: string) => r.body.themes.find((t: any) => t.id === id);
+    expect(by("builtin:ws-clean")).toMatchObject({ layer: "workspace", slot: ["workspace"] });
+    expect(by("amb")).toMatchObject({ layer: "ambience", slot: ["ambience"] });
+    expect(by("builtin:forest")).toMatchObject({ layer: null, slot: [] });
+    r = await callTool(client, "list_themes", { layer: "workspace" });
+    const ids = r.body.themes.map((t: any) => t.id);
+    expect(ids).toContain("builtin:ws-clean");
+    expect(ids).toContain("builtin:forest");
+    expect(ids).not.toContain("amb");
+    r = await callTool(client, "list_themes", { layer: "ambience" });
+    const ids2 = r.body.themes.map((t: any) => t.id);
+    expect(ids2).toContain("amb");
+    expect(ids2).not.toContain("builtin:ws-clean");
+    expect((await callTool(client, "list_themes", { layer: "bogus" })).isError).toBe(true);
+  });
+
+  it("a theme active in both slots shows both; get_theme carries layer", async () => {
+    const client = await connectedClient(openTestDb());
+    await callTool(client, "set_active_theme", { id: "builtin:forest" });
+    await callTool(client, "set_active_theme", { id: "builtin:forest", layer: "workspace" });
+    const r = await callTool(client, "list_themes", {});
+    expect(r.body.themes.find((t: any) => t.id === "builtin:forest").slot).toEqual(["ambience", "workspace"]);
+    const g = await callTool(client, "get_theme", { id: "builtin:ws-clean" });
+    expect(g.body.layer).toBe("workspace");
+  });
+
+  it("theme_tokens has an owner and filters by layer", async () => {
+    const client = await connectedClient(openTestDb());
+    let r = await callTool(client, "theme_tokens", {});
+    expect(r.body.tokens.find((t: any) => t.name === "radius-md").owner).toBe("workspace");
+    expect(r.body.tokens.find((t: any) => t.name === "color-accent").owner).toBe("ambience");
+    expect(r.body.tokens.find((t: any) => t.name === "font-math").owner).toBe("shared");
+    r = await callTool(client, "theme_tokens", { layer: "workspace" });
+    let names = r.body.tokens.map((t: any) => t.name);
+    for (const n of ["radius-md", "icon-sheet", "button-primary-bg", "font-body", "font-math"]) expect(names).toContain(n);
+    expect(names).not.toContain("color-accent");
+    r = await callTool(client, "theme_tokens", { layer: "ambience" });
+    names = r.body.tokens.map((t: any) => t.name);
+    expect(names).toContain("color-accent");
+    expect(names).toContain("font-math");
+    expect(names).not.toContain("radius-md");
+    expect((await callTool(client, "theme_tokens", { layer: "bogus" })).isError).toBe(true);
+  });
+
+  it("set_active_theme takes a layer, clears with null, and returns both pointers", async () => {
+    const db = openTestDb();
+    const client = await connectedClient(db);
+    await callTool(client, "save_theme", { manifest: { ...small("amb"), layer: "ambience" } });
+    let r = await callTool(client, "set_active_theme", { id: "builtin:ws-clean", layer: "workspace" });
+    expect(r.isError).toBe(false);
+    expect(r.body).toEqual({ active_theme_id: getActiveThemeId(db), active_workspace_theme_id: "builtin:ws-clean" });
+    expect(getActiveWorkspaceThemeId(db)).toBe("builtin:ws-clean");
+    r = await callTool(client, "set_active_theme", { id: "amb", layer: "workspace" });
+    expect(r.isError).toBe(true);
+    expect(r.body.error).toBe("wrong_layer");
+    r = await callTool(client, "set_active_theme", { id: "builtin:ws-clean" });
+    expect(r.body.error).toBe("wrong_layer");
+    r = await callTool(client, "set_active_theme", { id: null, layer: "workspace" });
+    expect(r.body.active_workspace_theme_id).toBeNull();
+    r = await callTool(client, "set_active_theme", { id: null });
+    expect(r.body).toMatchObject({ active_theme_id: "builtin:osmosis", active_workspace_theme_id: null });
+    expect((await callTool(client, "set_active_theme", { id: null, layer: "bogus" })).isError).toBe(true);
+  });
+
+  it("validate_theme warns on a dial the ambience layer does not own", async () => {
+    const client = await connectedClient(openTestDb());
+    const r = await callTool(client, "validate_theme", { manifest: { ...small("amb"), layer: "ambience" } });
+    expect(r.isError).toBe(false);
+    expect(r.body.warnings.some((w: any) => /roundness/.test(w.path + w.message))).toBe(true);
   });
 });

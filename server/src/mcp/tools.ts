@@ -16,9 +16,9 @@ import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDe
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
-import { listThemes, saveTheme, patchTheme, getTheme, deleteTheme, setActiveTheme, getActiveThemeId } from "../domain/themes.js";
+import { listThemes, saveTheme, patchTheme, getTheme, deleteTheme, setActiveTheme, getActiveThemeId, setActiveWorkspaceTheme, getActiveWorkspaceThemeId } from "../domain/themes.js";
 import {
-  BUILTINS, builtinById, isBuiltinId, DEFAULT_THEME_ID, FONT_STACKS, TOKENS, resolve as resolveTheme, validate as validateManifest,
+  BUILTINS, builtinById, isBuiltinId, ownerOf, DEFAULT_THEME_ID, FONT_STACKS, TOKENS, resolve as resolveTheme, validate as validateManifest,
   type ThemeManifest,
 } from "theme-core";
 import { registerWorkspaceTools } from "./workspaceTools.js";
@@ -1146,17 +1146,27 @@ export function registerTools(
     "list_themes",
     {
       description:
-        "List colour themes: your saved custom themes plus the four built-ins (builtin:osmosis, builtin:forest, builtin:ocean, builtin:ember), " +
-        "with which one is active. Custom themes live on the server and sync to every device. Use get_theme to read one.",
+        "List themes: your saved custom themes plus the built-ins (builtin:osmosis, builtin:forest, builtin:ocean, builtin:ember, builtin:ws-clean), " +
+        "with which are active. A theme has a layer: workspace (shape, type, space, material and component tokens plus chrome css), ambience " +
+        "(colour, graph, ambience, sound), or null for a full theme that sets both. Two slots are active at once: ambience (active_theme_id) and " +
+        "workspace (active_workspace_theme_id); each entry's slot says which it is in. Pass layer to list only themes usable in that slot " +
+        "(that layer, or full). Custom themes live on the server and sync to every device. Use get_theme to read one.",
+      inputSchema: { layer: z.enum(["workspace", "ambience"]).optional() },
     },
-    async () => {
+    async ({ layer }) => {
       try {
         const active = getActiveThemeId(db) ?? DEFAULT_THEME_ID;
-        const themes = [
-          ...BUILTINS.map((m) => ({ id: m.id, name: m.name, description: m.description ?? "", builtin: true, active: m.id === active })),
-          ...listThemes(db).map((t) => ({ id: t.id, name: t.name, description: t.manifest.description ?? "", builtin: false, active: t.id === active })),
+        const activeWs = getActiveWorkspaceThemeId(db);
+        const entry = (id: string, name: string, description: string, builtin: boolean, l: "workspace" | "ambience" | null) => ({
+          id, name, description, builtin, layer: l, active: id === active,
+          slot: [...(id === active ? ["ambience"] : []), ...(id === activeWs ? ["workspace"] : [])],
+        });
+        const all = [
+          ...BUILTINS.map((m) => entry(m.id, m.name, m.description ?? "", true, m.layer ?? null)),
+          ...listThemes(db).map((t) => entry(t.id, t.name, t.manifest.description ?? "", false, t.layer)),
         ];
-        return ok({ themes, active_theme_id: active });
+        const themes = layer === undefined ? all : all.filter((t) => t.layer === null || t.layer === layer);
+        return ok({ themes, active_theme_id: active, active_workspace_theme_id: activeWs });
       } catch (err) {
         return fail(err);
       }
@@ -1167,7 +1177,7 @@ export function registerTools(
     "get_theme",
     {
       description:
-        "Read one theme (custom id or builtin:*): its manifest, and with resolved: true every token's final value for light and dark plus " +
+        "Read one theme (custom id or builtin:*): its layer (workspace, ambience, or null for a full theme), its manifest, and with resolved: true every token's final value for light and dark plus " +
         "provenance (default / seed / dial / override) so you can see what a seed or dial produced. Read a built-in to learn by example, " +
         "then save your own (built-ins are read-only).",
       inputSchema: { id: z.string(), resolved: z.boolean().optional() },
@@ -1178,7 +1188,7 @@ export function registerTools(
         const row = builtin ? null : getTheme(db, id);
         const manifest = builtin ?? (row && !row.deleted_at ? row.manifest : undefined);
         if (!manifest) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
-        const out: Record<string, unknown> = { id: manifest.id, name: manifest.name, builtin: builtin !== undefined, manifest };
+        const out: Record<string, unknown> = { id: manifest.id, name: manifest.name, builtin: builtin !== undefined, layer: manifest.layer ?? null, manifest };
         if (resolved) {
           const r = resolveTheme(manifest);
           out.resolved = { light: r.light, dark: r.dark, provenance: r.provenance };
@@ -1196,17 +1206,21 @@ export function registerTools(
       description:
         "The token reference for authoring: every themeable token with its name, tier, group, type, whether it differs by mode, allowed " +
         "values (enum tokens), and meaning. Names are what manifest overrides use (e.g. overrides.any['radius-md'], overrides.light['color-surface']). " +
+        "Each token has an owner: workspace, ambience, or shared. Pass layer: 'workspace' to see only the tokens a workspace theme controls " +
+        "(workspace + shared: shape, type, space, material, component) or layer: 'ambience' for ambience + shared (colour, graph, ambience). " +
         "Pass group to narrow: " + [...new Set(TOKENS.map((t) => t.group))].join(", ") + ". Call this before writing overrides.",
-      inputSchema: { group: z.string().optional() },
+      inputSchema: { group: z.string().optional(), layer: z.enum(["workspace", "ambience"]).optional() },
     },
-    async ({ group }) => {
+    async ({ group, layer }) => {
       try {
         const groups = [...new Set(TOKENS.map((t) => t.group as string))];
         if (group !== undefined && !groups.includes(group)) {
           throw new DomainError("unknown_group", `Unknown group "${group}". Valid groups: ${groups.join(", ")}.`);
         }
-        const tokens = TOKENS.filter((t) => group === undefined || t.group === group).map((t) => ({
-          name: t.name, tier: t.tier, group: t.group, type: t.type, modeDependent: t.modeDependent,
+        const tokens = TOKENS.filter((t) => group === undefined || t.group === group)
+          .filter((t) => layer === undefined || ownerOf(t.name) === "shared" || ownerOf(t.name) === layer)
+          .map((t) => ({
+          name: t.name, owner: ownerOf(t.name), tier: t.tier, group: t.group, type: t.type, modeDependent: t.modeDependent,
           ...(t.allowed ? { allowed: t.allowed } : {}), meaning: t.meaning,
         }));
         return ok({ count: tokens.length, tokens });
@@ -1220,7 +1234,9 @@ export function registerTools(
     "save_theme",
     {
       description:
-        "Create or replace a theme from a manifest {id, name, seeds:{light?,dark?}, dials, fonts, overrides?, css?}. Start small: a few seeds " +
+        "Create or replace a theme from a manifest {id, name, layer?, seeds:{light?,dark?}, dials, fonts, overrides?, css?}. layer is 'workspace' " +
+        "(shape/type/space/material/component tokens + chrome css), 'ambience' (colour/graph/ambience/sound), or omitted for a full theme; a " +
+        "layered theme should only set what its layer owns (see theme_tokens layer). Start small: a few seeds " +
         "(canvas, surface, ink, accent, per mode) plus dials; everything else is derived. Give one mode and the other is derived. Call theme_tokens " +
         "for token names and override only what you must. Dials: contrast, warmth, saturation, roundness, density, elevation, borders, " +
         "translucency, texture, motion are 0..1; typeScale 1.125..1.333; baseSize 13..18px. Fonts are named stacks: " + FONT_NAMES + ". " +
@@ -1291,12 +1307,17 @@ export function registerTools(
   registerTool(
     "set_active_theme",
     {
-      description: "Make a theme active on every device: a custom theme id or a builtin:* id. null means the default, builtin:osmosis.",
-      inputSchema: { id: z.string().nullable() },
+      description:
+        "Make a theme active on every device. layer 'ambience' (default) sets the colour/ambience slot: a custom id or builtin:* id (workspace-layer " +
+        "themes are refused); null means the default, builtin:osmosis. layer 'workspace' sets the workspace slot (shape/type/space/material/" +
+        "component): ambience-layer themes are refused; null clears it (no workspace theme). Returns both pointers.",
+      inputSchema: { id: z.string().nullable(), layer: z.enum(["ambience", "workspace"]).optional() },
     },
-    async ({ id }) => {
+    async ({ id, layer }) => {
       try {
-        return ok(setActiveTheme(db, id ?? DEFAULT_THEME_ID));
+        if (layer === "workspace") setActiveWorkspaceTheme(db, id);
+        else setActiveTheme(db, id ?? DEFAULT_THEME_ID);
+        return ok({ active_theme_id: getActiveThemeId(db), active_workspace_theme_id: getActiveWorkspaceThemeId(db) });
       } catch (err) {
         return fail(err);
       }

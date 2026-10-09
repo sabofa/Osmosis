@@ -8,7 +8,7 @@ import { buildApp } from "../src/http/app.js";
 import { bootstrapNode } from "../src/node.js";
 import { createSyncRuntime, runSync } from "../src/sync/client.js";
 import { openTestDb } from "./helpers.js";
-import { listThemes, getActiveThemeId, getLocation } from "../src/domain/themes.js";
+import { listThemes, getActiveThemeId, getActiveWorkspaceThemeId, getLocation } from "../src/domain/themes.js";
 import { buildPullResponse, applyPullResponse } from "../src/domain/sync.js";
 
 const tokens = { light: { "--accent": "#123456" }, dark: { "--accent": "#abcdef" } };
@@ -258,6 +258,102 @@ describe("theme writes from a local node", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().ok).toBe(true);
 
+    await app.close();
+    await canonicalApp.close();
+  });
+});
+
+describe("theme layers over HTTP", () => {
+  async function canonicalApp() {
+    const db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
+                  uploadsDir: "/tmp", mcpAuthToken: "t", webDistDir: null };
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
+    await app.ready();
+    return { db, app };
+  }
+  const amb = { schema: 1, id: "amb", name: "Amb", layer: "ambience", seeds: { light: { accent: "#123456" } }, dials: {}, fonts: {} };
+
+  it("GET carries active_workspace_theme_id and a layer on every theme and builtin", async () => {
+    const { app } = await canonicalApp();
+    await app.inject({ method: "PUT", url: "/api/themes/amb", payload: { manifest: amb } });
+    let body = (await app.inject({ method: "GET", url: "/api/themes" })).json();
+    expect(body.active_workspace_theme_id).toBeNull();
+    expect(body.themes.find((t: any) => t.id === "amb").layer).toBe("ambience");
+    for (const b of body.builtins) expect(b).toHaveProperty("layer");
+    expect(body.builtins.find((b: any) => b.id === "builtin:ws-clean").layer).toBe("workspace");
+    expect(body.builtins.find((b: any) => b.id === "builtin:osmosis").layer).toBeNull();
+    await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean", layer: "workspace" } });
+    body = (await app.inject({ method: "GET", url: "/api/themes" })).json();
+    expect(body.active_workspace_theme_id).toBe("builtin:ws-clean");
+    await app.close();
+  });
+
+  it("PUT active defaults to ambience and returns both pointers", async () => {
+    const { app } = await canonicalApp();
+    const res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:forest" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active_theme_id: "builtin:forest", active_workspace_theme_id: null });
+    await app.close();
+  });
+
+  it("layer workspace sets and clears the workspace pointer; ambience pointer untouched", async () => {
+    const { db, app } = await canonicalApp();
+    await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:forest" } });
+    let res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean", layer: "workspace" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active_theme_id: "builtin:forest", active_workspace_theme_id: "builtin:ws-clean" });
+    expect(getActiveWorkspaceThemeId(db)).toBe("builtin:ws-clean");
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: null, layer: "workspace" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().active_workspace_theme_id).toBeNull();
+    expect(getActiveWorkspaceThemeId(db)).toBeNull();
+    await app.close();
+  });
+
+  it("wrong layer is 400 wrong_layer in both slots; invalid layer is 400 invalid_layer", async () => {
+    const { app } = await canonicalApp();
+    await app.inject({ method: "PUT", url: "/api/themes/amb", payload: { manifest: amb } });
+    let res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("wrong_layer");
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "amb", layer: "workspace" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("wrong_layer");
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "amb", layer: "bogus" } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: "invalid_layer", reason: "invalid_layer" });
+    await app.close();
+  });
+
+  it("a local node forwards the workspace write, mirrors it, and refuses offline", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "osmosis-themes-"));
+    const canonicalDb = openFileDb(dir, "c.db");
+    const cEnv = { role: "canonical" as const, label: "c", port: 0, dbPath: join(dir, "c.db"), remoteUrl: null,
+                   uploadsDir: dir, mcpAuthToken: "t", webDistDir: null };
+    const canonicalApp = buildApp({ db: canonicalDb, env: cEnv, node: bootstrapNode(canonicalDb, cEnv), runtime: createSyncRuntime(), logger: false });
+    const canonicalUrl = await canonicalApp.listen({ port: 0, host: "127.0.0.1" });
+    const localDb = openFileDb(dir, "l.db");
+    const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l.db"), remoteUrl: canonicalUrl,
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
+    const runtime = createSyncRuntime();
+    const app = buildApp({ db: localDb, env, node: bootstrapNode(localDb, env), runtime, logger: false });
+
+    runtime.online = false;
+    let res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean", layer: "workspace" } });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().reason).toBe("theme_requires_connection");
+
+    runtime.online = true;
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean", layer: "workspace" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().active_workspace_theme_id).toBe("builtin:ws-clean");
+    expect(getActiveWorkspaceThemeId(canonicalDb)).toBe("builtin:ws-clean");
+    expect(getActiveWorkspaceThemeId(localDb)).toBe("builtin:ws-clean");
+
+    res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: null, layer: "workspace" } });
+    expect(res.statusCode).toBe(200);
+    expect(getActiveWorkspaceThemeId(localDb)).toBeNull();
     await app.close();
     await canonicalApp.close();
   });

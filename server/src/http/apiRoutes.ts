@@ -37,7 +37,7 @@ import { DomainError } from "../domain/errors.js";
 import { addSlice, removeSlice } from "../domain/sync.js";
 import { runSync, pullOneSlice, fetchAndApplyDailyDraw, fetchAndApplyTemplateDraw, forwardToCanonical, ForwardError } from "../sync/client.js";
 import {
-  listThemes, listThemesForSync, saveTheme, patchTheme, deleteTheme, setActiveTheme, getActiveThemeId, applyThemesFromPull,
+  listThemes, listThemesForSync, saveTheme, patchTheme, deleteTheme, setActiveTheme, getActiveThemeId, setActiveWorkspaceTheme, getActiveWorkspaceThemeId, applyThemesFromPull,
   getLocation, setLocation, type ThemeRow, type ThemeTokens, type SaveResult,
   clearActiveIf,
 } from "../domain/themes.js";
@@ -930,9 +930,10 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   }
 
   app.get("/api/themes", async () => ({
-    themes: listThemes(db).map(({ id, name, manifest, tokens, custom_css, updated_at }) => ({ id, name, manifest, tokens, custom_css, updated_at })),
-    builtins: BUILTINS.map((m) => ({ id: m.id, name: m.name, manifest: m })),
+    themes: listThemes(db).map(({ id, name, manifest, layer, tokens, custom_css, updated_at }) => ({ id, name, manifest, layer, tokens, custom_css, updated_at })),
+    builtins: BUILTINS.map((m) => ({ id: m.id, name: m.name, manifest: m, layer: m.layer ?? null })),
     active_theme_id: getActiveThemeId(db),
+    active_workspace_theme_id: getActiveWorkspaceThemeId(db),
     location: getLocation(db),
   }));
 
@@ -962,13 +963,25 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.put("/api/themes/active", async (request, reply) => {
-    const body = (request.body ?? {}) as { id?: string | null };
+    const body = (request.body ?? {}) as { id?: string | null; layer?: unknown };
     const id = body.id ?? null;
+    const layer = body.layer === undefined ? "ambience" : body.layer;
+    if (layer !== "ambience" && layer !== "workspace") {
+      reply.code(400).send({ error: "invalid_layer", reason: "invalid_layer", message: 'layer must be "ambience" or "workspace".' });
+      return;
+    }
+    const pointers = () => ({ active_theme_id: getActiveThemeId(db), active_workspace_theme_id: getActiveWorkspaceThemeId(db) });
     try {
       return await forwardOrLocal(
         reply,
-        () => forwardToCanonical<{ active_theme_id: string | null }>(ctx, "PUT", "/api/themes/active", { id }),
-        () => setActiveTheme(db, id)
+        () => forwardToCanonical<{ active_theme_id: string | null; active_workspace_theme_id: string | null }>(
+          ctx, "PUT", "/api/themes/active", { id, layer }
+        ),
+        (fromCanonical) => {
+          if (layer === "workspace") setActiveWorkspaceTheme(db, fromCanonical ? fromCanonical.active_workspace_theme_id : id);
+          else setActiveTheme(db, fromCanonical ? fromCanonical.active_theme_id : id);
+          return pointers();
+        }
       );
     } catch (err) {
       sendDomainError(reply, err);
