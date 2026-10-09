@@ -13,8 +13,6 @@
   --de-radius-sm: 0.6em;
   --de-surface: color-mix(in srgb, var(--de-code-bg) 85%, transparent);
   --de-surface-soft: color-mix(in srgb, var(--de-code-bg) 60%, transparent);
-  --de-panel-bg: color-mix(in srgb, var(--de-text) 85%, transparent);
-  --de-panel-text: var(--de-page);
   --de-marker-bg: color-mix(in srgb, var(--de-accent) 16%, transparent);
   --de-marker-border: var(--de-accent);
 
@@ -269,9 +267,12 @@
   border-radius: var(--de-radius-sm);
 }
 
-/* Toolbar: always-present zoom control, plus the full-mode-only settings
-   menu next to it. Pinned to a corner rather than inline so it never
-   disturbs document layout/scroll position. */
+/* Chrome (toolbar, menus, popover). Every surface reads the theme's
+   component tokens first (--menu-*, --button-*, --chip-*, --color-text,
+   --bevel-*) so a workspace theme can restyle it via the data-component
+   hooks; the --de-chrome-* values (tokenVars.ts) are the fallback only.
+   Bevels: lit top/left, shaded bottom/right; --bevel-depth is 0 on flat
+   themes so nothing shows there. */
 
 .document-viewer-toolbar {
   position: absolute;
@@ -283,24 +284,45 @@
   z-index: 2;
 }
 
+.document-viewer-zoom-control,
+.document-viewer-settings,
+.document-viewer-settings-menu,
+.document-viewer-highlight-action {
+  background: var(--menu-bg, var(--de-chrome-bg));
+  color: var(--color-text, var(--de-chrome-text));
+  border: var(--border-width, 0px) solid var(--menu-border, var(--de-chrome-border));
+  border-top: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);
+  border-left: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);
+  border-bottom: var(--bevel-depth, 0px) solid var(--bevel-dark, transparent);
+  border-right: var(--bevel-depth, 0px) solid var(--bevel-dark, transparent);
+  box-shadow: var(--menu-shadow, none);
+}
+
+.document-viewer-zoom-control button,
+.document-viewer-settings > button,
+.document-viewer-highlight-swatch {
+  border: var(--bevel-depth, 0px) solid transparent;
+  border-top-color: var(--bevel-light, transparent);
+  border-left-color: var(--bevel-light, transparent);
+  border-bottom-color: var(--bevel-dark, transparent);
+  border-right-color: var(--bevel-dark, transparent);
+}
+
 .document-viewer-zoom-control {
   display: flex;
   align-items: center;
   gap: 4px;
-  background: var(--de-panel-bg);
-  color: var(--de-panel-text);
-  border-radius: 999px;
+  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
   padding: 4px;
 }
 
 .document-viewer-zoom-control button {
-  background: color-mix(in srgb, currentColor 10%, transparent);
-  border: none;
+  background: var(--chip-bg, var(--de-chrome-control-bg));
   color: inherit;
   cursor: pointer;
   width: 24px;
   height: 24px;
-  border-radius: 50%;
+  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -309,7 +331,7 @@
 }
 
 .document-viewer-zoom-control button:hover {
-  background: color-mix(in srgb, currentColor 22%, transparent);
+  background: var(--menu-hover, var(--de-chrome-hover));
 }
 
 .document-viewer-zoom-control button:active {
@@ -319,33 +341,30 @@
 .document-viewer-zoom-control button.document-viewer-zoom-pct {
   width: auto;
   height: auto;
-  border-radius: 999px;
+  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
   padding: 4px 9px;
   font-size: 11px;
   background: none;
 }
 
 .document-viewer-zoom-control button.document-viewer-zoom-pct:hover {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  background: var(--menu-hover, var(--de-chrome-hover));
 }
 
 .document-viewer-settings {
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--de-panel-bg);
-  color: var(--de-panel-text);
-  border-radius: 50%;
+  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
 }
 
 .document-viewer-settings > button {
   background: none;
-  border: none;
   color: inherit;
   cursor: pointer;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -353,7 +372,7 @@
 }
 
 .document-viewer-settings > button:hover {
-  background: color-mix(in srgb, currentColor 18%, transparent);
+  background: var(--menu-hover, var(--de-chrome-hover));
 }
 
 .document-viewer-settings > button:active {
@@ -367,8 +386,7 @@
   display: flex;
   flex-direction: column;
   min-width: 160px;
-  background: var(--de-panel-bg);
-  border-radius: var(--de-radius-sm);
+  border-radius: var(--menu-radius, var(--de-chrome-radius));
   padding: 4px;
   gap: 2px;
   transform-origin: top right;
@@ -381,19 +399,19 @@
   gap: 7px;
   background: none;
   border: none;
-  color: var(--de-panel-text);
+  color: inherit;
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
   text-align: left;
   padding: 7px 9px;
-  border-radius: 0.6em;
+  border-radius: var(--button-radius, var(--de-chrome-radius));
   white-space: nowrap;
   transition: background 0.12s ease;
 }
 
 .document-viewer-settings-menu button:hover {
-  background: color-mix(in srgb, currentColor 15%, transparent);
+  background: var(--menu-hover, var(--de-chrome-hover));
 }
 
 @keyframes document-viewer-pop-in {
@@ -417,12 +435,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--de-panel-bg);
-  color: var(--de-panel-text);
-  border-radius: 999px;
+  border-radius: var(--menu-radius, var(--de-chrome-radius-pill));
   padding: 6px;
   z-index: 3;
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--de-text) 30%, transparent);
+  box-shadow: var(--menu-shadow, var(--de-chrome-shadow));
   animation: document-viewer-pop-in-anchored 0.14s ease-out;
 }
 
@@ -440,17 +456,17 @@
 .document-viewer-highlight-swatch {
   width: 20px;
   height: 20px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--de-panel-text) 50%, transparent);
+  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
+  border-width: max(2px, var(--bevel-depth, 0px));
+  border-style: solid;
   cursor: pointer;
   padding: 0;
-  transition: transform 0.12s ease, border-color 0.12s ease;
+  transition: transform 0.12s ease;
 }
 
 .document-viewer-highlight-swatch:hover,
 .document-viewer-highlight-swatch:focus-visible {
-  border-color: var(--de-panel-text);
-  outline: none;
+  outline: 1px solid currentColor;
   transform: scale(1.15);
 }
 
@@ -467,10 +483,10 @@
   margin-left: 4px;
   padding-left: 8px;
   border: none;
-  border-left: 1px solid color-mix(in srgb, var(--de-panel-text) 25%, transparent);
+  border-left: 1px solid var(--menu-border, currentColor);
   border-radius: 0;
   background: none;
-  color: var(--de-panel-text);
+  color: inherit;
   cursor: pointer;
   transition: color 0.12s ease, transform 0.1s ease;
 }

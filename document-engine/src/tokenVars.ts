@@ -48,6 +48,21 @@ export function mathFontStack(t: DocumentTokens): string {
   return [t.fonts.math, t.fonts.body, t.fonts.cjk, 'serif'].join(', ')
 }
 
+// Chrome fallbacks: used only when the host frame publishes no component
+// tokens (--menu-bg, --button-radius, ...). Colours derive from the engine's
+// own --de-* vars; radii are relative to the chrome's font size.
+export const CHROME_FALLBACKS: Record<string, string> = {
+  '--de-chrome-bg': 'color-mix(in srgb, var(--de-text) 85%, transparent)',
+  '--de-chrome-text': 'var(--de-page)',
+  '--de-chrome-hover': 'color-mix(in srgb, currentColor 16%, transparent)',
+  '--de-chrome-control-bg': 'color-mix(in srgb, currentColor 10%, transparent)',
+  '--de-chrome-border': 'transparent',
+  '--de-chrome-shadow': '0 4px 14px color-mix(in srgb, var(--de-text) 30%, transparent)',
+  '--de-chrome-radius': '0.6em',
+  '--de-chrome-radius-pill': '99em',
+  '--de-chrome-radius-round': '50%',
+}
+
 export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   const c = t.colors
   const v: Record<string, string> = {
@@ -81,7 +96,7 @@ export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   v['--de-leading'] = t.scale.leading
   v['--de-measure'] = t.scale.measure
   v['--de-scale-ratio'] = String(t.scale.ratio)
-  return v
+  return { ...v, ...CHROME_FALLBACKS }
 }
 
 // Must stay translucent: a PDF's text-layer spans render with

@@ -13,14 +13,14 @@ export function ZoomControl({
   onReset: () => void
 }) {
   return (
-    <div className="document-viewer-zoom-control">
-      <button type="button" aria-label="Zoom out" onClick={onZoomOut}>
+    <div className="document-viewer-zoom-control" data-component="tool-row">
+      <button type="button" data-component="pill" aria-label="Zoom out" onClick={onZoomOut}>
         <ZoomOutIcon size={14} />
       </button>
-      <button type="button" className="document-viewer-zoom-pct" onClick={onReset} title="Reset zoom">
+      <button type="button" data-component="pill" className="document-viewer-zoom-pct" onClick={onReset} title="Reset zoom">
         {Math.round(zoom * 100)}%
       </button>
-      <button type="button" aria-label="Zoom in" onClick={onZoomIn}>
+      <button type="button" data-component="pill" aria-label="Zoom in" onClick={onZoomIn}>
         <ZoomInIcon size={14} />
       </button>
     </div>
@@ -52,17 +52,17 @@ export function SettingsMenu({
 
   return (
     <div className="document-viewer-settings" ref={rootRef}>
-      <button type="button" aria-label="Document settings" onClick={() => setOpen((o) => !o)}>
+      <button type="button" data-component="pill" aria-label="Document settings" onClick={() => setOpen((o) => !o)}>
         <MenuIcon size={15} />
       </button>
       {open && (
-        <div className="document-viewer-settings-menu">
-          <button type="button" onClick={onToggleOverlays}>
+        <div className="document-viewer-settings-menu" data-component="menu">
+          <button type="button" data-component="menu-item" onClick={onToggleOverlays}>
             <EyeIcon size={13} off={!showOverlays} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}
           </button>
           {onDownload && (
-            <button type="button" onClick={onDownload}>
+            <button type="button" data-component="menu-item" onClick={onDownload}>
               <DownloadIcon size={13} />
               Download
             </button>

@@ -281,12 +281,12 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     >
       {!embedded && <style>{highlightCss}</style>}
       {caps.editStub && (
-        <div className="document-viewer-edit-stub" role="status">
+        <div className="document-viewer-edit-stub" data-component="well" role="status">
           {EDIT_STUB_MESSAGE}
         </div>
       )}
       {gate.placeholder && (
-        <div className="document-viewer-gated" role="status">
+        <div className="document-viewer-gated" data-component="well" role="status">
           {gate.placeholder}
         </div>
       )}
@@ -304,7 +304,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         </div>
       </div>
 
-      <div className="document-viewer-toolbar">
+      <div className="document-viewer-toolbar" data-component="tool-row">
         <ZoomControl zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
         {caps.settingsMenu && (
           <SettingsMenu
@@ -318,6 +318,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       {caps.highlightPopover && pendingSelection && !gate.gated && (
         <div
           className="document-viewer-highlight-action"
+          data-component="menu"
           style={{ left: pendingSelection.rect.left + pendingSelection.rect.width / 2, top: pendingSelection.rect.top }}
         >
           {HIGHLIGHT_PALETTE.map((c, i) => (
@@ -325,6 +326,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
               key={c.id}
               type="button"
               className="document-viewer-highlight-swatch"
+              data-component="pill"
               style={{ background: `var(--de-highlight-${(i % 4) + 1})` }}
               title={`Highlight ${c.label.toLowerCase()}`}
               onClick={() => applyHighlight(c.id)}
@@ -333,6 +335,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           <button
             type="button"
             className="document-viewer-highlight-dismiss"
+            data-component="menu-item"
             title="Remove highlight"
             aria-label="Remove highlight"
             onClick={removeHighlight}

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_TOKENS, tokensToCssVars, fontStack, codeFontStack, mathFontStack, highlightCss } from './tokenVars'
+import { DEFAULT_TOKENS, CHROME_FALLBACKS, tokensToCssVars, fontStack, codeFontStack, mathFontStack, highlightCss } from './tokenVars'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import type { DocumentTokens } from 'theme-core'
 
@@ -57,10 +57,25 @@ describe('tokensToCssVars', () => {
       '--de-leading': '1.6',
       '--de-measure': '70ch',
       '--de-scale-ratio': '1.25',
+      ...CHROME_FALLBACKS,
     })
   })
   it('default tokens produce the same key set', () => {
     expect(Object.keys(tokensToCssVars(DEFAULT_TOKENS)).sort()).toEqual(Object.keys(tokensToCssVars(T)).sort())
+  })
+})
+
+describe('chrome fallbacks', () => {
+  it('are derived from the engine tokens (colour-mix of --de-*), radii relative', () => {
+    expect(CHROME_FALLBACKS['--de-chrome-bg']).toContain('var(--de-text)')
+    expect(CHROME_FALLBACKS['--de-chrome-text']).toBe('var(--de-page)')
+    expect(CHROME_FALLBACKS['--de-chrome-radius']).toMatch(/em$/)
+    expect(CHROME_FALLBACKS['--de-chrome-radius-pill']).toMatch(/em$/)
+  })
+  it('contain no colour literals', () => {
+    for (const v of Object.values(CHROME_FALLBACKS)) {
+      expect(v).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(/)
+    }
   })
 })
 
@@ -94,6 +109,10 @@ describe('DocumentViewer.css guard', () => {
     expect(stripped).not.toMatch(/rgba?\(/)
     expect(stripped).not.toMatch(/hsla?\(/)
   })
+  it('has no hard-coded font families or radii in px/%', () => {
+    expect(stripped).not.toMatch(/font-family:[ \t]*(?![ \t]|var\(|inherit)/)
+    expect(stripped).not.toMatch(/border-radius:\s*(?!var\(|0)[^;]*\d+(px|%)/)
+  })
   it('has a transparent root', () => {
     const m = stripped.match(/\.document-viewer\s*\{[^}]*\}/)
     expect(m?.[0]).toMatch(/background:\s*transparent/)
@@ -101,4 +120,15 @@ describe('DocumentViewer.css guard', () => {
   it('has no light/dark classes', () => {
     expect(stripped).not.toMatch(/document-viewer-(light|dark)/)
   })
+})
+
+describe('chrome inline styles guard', () => {
+  for (const f of ['./Toolbar.tsx', './DocumentViewer.tsx']) {
+    it(`${f} has no colour literals in inline styles`, () => {
+      const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8')
+      const styles = [...src.matchAll(/style=\{\{[^}]*\}\}/g)].map((m) => m[0]).join(' ')
+      expect(styles).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(/)
+      expect(src).not.toMatch(/['"`]#[0-9a-fA-F]{3,8}['"`]/)
+    })
+  }
 })
