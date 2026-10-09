@@ -11,7 +11,7 @@ import 'graph-engine/style.css'
 // pages that never show a graph question don't pay for it.
 const GraphViewer = React.lazy(() => import('graph-engine').then((m) => ({ default: m.GraphViewer })))
 
-export default function GraphPanel({ spec }: { spec: string }) {
+export default function GraphPanel({ spec, onErrors }: { spec: string; onErrors?: (msgs: string[]) => void }) {
   // No shared theme context exists above this component (App.tsx calls
   // useTheme() once and only threads the result into Settings as a prop).
   // Calling the hook again here is safe: it derives resolvedMode fresh from
@@ -23,7 +23,9 @@ export default function GraphPanel({ spec }: { spec: string }) {
   function handleErrors(errors: ParseError[]) {
     // The messages, not the objects: a console line reading `{0: Object}` is
     // no help at all when a graph comes up blank.
-    if (errors.length > 0) console.warn('graph spec errors:', errors.map((e) => e.message).join('; '))
+    const messages = errors.map((e) => e.message)
+    if (messages.length > 0) console.warn('graph spec errors:', messages.join('; '))
+    onErrors?.(messages)
   }
 
   return (

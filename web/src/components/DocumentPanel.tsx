@@ -3,6 +3,7 @@ import { getAsset, assetDownloadUrl, getDocumentMarkers, type Asset, type Docume
 import { useTheme } from '../hooks/useTheme'
 import { useDocumentFont } from '../hooks/useDocumentFont'
 import { DownloadIcon } from './icons'
+import GraphPanel from './GraphPanel'
 import type { DocumentRenderError } from 'document-engine'
 // document-engine's Vite library build extracts CSS into its own file rather
 // than injecting it via the JS bundle (same convention as graph-engine — see
@@ -13,6 +14,12 @@ import 'document-engine/style.css'
 // document-engine pulls in pdfjs-dist, real weight for the PDF renderer —
 // lazy-load it so pages that never show a document question don't pay for it.
 const DocumentViewer = React.lazy(() => import('document-engine').then((m) => ({ default: m.DocumentViewer })))
+
+// Inline ```graph fences: the engine stays graph-agnostic, we hand it the
+// lazy graph viewer.
+const renderGraph = (spec: string, ctx: { onErrors(msgs: string[]): void }) => (
+  <GraphPanel spec={spec} onErrors={ctx.onErrors} />
+)
 
 export default function DocumentPanel({
   documentId,
@@ -114,6 +121,7 @@ export default function DocumentPanel({
                   ]
             }
             onErrors={handleErrors}
+            renderGraph={renderGraph}
           />
         </Suspense>
       </div>

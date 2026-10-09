@@ -11,4 +11,5 @@ export type {
   DocumentLayer,
   Interaction,
   Chrome,
+  RenderGraph,
 } from './types'

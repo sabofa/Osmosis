@@ -16,6 +16,7 @@ import type {
   Interaction,
   Chrome,
   DocumentRenderError,
+  RenderGraph,
 } from './types'
 import './DocumentViewer.css'
 
@@ -43,6 +44,9 @@ export interface DocumentViewerProps {
   highlights?: DocumentHighlight[]
   onHighlightsChange?: (highlights: DocumentHighlight[]) => void
   onErrors?: (errors: DocumentRenderError[]) => void
+  // Renders ```graph fences as an interactive plot in place. Absent: such
+  // fences fall back to a plain code block.
+  renderGraph?: RenderGraph
   // When true the content collapses to an unreadable placeholder (hidden from
   // sight and the accessibility tree). Zoom and scroll position are kept, so
   // reopening picks up where the reader was. The viewer does not know why.
@@ -74,7 +78,7 @@ function makeHighlightId(): string {
 let instanceCounter = 0
 
 export default function DocumentViewer(props: DocumentViewerProps) {
-  const { asset, theme, highlights, onHighlightsChange, onErrors, gated, gatedLabel } = props
+  const { asset, theme, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
   const gate = gatedPresentation(gated, gatedLabel)
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome)
@@ -238,6 +242,8 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     }
   }
 
+  const onGraphErrors = (msgs: string[]) => onErrorsRef.current?.(msgs.map((message) => ({ message })))
+
   let body: ReactNode
   let sidePanel: ReactNode = null
 
@@ -249,7 +255,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       // every interactive feature switched off — embedded chrome's whole
       // point is no anchors/markers/highlighting/click-handling, but there
       // is no reason its formatting should look worse than full chrome's.
-      body = <TextContent text={text} anchors={[]} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} />
+      body = <TextContent text={text} anchors={[]} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} renderGraph={renderGraph} onGraphErrors={onGraphErrors} />
     }
     else body = <div className="document-viewer-placeholder">Preview not available for this file type.</div>
   } else if (isPdf && asset.url) {
@@ -275,6 +281,8 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           highlights={internalHighlights}
           showOverlays={showOverlays}
           groupPrefix={groupPrefix}
+          renderGraph={renderGraph}
+          onGraphErrors={onGraphErrors}
         />
       )
     }
@@ -287,6 +295,8 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         highlights={internalHighlights}
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
+        renderGraph={renderGraph}
+        onGraphErrors={onGraphErrors}
       />
     )
   } else {

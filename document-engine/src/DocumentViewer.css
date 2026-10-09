@@ -547,3 +547,29 @@
   background: rgba(127, 127, 127, 0.12);
   border-radius: 4px;
 }
+
+.document-viewer-markdown .document-viewer-graph {
+  margin: 0.7em 0;
+  max-width: 100%;
+  background: transparent;
+  user-select: none;
+}
+
+.document-viewer-markdown .document-viewer-graph-plot {
+  aspect-ratio: 16 / 10;
+  max-width: 100%;
+  display: flex;
+  background: transparent;
+}
+
+.document-viewer-markdown .document-viewer-graph-plot > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.document-viewer-markdown .document-viewer-graph-error {
+  margin-top: 0.3em;
+  font-size: 0.85em;
+  color: inherit;
+  opacity: 0.8;
+}

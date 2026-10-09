@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 export interface DocumentViewerAsset {
   type: 'text' | 'file'
   mime?: string | null
@@ -73,3 +75,8 @@ export interface DocumentLayer {
   markers?: DocumentMarker[]
   onMarkerActivate?(id: string): void
 }
+
+// Host-supplied renderer for ```graph fences (the engine does not depend on
+// the graph engine). Called with the fence body; report parse/render errors
+// through ctx.onErrors.
+export type RenderGraph = (spec: string, ctx: { onErrors(messages: string[]): void }) => ReactNode
