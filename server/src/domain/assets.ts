@@ -4,6 +4,7 @@ import { writeFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { DomainError } from "./errors.js";
 import { extractText } from "../lib/extract/index.js";
+import { toNfc } from "document-engine/core";
 import { syncUploads } from "./workspace/uploads.js";
 
 export type AssetType = "url" | "text" | "file";
@@ -47,6 +48,10 @@ export async function createAsset(
   createdBy: "claude" | "human"
 ): Promise<AssetRow> {
   const id = uuidv4();
+  // Authored text is NFC on ingest. Exempt: PDF/image extracted_text (the PDF
+  // client rebuilds its text layer with the same pdfjs logic; normalizing would
+  // shift offsets against the rendered layer) and url assets (no text).
+  const content = input.type === "text" && input.content != null ? toNfc(input.content) : input.content;
   let storagePath: string | null = null;
   let filePath: string | undefined;
 
@@ -69,7 +74,7 @@ export async function createAsset(
   try {
     extractedText = await extractText({
       type: input.type,
-      content: input.content ?? undefined,
+      content: content ?? undefined,
       mime: input.mime ?? undefined,
       filePath,
     });
@@ -80,6 +85,9 @@ export async function createAsset(
     throw err;
   }
 
+  const isAuthoredFile = input.type === "file" && (input.mime === "text/markdown" || input.mime === "text/plain");
+  if (extractedText != null && (input.type === "text" || isAuthoredFile)) extractedText = toNfc(extractedText);
+
   db.prepare(
     `INSERT INTO asset (id, title, type, content, filename, mime, storage_path, extracted_text, created_by)
      VALUES (@id, @title, @type, @content, @filename, @mime, @storage_path, @extracted_text, @created_by)`
@@ -87,7 +95,7 @@ export async function createAsset(
     id,
     title: input.title,
     type: input.type,
-    content: input.type === "file" ? null : input.content ?? null,
+    content: input.type === "file" ? null : content ?? null,
     filename: input.filename ?? null,
     mime: input.mime ?? null,
     storage_path: storagePath,
