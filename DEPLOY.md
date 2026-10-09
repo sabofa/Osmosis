@@ -158,6 +158,22 @@ Notes for the deploy that carries the theming foundation.
 - **Old nodes can still sync.** The legacy `tokens` / `custom_css` columns stay as a derived mirror of each manifest, so a local node that has not updated keeps reading usable themes (it sees the legacy eight tokens only).
 - **Rollback.** Deploy the previous build. The old code tolerates the new schema: it reads the legacy columns, which are still kept up to date, and ignores `manifest`, `schema_version` and `theme_setting.location`. No down-migration is needed. Themes saved on the new build after the deploy appear to the old build with their mirrored legacy tokens only.
 
+### Theming 1b
+
+Notes for the deploy that carries the workspace and ambience theme layers (branch `theming/1b`). **Do not deploy until Ben has given the go.**
+
+- **Migration 025** (`025_theme_layers.sql`) adds `theme_setting.active_workspace_theme_id` (nullable, additive). Nothing to run by hand. Before deploying, confirm canonical has no stray `025_*` row in `schema_migrations`.
+- **Wire versions:** `TOOLS_VERSION` 11 (was 10), `PROTOCOL_VERSION` stays 2. MCP clients must re-read the tool list: `theme_tokens` (owner field, `layer` filter), `list_themes` (`layer` filter and per-theme layer/slot), `set_active_theme`, `save_theme` and `patch_theme` gained a `layer` argument.
+- **DEPLOY ORDER IS MANDATORY: canonical first, then the local nodes.** A new local node that forwards a workspace-slot write (`PUT /api/themes/active` with `layer: "workspace"`) to an OLD canonical gets `502 canonical_too_old` and mirrors nothing, and the old canonical has already set its own **ambience** pointer to that theme (it ignores `layer`). An old web bundle against the new server is fine, but an open browser tab should be reloaded.
+- **Procedure** (the one used for the foundation deploy; the server checkout is `/srv/learn/osmosis`, NOT `~/Osmosis`). On the server (`ssh benif@192.168.5.66`):
+  1. Back up and check: `sudo -n -u osmosis sqlite3 /var/lib/osmosis/canonical.db ".backup /var/lib/osmosis/canonical-<date>-pre-1b.db"`, then `PRAGMA integrity_check;` on the copy (expect `ok`).
+  2. Confirm `schema_migrations` has no stray `025_*`.
+  3. `cd /srv/learn/osmosis && git pull --ff-only && bash deploy/install.sh`.
+  4. Verify `/sync/health` shows `tools_version` 11 and `protocol` 2.
+  5. Laptop node: back up `data/local.db` with node:sqlite `VACUUM INTO`, run `npm install`, rebuild `theme-core` -> `cli-core` -> `cli` -> `web` -> `server`, `POST /api/admin/restart`, then confirm `/api/status` shows protocol 2 / tools 11 and the outbox is 0.
+- **Known consequence.** A built-in full theme that sets workspace-owned dials (`builtin:ocean`: roundness, elevation) loses them under any workspace theme. Nothing changes until a workspace theme is selected.
+- **Rollback.** Deploy the previous build. The old code ignores the new column and the workspace pointer, so layered themes then appear as full themes (a workspace-layer theme saved on 1b would be selectable as the ambience theme on the old build). No down-migration is needed. If a workspace theme was active, set a normal ambience theme afterwards.
+
 ## The command line
 
 The same commands the app runs from its `/` bar run in a terminal against any
