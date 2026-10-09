@@ -4,7 +4,7 @@ import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './f
 import { figureMapping, type FigureFrame } from './figure/frame'
 import { highlightAccent, highlightOf, highlightOverlay, outermostMatches, selectedItems } from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
-import { thinnedIndices } from './figure/lod'
+import { restoreBatches, thinnedIndices } from './figure/lod'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
 import { applyOverscan, applySvgViewBox } from './view2d/dom/appliers'
@@ -113,19 +113,62 @@ const OVERSCAN_USED = LIVE ? (Number.isFinite(Number(queryFlag('overscan') ?? Na
 
 // Which marks of shading are hidden while the view moves (figure/lod.ts), found
 // once per <svg>: in each group of the regions layer, the marks to skip carry
-// `data-lod-skip`, and CSS hides them under `.figure-moving`.
-const thinned = new WeakSet<SVGSVGElement>()
-function markThinning(root: SVGSVGElement): void {
-  if (thinned.has(root)) return
-  thinned.add(root)
+// `data-lod-skip`, and CSS hides them under `.figure-moving`. When the view
+// settles they return in a few batches, a frame apart (`restoreThinned`), by
+// the class being left on and the attribute taken off a batch at a time.
+interface Thinning {
+  skipped: Element[]
+  // How many of `skipped` have had the attribute taken off (they are showing).
+  restored: number
+  frame: number
+}
+const thinning = new WeakMap<SVGSVGElement, Thinning>()
+function thinningOf(root: SVGSVGElement): Thinning {
+  const known = thinning.get(root)
+  if (known) return known
   const parents = new Set<Element>()
   root.querySelectorAll('[data-layer="regions"] polygon, [data-layer="regions"] path').forEach((mark) => {
     if (mark.parentElement) parents.add(mark.parentElement)
   })
+  const skipped: Element[] = []
   for (const parent of parents) {
     const marks = [...parent.children].filter((child) => child.tagName === 'polygon' || child.tagName === 'path')
-    for (const index of thinnedIndices(marks.length)) marks[index].setAttribute('data-lod-skip', '')
+    for (const index of thinnedIndices(marks.length)) {
+      marks[index].setAttribute('data-lod-skip', '')
+      skipped.push(marks[index])
+    }
   }
+  const made = { skipped, restored: 0, frame: 0 }
+  thinning.set(root, made)
+  return made
+}
+
+// The view starts to move: any batch already back is hidden again.
+function beginThinning(root: SVGSVGElement): void {
+  const state = thinningOf(root)
+  if (state.frame) cancelAnimationFrame(state.frame)
+  state.frame = 0
+  for (let i = 0; i < state.restored; i++) state.skipped[i].setAttribute('data-lod-skip', '')
+  state.restored = 0
+  root.classList.add('figure-moving')
+}
+
+// The view has settled: the marks return a batch a frame, then the class goes.
+function restoreThinned(root: SVGSVGElement): void {
+  const state = thinning.get(root)
+  if (!state || !root.classList.contains('figure-moving')) return
+  if (state.frame) return
+  const batches = restoreBatches(state.skipped.length)
+  let next = 0
+  const step = () => {
+    state.frame = 0
+    const batch = batches[next++]
+    if (batch) for (const i of batch) state.skipped[i].removeAttribute('data-lod-skip')
+    state.restored = batch ? batch[batch.length - 1] + 1 : state.restored
+    if (next < batches.length) state.frame = requestAnimationFrame(step)
+    else root.classList.remove('figure-moving')
+  }
+  state.frame = requestAnimationFrame(step)
 }
 
 const NONE: readonly string[] = []
@@ -186,7 +229,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       applySvgViewBox(root, window)
       root.style.transform = ''
       root.style.willChange = ''
-      if (settled) root.classList.remove('figure-moving')
+      if (settled) restoreThinned(root)
       liveScale.current = 1
       compensation.current = compensate(root, zoom, compensation.current)
     },
@@ -197,8 +240,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   const paintLive = useCallback((transform: LiveTransform) => {
     const root = containerRef.current?.querySelector('svg')
     if (!root) return
-    markThinning(root)
-    root.classList.add('figure-moving')
+    beginThinning(root)
     root.style.willChange = WILL_CHANGE ? 'transform' : ''
     root.style.transform = liveTransformValue(transform)
     liveScale.current = transform.scale

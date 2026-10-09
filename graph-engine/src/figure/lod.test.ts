@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { THIN_EVERY, THIN_MIN_MARKS, thinnedIndices } from './lod'
+import { RESTORE_BATCHES, restoreBatches, THIN_EVERY, THIN_MIN_MARKS, thinnedIndices } from './lod'
 
 describe('thinnedIndices', () => {
   it('leaves a small group whole: a flat fill or a few edges are not shading', () => {
@@ -18,5 +18,19 @@ describe('thinnedIndices', () => {
       expect(hidden.has(0)).toBe(false)
       expect(n - hidden.size).toBe(Math.ceil(n / THIN_EVERY))
     }
+  })
+})
+
+describe('restoreBatches', () => {
+  it('brings every skipped mark back exactly once, in order, in at most RESTORE_BATCHES batches', () => {
+    for (const n of [0, 1, 3, 4, 10, 270]) {
+      const batches = restoreBatches(n)
+      expect(batches.length).toBeLessThanOrEqual(RESTORE_BATCHES)
+      expect(batches.flat()).toEqual(Array.from({ length: n }, (_, i) => i))
+    }
+  })
+
+  it('splits a list into equal batches, the last holding what is left', () => {
+    expect(restoreBatches(10)).toEqual([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9]])
   })
 })

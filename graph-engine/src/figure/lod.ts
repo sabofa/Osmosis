@@ -20,3 +20,19 @@ export function thinnedIndices(count: number): number[] {
   for (let i = 0; i < count; i++) if (i % THIN_EVERY !== 0) out.push(i)
   return out
 }
+
+// When the view settles the hidden marks come back, but not all in one frame:
+// drawing them all at once is itself a hitch. They return in this many batches,
+// a frame apart.
+export const RESTORE_BATCHES = 4
+
+// The marks (by position in the skipped list of `count`) that return in each
+// batch: `restoreBatches(10)` is [[0,1,2],[3,4,5],[6,7,8],[9]].
+export function restoreBatches(count: number): number[][] {
+  const size = Math.ceil(count / RESTORE_BATCHES)
+  const out: number[][] = []
+  for (let from = 0; from < count; from += size) {
+    out.push(Array.from({ length: Math.min(size, count - from) }, (_, i) => from + i))
+  }
+  return out
+}
