@@ -21,6 +21,7 @@ export interface ThemeRow {
   id: string;
   name: string;
   manifest: ThemeManifest;
+  layer: "workspace" | "ambience" | null;
   tokens: ThemeTokens;
   custom_css: string;
   updated_at: string;
@@ -86,6 +87,7 @@ function toRow(r: RawRow, manifest: ThemeManifest): ThemeRow | null {
     id: r.id,
     name: r.name,
     manifest,
+    layer: manifest.layer ?? null,
     tokens,
     custom_css: r.custom_css ?? "",
     updated_at: r.updated_at,
@@ -162,6 +164,17 @@ export function getActiveThemeId(db: DatabaseSync): string | null {
     | undefined;
   const id = mapRemoved(row?.active_theme_id ?? null);
   if (id === null || isBuiltinId(id)) return id;
+  const live = db.prepare("SELECT 1 AS x FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
+  return live ? id : null;
+}
+
+export function getActiveWorkspaceThemeId(db: DatabaseSync): string | null {
+  const row = db.prepare("SELECT active_workspace_theme_id FROM theme_setting WHERE id = 1").get() as
+    | { active_workspace_theme_id: string | null }
+    | undefined;
+  const id = row?.active_workspace_theme_id ?? null;
+  if (id === null) return null;
+  if (isBuiltinId(id)) return builtinById(id) ? id : null;
   const live = db.prepare("SELECT 1 AS x FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
   return live ? id : null;
 }
@@ -278,6 +291,31 @@ export function clearActiveIf(db: DatabaseSync, id: string): void {
   db.prepare(
     "UPDATE theme_setting SET active_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_theme_id = ?"
   ).run(id);
+  db.prepare(
+    "UPDATE theme_setting SET active_workspace_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_workspace_theme_id = ?"
+  ).run(id);
+}
+
+// Layer of a pointer target: builtins from theme-core, custom from the stored manifest.
+function targetLayer(db: DatabaseSync, id: string): "workspace" | "ambience" | null {
+  if (id.startsWith("builtin:")) return builtinById(id)?.layer ?? null;
+  return getTheme(db, id)?.layer ?? null;
+}
+
+export function setActiveWorkspaceTheme(db: DatabaseSync, id: string | null): { active_workspace_theme_id: string | null } {
+  if (id !== null) {
+    if (id.startsWith("builtin:")) {
+      if (!builtinById(id)) throw new DomainError("unknown_builtin", `Unknown built-in theme "${id}".`);
+    } else {
+      const row = db.prepare("SELECT id FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
+      if (!row) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
+    }
+    if (targetLayer(db, id) === "ambience") {
+      throw new DomainError("wrong_layer", "This is an ambience theme; pick a workspace or full theme for the workspace slot.");
+    }
+  }
+  db.prepare("UPDATE theme_setting SET active_workspace_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(id);
+  return { active_workspace_theme_id: id };
 }
 
 export function setActiveTheme(db: DatabaseSync, id: string | null): { active_theme_id: string | null } {
@@ -288,6 +326,9 @@ export function setActiveTheme(db: DatabaseSync, id: string | null): { active_th
   if (stored !== null && !stored.startsWith("builtin:")) {
     const row = db.prepare("SELECT id FROM theme WHERE id = ? AND deleted_at IS NULL").get(stored);
     if (!row) throw new DomainError("not_found", `Theme "${stored}" does not exist.`);
+  }
+  if (stored !== null && targetLayer(db, stored) === "workspace") {
+    throw new DomainError("wrong_layer", "This is a workspace theme; pick an ambience or full theme for the ambience slot.");
   }
   db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(stored);
   return { active_theme_id: stored };
@@ -329,7 +370,8 @@ export function applyThemesFromPull(
   db: DatabaseSync,
   themes: PulledTheme[],
   active: string | null | undefined,
-  location?: Location | null
+  location?: Location | null,
+  activeWorkspace?: string | null
 ): number {
   const upsert = db.prepare(
     `INSERT INTO theme (id, name, tokens, custom_css, manifest, schema_version, updated_at, deleted_at)
@@ -371,6 +413,9 @@ export function applyThemesFromPull(
   }
   if (active !== undefined) {
     db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(mapRemoved(active));
+  }
+  if (activeWorkspace !== undefined) {
+    db.prepare("UPDATE theme_setting SET active_workspace_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(activeWorkspace);
   }
   if (location !== undefined) {
     db.prepare("UPDATE theme_setting SET location = ?, updated_at = datetime('now') WHERE id = 1").run(

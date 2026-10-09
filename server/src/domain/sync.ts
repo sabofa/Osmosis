@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveTemplateDraw } from "./draw.js";
 import { slugSubtreeSql, slugSubtreeParams } from "./tagQuery.js";
 import { PROTOCOL_VERSION } from "../protocol.js";
-import { listThemesForSync, getActiveThemeId, getLocation, applyThemesFromPull, type ThemeRow } from "./themes.js";
+import { listThemesForSync, getActiveThemeId, getActiveWorkspaceThemeId, getLocation, applyThemesFromPull, type ThemeRow } from "./themes.js";
 import type { Location } from "theme-core";
 
 // ----------------------------------------------------------------------------
@@ -69,6 +69,7 @@ export interface PullResponse {
   // response from an older canonical still applies.
   themes?: ThemeRow[];
   active_theme_id?: string | null;
+  active_workspace_theme_id?: string | null;
   theme_location?: Location | null;
   cursor: string;
 }
@@ -478,6 +479,7 @@ export function buildPullResponse(db: DatabaseSync, request: PullRequest): PullR
     frozen_questions: frozenQuestions,
     themes: listThemesForSync(db),
     active_theme_id: getActiveThemeId(db),
+    active_workspace_theme_id: getActiveWorkspaceThemeId(db),
     theme_location: getLocation(db),
     cursor,
   };
@@ -705,7 +707,7 @@ export function applyPullResponse(
       gradesApplied += 1;
     }
 
-    if (response.themes) applyThemesFromPull(db, response.themes, response.active_theme_id, response.theme_location);
+    if (response.themes) applyThemesFromPull(db, response.themes, response.active_theme_id, response.theme_location, response.active_workspace_theme_id);
 
     // Freshness bookkeeping for the slices this pull covered: a real pulled_at
     // (replacing the NEVER_PULLED sentinel) and a live local question count,
