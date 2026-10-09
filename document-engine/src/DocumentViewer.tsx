@@ -7,7 +7,7 @@ import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
-import { capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -255,6 +255,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   return (
     <div className={`document-viewer document-viewer-${internalTheme} document-viewer-mode-${embedded ? 'simple' : 'full'}`}>
       {!embedded && <style>{highlightCss}</style>}
+      {caps.editStub && (
+        <div className="document-viewer-edit-stub" role="status">
+          {EDIT_STUB_MESSAGE}
+        </div>
+      )}
       <div className="document-viewer-scroll">
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}`}

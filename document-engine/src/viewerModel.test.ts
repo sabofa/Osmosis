@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { capabilities, normalizeProps, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers } from './viewerModel'
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
@@ -18,6 +18,17 @@ describe('capabilities', () => {
     for (const i of ['view', 'annotate', 'edit'] as const) {
       expect(capabilities(i, 'embedded')).toMatchObject({ settingsMenu: false, highlight: false, highlightPopover: false, layers: false })
     }
+  })
+})
+
+describe('interaction matrix', () => {
+  it('view never allows highlighting; only annotate/full does', () => {
+    const rows = (['view', 'annotate', 'edit'] as const).flatMap((i) => (['full', 'embedded'] as const).map((c) => [i, c, capabilities(i, c).highlight] as const))
+    expect(rows.filter((r) => r[2]).map((r) => `${r[0]}/${r[1]}`)).toEqual(['annotate/full'])
+  })
+  it('edit shows the stub message and keeps selection (read-only content)', () => {
+    expect(capabilities('edit', 'full').selection).toBe(true)
+    expect(EDIT_STUB_MESSAGE).toBe('Editing arrives in a later release')
   })
 })
 

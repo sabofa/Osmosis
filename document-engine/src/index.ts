@@ -8,4 +8,7 @@ export type {
   DocumentMarker,
   DocumentHighlight,
   DocumentRenderError,
+  DocumentLayer,
+  Interaction,
+  Chrome,
 } from './types'

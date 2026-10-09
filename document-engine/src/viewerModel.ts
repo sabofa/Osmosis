@@ -9,6 +9,8 @@ export interface Capabilities {
   editStub: boolean
 }
 
+export const EDIT_STUB_MESSAGE = 'Editing arrives in a later release'
+
 export function capabilities(interaction: Interaction, chrome: Chrome): Capabilities {
   const full = chrome === 'full'
   const annotate = full && interaction === 'annotate'

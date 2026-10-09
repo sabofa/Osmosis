@@ -496,3 +496,12 @@
 .document-viewer-highlight-dismiss:active {
   transform: scale(0.9);
 }
+
+/* 'edit' interaction placeholder — content below stays read-only. */
+.document-viewer-edit-stub {
+  padding: 6px 12px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0.75;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+}
