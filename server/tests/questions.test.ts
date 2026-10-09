@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { openTestDb, insertTag, insertQuestion } from "./helpers.js";
 import { createAsset } from "../src/domain/assets.js";
-import { createQuestions } from "../src/domain/questions.js";
+import { createQuestions, editQuestion } from "../src/domain/questions.js";
+import { questionSnapshot } from "../src/domain/attempts.js";
 
 describe("document_marker_offset validation", () => {
   it("rejects an offset landing in whitespace, accepts one on a token boundary", async () => {
@@ -260,5 +261,64 @@ describe("document offsets are codepoint indices", () => {
     expect(ws.rejected[0]?.reason).toBe("invalid_document_marker");
     const oob = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 14 })]);
     expect(oob.rejected[0]?.reason).toBe("invalid_document_marker");
+  });
+});
+
+describe("anchor and marker quotes", () => {
+  const mc = (extra: Record<string, unknown>) => ({
+    type: "mc" as const,
+    prompt: "Which revision is best?",
+    tags: ["english"],
+    choices: [
+      { body: "Leave as is", is_correct: true },
+      { body: "Something else", is_correct: false, misconception: "m" },
+    ],
+    ...extra,
+  });
+  const content = "😀 hello world";
+
+  async function setup() {
+    const db = openTestDb();
+    insertTag(db, "english");
+    const asset = await createAsset(db, "/tmp/osmosis-test-uploads", { title: "Q", type: "text", content }, "claude");
+    return { db, asset };
+  }
+  const quotes = (db: ReturnType<typeof openTestDb>, id: string) =>
+    db.prepare("SELECT document_anchor_quote AS a, document_marker_quote AS m FROM question WHERE id = ?").get(id) as {
+      a: string | null;
+      m: string | null;
+    };
+
+  it("stores the anchor and marker quotes (emoji-safe) and returns them in the snapshot", async () => {
+    const { db, asset } = await setup();
+    const r = createQuestions(db, [
+      mc({ document_id: asset.id, document_anchor_start: 0, document_anchor_end: 7, document_marker_offset: 2 }),
+    ]);
+    const id = r.created[0]!.id;
+    expect(quotes(db, id)).toEqual({ a: "😀 hello", m: "hello" });
+    const snap = questionSnapshot(db, id, false);
+    expect(snap.document_anchor_quote).toBe("😀 hello");
+    expect(snap.document_marker_quote).toBe("hello");
+  });
+
+  it("updates the quote when the anchor changes and clears it when the anchor is cleared", async () => {
+    const { db, asset } = await setup();
+    const id = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 7 })])
+      .created[0]!.id;
+    expect(quotes(db, id).a).toBe("hello");
+    editQuestion(db, id, { document_anchor_start: 8, document_anchor_end: 13 });
+    expect(quotes(db, id).a).toBe("world");
+    editQuestion(db, id, { document_anchor_start: null, document_anchor_end: null });
+    expect(quotes(db, id)).toEqual({ a: null, m: null });
+  });
+
+  it("legacy rows with null quotes still read fine", async () => {
+    const { db, asset } = await setup();
+    const id = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 7 })])
+      .created[0]!.id;
+    db.prepare("UPDATE question SET document_anchor_quote = NULL WHERE id = ?").run(id);
+    const snap = questionSnapshot(db, id, false);
+    expect(snap.document_anchor_quote).toBeNull();
+    expect(snap.document_anchor_start).toBe(2);
   });
 });

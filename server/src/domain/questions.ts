@@ -78,6 +78,8 @@ export interface QuestionRow {
   document_anchor_start: number | null;
   document_anchor_end: number | null;
   document_marker_offset: number | null;
+  document_anchor_quote: string | null;
+  document_marker_quote: string | null;
   claim_rung: string | null;
   tests_error: string | null;
   provenance: string | null;
@@ -381,6 +383,8 @@ function insertQuestionRow(
     document_anchor_start: number | null;
     document_anchor_end: number | null;
     document_marker_offset: number | null;
+    document_anchor_quote?: string | null;
+    document_marker_quote?: string | null;
     claim_rung: string | null;
     tests_error: string | null;
     provenance: string | null;
@@ -395,14 +399,37 @@ function insertQuestionRow(
         model_answer, rubric, difficulty, calculator_policy, source_note,
         graph_spec, desmos_allowed, document_id, document_anchor_label,
         document_anchor_start, document_anchor_end, document_marker_offset,
+        document_anchor_quote, document_marker_quote,
         claim_rung, tests_error, provenance, node_key, ephemeral, session_id)
      VALUES
        (@id, @lineage_id, @version, @supersedes_id, @type, @prompt, @explanation,
         @model_answer, @rubric, @difficulty, @calculator_policy, @source_note,
         @graph_spec, @desmos_allowed, @document_id, @document_anchor_label,
         @document_anchor_start, @document_anchor_end, @document_marker_offset,
+        @document_anchor_quote, @document_marker_quote,
         @claim_rung, @tests_error, @provenance, @node_key, @ephemeral, @session_id)`
-  ).run({ ephemeral: 0, session_id: null, ...fields });
+  ).run({ ephemeral: 0, session_id: null, document_anchor_quote: null, document_marker_quote: null, ...fields });
+}
+
+// Quoted text stored with an anchor/marker so it can re-find itself if the
+// document shifts. Derived from the asset's extracted text; null when there is
+// no anchor/marker or no text (url assets, legacy rows).
+function documentQuotes(
+  db: DatabaseSync,
+  q: { document_id?: string | null; document_anchor_start?: number | null; document_anchor_end?: number | null; document_marker_offset?: number | null }
+): { document_anchor_quote: string | null; document_marker_quote: string | null } {
+  const out = { document_anchor_quote: null as string | null, document_marker_quote: null as string | null };
+  if (!q.document_id) return out;
+  const text = getAsset(db, q.document_id).extracted_text;
+  if (text == null) return out;
+  if (q.document_anchor_start != null && q.document_anchor_end != null) {
+    out.document_anchor_quote = sliceCp(text, q.document_anchor_start, q.document_anchor_end);
+  }
+  if (q.document_marker_offset != null) {
+    const span = findTokenSpan(text, q.document_marker_offset);
+    if (span) out.document_marker_quote = sliceCp(text, span.start, span.end);
+  }
+  return out;
 }
 
 function replaceTags(db: DatabaseSync, questionId: string, tags: string[]): void {
@@ -550,6 +577,7 @@ export function createQuestions(
         document_anchor_start: q.document_anchor_start ?? null,
         document_anchor_end: q.document_anchor_end ?? null,
         document_marker_offset: q.document_marker_offset ?? null,
+        ...documentQuotes(db, q),
         claim_rung: q.claim_rung ?? null,
         tests_error: q.tests_error ?? null,
         provenance: q.provenance ?? null,
@@ -706,6 +734,7 @@ export function editQuestion(
         document_anchor_start: merged.document_anchor_start ?? null,
         document_anchor_end: merged.document_anchor_end ?? null,
         document_marker_offset: merged.document_marker_offset ?? null,
+        ...documentQuotes(db, merged),
         claim_rung: merged.claim_rung ?? null,
         tests_error: merged.tests_error ?? null,
         provenance: merged.provenance ?? null,
@@ -738,6 +767,7 @@ export function editQuestion(
            document_id = @document_id, document_anchor_label = @document_anchor_label,
            document_anchor_start = @document_anchor_start, document_anchor_end = @document_anchor_end,
            document_marker_offset = @document_marker_offset,
+           document_anchor_quote = @document_anchor_quote, document_marker_quote = @document_marker_quote,
            claim_rung = @claim_rung, tests_error = @tests_error, provenance = @provenance, node_key = @node_key,
            updated_at = datetime('now')
        WHERE id = @id`
@@ -757,6 +787,7 @@ export function editQuestion(
       document_anchor_start: merged.document_anchor_start ?? null,
       document_anchor_end: merged.document_anchor_end ?? null,
       document_marker_offset: merged.document_marker_offset ?? null,
+      ...documentQuotes(db, merged),
       claim_rung: merged.claim_rung ?? null,
       tests_error: merged.tests_error ?? null,
       provenance: merged.provenance ?? null,

@@ -125,6 +125,8 @@ interface QuestionRow {
   document_anchor_start: number | null;
   document_anchor_end: number | null;
   document_marker_offset: number | null;
+  document_anchor_quote: string | null;
+  document_marker_quote: string | null;
 }
 
 interface ChoiceRow {
@@ -168,6 +170,8 @@ export function questionSnapshot(
     document_anchor_start: q.document_anchor_start,
     document_anchor_end: q.document_anchor_end,
     document_marker_offset: q.document_marker_offset,
+    document_anchor_quote: q.document_anchor_quote ?? null,
+    document_marker_quote: q.document_marker_quote ?? null,
     ...nodeKeyFields(db, questionId),
     choices: choices.map((c) => ({
       id: c.id,
