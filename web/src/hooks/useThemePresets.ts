@@ -27,6 +27,7 @@ export function useThemePresets(_mode?: ResolvedMode) {
     workspaceThemes: c.presets.filter((p) => p.layer === 'workspace' || !p.layer),
     activeId: c.activeId,
     setActiveId: c.setActiveId,
+    supportsWorkspace: c.supportsWorkspace,
     activeWorkspaceId: c.activeWorkspaceId,
     setActiveWorkspaceId: c.setActiveWorkspaceId,
     saveTheme: c.saveTheme,

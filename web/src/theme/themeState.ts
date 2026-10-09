@@ -26,6 +26,11 @@ export function activeWorkspaceManifest(
   return found && found.layer !== 'ambience' ? found : null
 }
 
+// An old server can't honour a workspace pointer, so a stored one is ignored.
+export function effectiveWorkspaceId(supports: boolean, id: string | null): string | null {
+  return supports ? id : null
+}
+
 // Both slots into the one manifest the stylesheet is built from. With an
 // empty workspace slot this is the ambience manifest itself, by identity.
 export function composeActive(workspace: ThemeManifest | null, ambience: ThemeManifest): ThemeManifest {
@@ -95,6 +100,8 @@ export interface ThemeCache {
   themes: Array<{ id: string; name: string; manifest: ThemeManifest; updated_at: string }>
   active_theme_id: string | null
   active_workspace_theme_id?: string | null
+  // Derived on read: true when the stored cache carries the workspace key.
+  supportsWorkspace?: boolean
   location: Location | null
 }
 
@@ -121,6 +128,7 @@ export function readCache(s: StorageLike): ThemeCache | null {
       themes,
       active_theme_id: c.active_theme_id ?? null,
       active_workspace_theme_id: c.active_workspace_theme_id ?? null,
+      supportsWorkspace: 'active_workspace_theme_id' in c,
       location: c.location ?? null,
     }
   } catch {
@@ -130,7 +138,10 @@ export function readCache(s: StorageLike): ThemeCache | null {
 
 export function writeCache(s: StorageLike, value: ThemeCache): void {
   try {
-    s.setItem(CACHE_KEY, JSON.stringify(value))
+    // The workspace key is written only for servers that support it.
+    const { supportsWorkspace, active_workspace_theme_id, ...rest } = value
+    const out = supportsWorkspace ? { ...rest, active_workspace_theme_id: active_workspace_theme_id ?? null } : rest
+    s.setItem(CACHE_KEY, JSON.stringify(out))
   } catch {
     // storage full or unavailable: the server copy is the real one
   }

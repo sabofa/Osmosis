@@ -12,7 +12,7 @@ import type { ThemePreset } from '../hooks/useThemePresets'
 import { initSlot, choose, choiceSucceeded, choiceFailed, refreshStarted, refreshAdopt, deleted, type SlotState } from './activeSlot'
 import { Ctx, type CustomTheme, type ThemeContextValue } from './context'
 import { buildThemeSheet } from './applyTheme'
-import { activeManifest, activeWorkspaceManifest, applyPreview, composeActive, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
+import { activeManifest, activeWorkspaceManifest, applyPreview, composeActive, effectiveWorkspaceId, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
 
 const SOURCE_KEY = 'osmosis:theme'
 const BLEND_KEY = 'osmosis:theme-blend'
@@ -101,6 +101,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [twilightBlend, setTwilightBlendState] = useState<boolean>(readBlend)
   const [preview, setPreview] = useState<ThemeManifest | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [supportsWorkspace, setSupportsWorkspace] = useState<boolean>(cache?.supportsWorkspace ?? false)
   const ambienceSlot = useActiveSlot(cache?.active_theme_id ?? null, 'ambience', setError)
   const workspaceSlot = useActiveSlot(cache?.active_workspace_theme_id ?? null, 'workspace', setError)
   const activeId = ambienceSlot.value
@@ -142,8 +143,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // ---- apply: data-theme + the one stylesheet ----
   const ambienceManifest = useMemo(() => activeManifest(custom, activeId), [custom, activeId])
   const workspaceManifest = useMemo(
-    () => activeWorkspaceManifest(custom, BUILTINS, activeWorkspaceId),
-    [custom, activeWorkspaceId]
+    () => activeWorkspaceManifest(custom, BUILTINS, effectiveWorkspaceId(supportsWorkspace, activeWorkspaceId)),
+    [custom, activeWorkspaceId, supportsWorkspace]
   )
   const manifest = useMemo(() => {
     const slots = applyPreview(preview, workspaceManifest, ambienceManifest)
@@ -182,6 +183,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       const p = await getThemes()
       setCustom(p.themes.map((t) => ({ id: t.id, name: t.name, manifest: t.manifest, updated_at: t.updated_at })))
       setLocationState(p.location ?? null)
+      setSupportsWorkspace(p.supportsWorkspace)
       adoptAmbience(p.active_theme_id, ambReq)
       adoptWorkspace(p.active_workspace_theme_id ?? null, wsReq)
       setError(null)
@@ -202,8 +204,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   useEffect(() => {
-    writeCache(safeStorage(), { themes: custom, active_theme_id: activeId, active_workspace_theme_id: activeWorkspaceId, location })
-  }, [custom, activeId, activeWorkspaceId, location])
+    writeCache(safeStorage(), { themes: custom, active_theme_id: activeId, active_workspace_theme_id: activeWorkspaceId, supportsWorkspace, location })
+  }, [custom, activeId, activeWorkspaceId, supportsWorkspace, location])
 
   // ---- actions ----
   const setSource = useCallback((s: ModeSource) => {
@@ -217,7 +219,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const setActiveId = ambienceSlot.set
-  const setActiveWorkspaceId = workspaceSlot.set
+  const setWorkspaceSlot = workspaceSlot.set
+  const setActiveWorkspaceId = useCallback(
+    (id: string | null) => {
+      if (!supportsWorkspace) {
+        setError('The server has not been updated to support workspace themes yet.')
+        return
+      }
+      setWorkspaceSlot(id)
+    },
+    [supportsWorkspace, setWorkspaceSlot]
+  )
 
   const saveManifest = useCallback(async (m: ThemeManifest): Promise<boolean> => {
     try {
@@ -290,6 +302,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     custom,
     activeId,
     setActiveId,
+    supportsWorkspace,
     activeWorkspaceId,
     setActiveWorkspaceId,
     previewManifest,

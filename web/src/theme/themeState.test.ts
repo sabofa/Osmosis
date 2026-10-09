@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { ThemeManifest } from 'theme-core'
 import { builtinById, resolve, toLegacyTokens, DEFAULT_THEME_ID } from 'theme-core'
 import { buildThemeSheet } from './applyTheme'
-import { activeManifest, activeWorkspaceManifest, applyPreview, composeActive, toPresetView, presetToManifest, readCache, writeCache, type StorageLike } from './themeState'
+import { activeManifest, activeWorkspaceManifest, effectiveWorkspaceId, applyPreview, composeActive, toPresetView, presetToManifest, readCache, writeCache, type StorageLike } from './themeState'
 
 const osmosis = builtinById(DEFAULT_THEME_ID)!
 const forest = builtinById('builtin:forest')!
@@ -61,17 +61,29 @@ describe('cache', () => {
     const s = mem()
     const v = { themes: [{ id: 'a', name: 'A', manifest: forest, updated_at: 't' }], active_theme_id: 'a', location: { lat: 1, lon: 2 } }
     writeCache(s, v)
-    expect(readCache(s)).toEqual({ ...v, active_workspace_theme_id: null })
+    expect(readCache(s)).toEqual({ ...v, active_workspace_theme_id: null, supportsWorkspace: false })
   })
   it('round-trips the workspace pointer, and accepts a cache without it', () => {
     const s = mem()
-    const v = { themes: [], active_theme_id: null, active_workspace_theme_id: 'builtin:ws-clean', location: null }
+    const v = { themes: [], active_theme_id: null, active_workspace_theme_id: 'builtin:ws-clean', supportsWorkspace: true, location: null }
     writeCache(s, v)
     expect(readCache(s)?.active_workspace_theme_id).toBe('builtin:ws-clean')
     const older = { themes: [], active_theme_id: 'builtin:forest', location: null }
     const c = readCache(mem({ 'osmosis:theme-cache': JSON.stringify(older) }))
     expect(c).not.toBeNull()
     expect(c!.active_workspace_theme_id).toBeNull()
+  })
+  it('the cache carries workspace support: key present => true, absent => false', () => {
+    const s = mem()
+    writeCache(s, { themes: [], active_theme_id: null, active_workspace_theme_id: null, supportsWorkspace: true, location: null })
+    expect(JSON.parse(s.getItem('osmosis:theme-cache')!)).toHaveProperty('active_workspace_theme_id', null)
+    expect(readCache(s)?.supportsWorkspace).toBe(true)
+    const s2 = mem()
+    writeCache(s2, { themes: [], active_theme_id: null, active_workspace_theme_id: 'x', supportsWorkspace: false, location: null })
+    expect(JSON.parse(s2.getItem('osmosis:theme-cache')!)).not.toHaveProperty('active_workspace_theme_id')
+    expect(readCache(s2)?.supportsWorkspace).toBe(false)
+    const older = { themes: [], active_theme_id: 'builtin:forest', location: null }
+    expect(readCache(mem({ 'osmosis:theme-cache': JSON.stringify(older) }))?.supportsWorkspace).toBe(false)
   })
   it('rejects the old shape and garbage', () => {
     const old = { themes: [{ id: 'a', name: 'A', tokens: {}, customCss: '' }], activeId: 'a' }
@@ -215,5 +227,13 @@ describe('workspace slot', () => {
     expect(applyPreview(wsP, null, forest)).toEqual({ workspace: wsP, ambience: forest })
     expect(applyPreview({ ...osmosis, id: 'full' }, ws, forest).ambience.id).toBe('full')
     expect(applyPreview({ ...osmosis, id: 'full' }, ws, forest).workspace).toBe(ws)
+  })
+})
+
+describe('effectiveWorkspaceId', () => {
+  it('ignores the stored pointer unless the server supports workspace themes', () => {
+    expect(effectiveWorkspaceId(false, 'builtin:ws-clean')).toBeNull()
+    expect(effectiveWorkspaceId(true, 'builtin:ws-clean')).toBe('builtin:ws-clean')
+    expect(effectiveWorkspaceId(true, null)).toBeNull()
   })
 })

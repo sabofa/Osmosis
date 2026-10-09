@@ -260,7 +260,7 @@ export default function Settings({
   themePresets: ReturnType<typeof useThemePresets>
 }) {
   const { theme, setTheme, resolvedMode } = themeApi
-  const { ambienceThemes: themes, workspaceThemes, activeWorkspaceId, setActiveWorkspaceId, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
+  const { ambienceThemes: themes, workspaceThemes, supportsWorkspace, activeWorkspaceId, setActiveWorkspaceId, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
   const [dupSource, setDupSource] = useState<ThemePreset | undefined>(undefined)
   const { font: docFont, setFont: setDocFont } = useDocumentFont()
@@ -630,7 +630,7 @@ export default function Settings({
           )}
         </div>
 
-        {editing === null && (
+        {editing === null && supportsWorkspace && (
           <div className="settings-row">
             <div className="settings-row-main">
               <div>

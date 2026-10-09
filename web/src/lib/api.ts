@@ -741,10 +741,16 @@ async function themeError(res: Response, fallback: string): Promise<Error> {
   return new Error(body.message || body.error || fallback)
 }
 
-export async function getThemes(): Promise<ThemesPayload> {
+// A pre-workspace-theme server omits the key entirely; null still counts.
+export function serverSupportsWorkspace(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null && 'active_workspace_theme_id' in payload
+}
+
+export async function getThemes(): Promise<ThemesPayload & { supportsWorkspace: boolean }> {
   const res = await fetch('/api/themes')
   if (!res.ok) throw new Error(`GET /api/themes ${res.status}`)
-  return res.json()
+  const body = await res.json()
+  return { ...body, supportsWorkspace: serverSupportsWorkspace(body) }
 }
 
 export async function putTheme(theme: { id: string; name: string; tokens: ThemeTokens; custom_css: string }): Promise<ThemeRecord> {
