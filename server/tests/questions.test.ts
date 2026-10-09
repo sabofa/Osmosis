@@ -218,3 +218,47 @@ describe("mc choice-count warning", () => {
     expect(result.warnings).toHaveLength(0);
   });
 });
+
+describe("document offsets are codepoint indices", () => {
+  const mc = (extra: Record<string, unknown>) => ({
+    type: "mc" as const,
+    prompt: "Which revision is best?",
+    tags: ["english"],
+    choices: [
+      { body: "Leave as is", is_correct: true },
+      { body: "Something else", is_correct: false, misconception: "m" },
+    ],
+    ...extra,
+  });
+  // "😀 hello world": 13 codepoints, 14 UTF-16 code units. "h" is codepoint 2.
+  const content = "😀 hello world";
+
+  async function setup() {
+    const db = openTestDb();
+    insertTag(db, "english");
+    const asset = await createAsset(db, "/tmp/osmosis-test-uploads", { title: "Emoji", type: "text", content }, "claude");
+    return { db, asset };
+  }
+
+  it("validates an anchor in codepoints and rejects an end beyond cpLength", async () => {
+    const { db, asset } = await setup();
+    const ok = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 13 })]);
+    expect(ok.rejected).toHaveLength(0);
+    expect(ok.created).toHaveLength(1);
+    const row = db.prepare("SELECT document_anchor_end AS e FROM question WHERE id = ?").get(ok.created[0]!.id) as { e: number };
+    expect(row.e).toBe(13);
+    const bad = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 14 })]);
+    expect(bad.created).toHaveLength(0);
+    expect(bad.rejected[0]?.reason).toBe("invalid_document_anchor");
+  });
+
+  it("validates a marker landing on the token after an emoji", async () => {
+    const { db, asset } = await setup();
+    const ok = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 2 })]);
+    expect(ok.rejected).toHaveLength(0);
+    const ws = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 1 })]);
+    expect(ws.rejected[0]?.reason).toBe("invalid_document_marker");
+    const oob = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 14 })]);
+    expect(oob.rejected[0]?.reason).toBe("invalid_document_marker");
+  });
+});

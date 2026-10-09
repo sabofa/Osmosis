@@ -18,7 +18,7 @@ import { assertSessionOpen } from "./sessions.js";
 // resolves at runtime. The import itself is correct today; only the dist
 // build's presence is unverified as of writing.
 import { parseSpec } from "graph-engine/parser";
-import { findTokenSpan } from "document-engine/core";
+import { findTokenSpan, cpLength, sliceCp } from "document-engine/core";
 
 export type QuestionType = "mc" | "written";
 export type CalculatorPolicy = "allowed" | "forbidden" | "n_a";
@@ -318,7 +318,7 @@ function validateQuestionInput(
         detail: "document_anchor_start must be >= 0 and <= document_anchor_end",
       };
     }
-    if (documentText != null && q.document_anchor_end > documentText.length) {
+    if (documentText != null && q.document_anchor_end > cpLength(documentText)) {
       return {
         reason: "invalid_document_anchor",
         detail: "document_anchor_end exceeds the referenced document's extracted text length",
@@ -334,7 +334,7 @@ function validateQuestionInput(
       };
     }
     if (documentText != null) {
-      if (q.document_marker_offset < 0 || q.document_marker_offset > documentText.length) {
+      if (q.document_marker_offset < 0 || q.document_marker_offset > cpLength(documentText)) {
         return {
           reason: "invalid_document_marker",
           detail: "document_marker_offset must be within the referenced document's extracted text length",
@@ -345,8 +345,9 @@ function validateQuestionInput(
       // author-set marker must point at the token itself: the readme promises
       // that, and a marker that "works" only via the snap is one character
       // away from being wrong.
-      const markedChar = documentText[q.document_marker_offset];
-      if (markedChar === undefined || /\s/.test(markedChar) || findTokenSpan(documentText, q.document_marker_offset) === null) {
+      // Offsets are Unicode codepoint indices, not UTF-16 units.
+      const markedChar = sliceCp(documentText, q.document_marker_offset, q.document_marker_offset + 1);
+      if (markedChar === "" || /\s/.test(markedChar) || findTokenSpan(documentText, q.document_marker_offset) === null) {
         return {
           reason: "invalid_document_marker",
           detail: "document_marker_offset does not land on a token in the referenced document's text (it's in whitespace)",

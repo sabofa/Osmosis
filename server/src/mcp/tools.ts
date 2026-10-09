@@ -80,7 +80,7 @@ const questionInputShape = z.object({
   document_anchor_start: z.number().nullable().optional(),
   document_anchor_end: z.number().nullable().optional(),
   document_marker_offset: z.number().nullable().optional().describe(
-    "Char offset into the linked document's extracted_text where this question's inline " +
+    "Codepoint offset (Unicode codepoints, not UTF-16 units) into the linked document's extracted_text where this question's inline " +
       "reference marker sits (e.g. the '(A)' or '12.' in an ACT-English-style passage that " +
       "this question is about). Requires document_id. Clicking the rendered marker jumps " +
       "the test-taker to this question. Distinct from document_anchor_start/end, which " +
