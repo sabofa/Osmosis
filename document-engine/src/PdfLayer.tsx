@@ -39,7 +39,7 @@ export default function PdfLayer({
   onErrors?: (errors: DocumentRenderError[]) => void
   // The pdfjs full text the highlights are painted against; the viewer
   // converts and resolves offsets against this, not the asset's own text.
-  onText?: (text: string) => void
+  onText?: (text: string | null) => void
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [pages, setPages] = useState<RenderedPage[]>([])
@@ -52,7 +52,7 @@ export default function PdfLayer({
   useEffect(() => {
     let cancelled = false
     setFullText('')
-    onTextRef.current?.('')
+    onTextRef.current?.(null)
     const loadingTask = loadPdf(url)
 
     async function run() {
@@ -140,6 +140,8 @@ export default function PdfLayer({
         }
       } catch (err) {
         onErrorsRef.current?.([{ message: err instanceof Error ? err.message : String(err) }])
+        // A failed load still ends the awaiting state (known-empty text).
+        if (!cancelled) onTextRef.current?.('')
       }
     }
 

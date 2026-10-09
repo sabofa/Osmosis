@@ -52,14 +52,14 @@ export interface ResolvedMarker {
 // The text offsets are converted and quotes re-found against. A PDF is painted
 // against the PdfLayer's own pdfjs text, so that wins once it has loaded;
 // otherwise empty (see awaitingPdfText); non-PDF uses the asset text.
-export function offsetText(usesPdfLayer: boolean, pdfText: string, assetText: string): string {
-  return usesPdfLayer ? pdfText : assetText
+export function offsetText(usesPdfLayer: boolean, pdfText: string | null, assetText: string): string {
+  return usesPdfLayer ? (pdfText ?? '') : assetText
 }
 
-// A PDF layer whose text has not arrived yet: offsets/quotes have nothing valid
-// to resolve against, so nothing is painted (never fall back to the asset text).
-export function awaitingPdfText(usesPdfLayer: boolean, pdfText: string): boolean {
-  return usesPdfLayer && !pdfText
+// A PDF layer whose text has not arrived yet (null; '' is a known empty text,
+// e.g. a scanned PDF): nothing is painted, never fall back to the asset text.
+export function awaitingPdfText(usesPdfLayer: boolean, pdfText: string | null): boolean {
+  return usesPdfLayer && pdfText === null
 }
 
 // `getLayers` lets marker activation read the CURRENT layers at click time, so a

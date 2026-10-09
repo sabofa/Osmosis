@@ -85,7 +85,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
   const usesPdfLayer = isPdf && !!asset.url && !embedded
-  const [pdfText, setPdfText] = useState('')
+  // null = the PDF layer's text has not arrived yet; '' = arrived, empty (scanned).
+  const [pdfText, setPdfText] = useState<string | null>(null)
+  useEffect(() => {
+    setPdfText(null)
+  }, [asset.url])
   const text = offsetText(usesPdfLayer, pdfText, asset.extractedText ?? asset.content ?? '')
 
   // CSS.highlights is a single document-wide registry — namespace every

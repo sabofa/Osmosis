@@ -73,10 +73,14 @@ describe('offsetText', () => {
     expect(offsetText(true, 'pdf words', '')).toBe('pdf words')
   })
   it('never falls back to the asset text while a PDF layer awaits its text', () => {
+    expect(offsetText(true, null, 'asset')).toBe('')
+    expect(awaitingPdfText(true, null)).toBe(true)
+    expect(awaitingPdfText(true, 'abc')).toBe(false)
+    expect(awaitingPdfText(false, null)).toBe(false)
+  })
+  it('a scanned PDF (text arrived as empty) is not awaiting and does not use the asset text', () => {
+    expect(awaitingPdfText(true, '')).toBe(false)
     expect(offsetText(true, '', 'asset')).toBe('')
-    expect(awaitingPdfText(true, '')).toBe(true)
-    expect(awaitingPdfText(true, 'x')).toBe(false)
-    expect(awaitingPdfText(false, '')).toBe(false)
   })
   it('non-PDF text uses the asset text', () => {
     expect(offsetText(false, 'pdf words', 'asset')).toBe('asset')
