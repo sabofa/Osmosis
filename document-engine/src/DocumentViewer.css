@@ -528,3 +528,22 @@
   opacity: 0.85;
   font-size: 0.9rem;
 }
+
+/* Math (KaTeX html lives inside [data-math] wrappers; see TextContent) and
+   fenced blocks (rendered as plain preformatted text for now). */
+.document-viewer-math-display {
+  margin: 0.8em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.document-viewer-markdown .document-viewer-md-fence {
+  margin: 0.7em 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 4px;
+}

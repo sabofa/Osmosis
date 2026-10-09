@@ -3,6 +3,7 @@ import type { ResolvedMarker } from './viewerModel'
 import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
 import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
+import { renderMath } from './mathRender'
 import type { DocumentAnchor, DocumentHighlight } from './types'
 
 interface Leaf extends InlineRun {
@@ -40,6 +41,12 @@ export default function TextContent({
   function leavesFor(runs: InlineRun[]): Leaf[] {
     const leaves: Leaf[] = []
     for (const run of runs) {
+      if (run.math) {
+        // Rendered glyphs have no per-character mapping to the TeX source, so
+        // a math run stays one atomic leaf (markers inside it are ignored).
+        leaves.push({ start: run.start, end: run.end, math: true })
+        continue
+      }
       const overlapping = markerSpans.filter((m) => m.span.end > run.start && m.span.start < run.end)
       let cursor = run.start
       for (const { marker, span } of overlapping) {
@@ -55,8 +62,40 @@ export default function TextContent({
     return leaves
   }
 
+  function renderMathNode(start: number, end: number, display: boolean, Wrap: 'span' | 'div'): ReactNode {
+    const result = renderMath(text.slice(start, end), display)
+    const attrs = {
+      'data-start': start,
+      'data-math': '1',
+      'data-math-end': end,
+      className: display ? 'document-viewer-math-display' : 'document-viewer-math-inline',
+    }
+    if ('error' in result) return <Wrap key={start} {...attrs}><code>{result.error}</code></Wrap>
+    const Inner = Wrap
+    return (
+      <Wrap key={start} {...attrs}>
+        <Inner dangerouslySetInnerHTML={{ __html: result.html }} />
+      </Wrap>
+    )
+  }
+
+  function renderFence(start: number, end: number): ReactNode {
+    // One span per source line so highlight/selection mapping (data-start on
+    // text-bearing leaves) keeps working; newlines are plain text between.
+    const lines = text.slice(start, end).split('\n')
+    const out: ReactNode[] = []
+    let pos = start
+    lines.forEach((ln, idx) => {
+      if (idx > 0) out.push('\n')
+      if (ln.length > 0) out.push(<span key={pos} data-start={pos}>{ln}</span>)
+      pos += ln.length + 1
+    })
+    return out
+  }
+
   function renderLeaf(leaf: Leaf): ReactNode {
     const content = text.slice(leaf.start, leaf.end)
+    if (leaf.math) return renderMathNode(leaf.start, leaf.end, false, 'span')
     const marker = leaf.marker
     const shared = marker
       ? {
@@ -81,6 +120,16 @@ export default function TextContent({
   return (
     <div className="document-viewer-text document-viewer-markdown" ref={rootRef}>
       {blocks.map((block) => {
+        if (block.type === 'math') {
+          return renderMathNode(block.start, block.end, true, 'div')
+        }
+        if (block.type === 'fence') {
+          return (
+            <pre key={block.start} className={BLOCK_CLASS.fence} data-info={block.info || undefined}>
+              {renderFence(block.start, block.end)}
+            </pre>
+          )
+        }
         const Tag = BLOCK_TAG[block.type] as ElementType
         const runs = parseInline(text.slice(block.start, block.end), block.start)
         return (
