@@ -1,4 +1,4 @@
-import DocumentPanel from '../components/DocumentPanel'
+import DocumentView from '../components/DocumentView'
 import GraphPanel from '../components/GraphPanel'
 import type { FileViewProps } from './fileTypes'
 
@@ -12,5 +12,5 @@ export function GraphView({ body }: FileViewProps) {
 // The "upload" format: a file that wraps an uploaded asset (an uploaded document).
 export function AssetView({ assetId }: FileViewProps) {
   if (!assetId) return <div className="ws-note">This upload no longer exists.</div>
-  return <DocumentPanel documentId={assetId} anchorLabel={null} anchorStart={null} anchorEnd={null} mode="full" />
+  return <DocumentView documentId={assetId} interaction="annotate" />
 }

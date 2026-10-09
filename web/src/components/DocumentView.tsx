@@ -1,9 +1,9 @@
 import React, { Suspense, useEffect, useState } from 'react'
-import { getAsset, assetDownloadUrl, getDocumentMarkers, type Asset, type DocumentMarker as ApiDocumentMarker } from '../lib/api'
+import { getAsset, assetDownloadUrl, type Asset } from '../lib/api'
 import { useDocumentTokens } from '../theme/useDocumentTokens'
 import { DownloadIcon } from './icons'
 import GraphPanel from './GraphPanel'
-import type { DocumentRenderError } from 'document-engine'
+import type { DocumentRenderError, DocumentLayer } from 'document-engine'
 // document-engine's Vite library build extracts CSS into its own file rather
 // than injecting it via the JS bundle (same convention as graph-engine — see
 // GraphPanel.tsx's comment) — without this, DocumentViewer has no
@@ -20,46 +20,36 @@ const renderGraph = (spec: string, ctx: { onErrors(msgs: string[]): void }) => (
   <GraphPanel spec={spec} onErrors={ctx.onErrors} />
 )
 
-export default function DocumentPanel({
+// A plain document viewer: loads an asset and shows it. Knows nothing about
+// questions, markers or attempts; callers compose behaviour through `layers`.
+export default function DocumentView({
   documentId,
-  anchorLabel,
-  anchorStart,
-  anchorEnd,
-  mode = 'full',
-  onJumpToQuestion,
+  interaction = 'annotate',
+  chrome = 'full',
+  layers,
 }: {
   documentId: string
-  anchorLabel: string | null
-  anchorStart: number | null
-  anchorEnd: number | null
-  mode?: 'full' | 'simple'
-  onJumpToQuestion?: (questionId: string) => void
+  interaction?: 'view' | 'annotate'
+  chrome?: 'full' | 'embedded'
+  layers?: DocumentLayer[]
 }) {
   const [asset, setAsset] = useState<Asset | null>(null)
-  const [markers, setMarkers] = useState<ApiDocumentMarker[]>([])
   const [error, setError] = useState<string | null>(null)
   // The document face and colours come from the active theme via tokens.
   const tokens = useDocumentTokens()
 
   useEffect(() => {
     setAsset(null)
-    setMarkers([])
     setError(null)
     getAsset(documentId)
       .then(setAsset)
       .catch((err) => setError(String(err)))
-    if (mode === 'full') {
-      getDocumentMarkers(documentId)
-        .then((r) => setMarkers(r.markers))
-        .catch(() => {}) // markers are a nice-to-have overlay, not core to the document loading
-    }
-  }, [documentId, mode])
+  }, [documentId])
 
   if (error) return <div className="panel-placeholder">Could not load document: {error}</div>
   if (!asset) return <div className="panel-placeholder">Loading document…</div>
 
   const downloadUrl = assetDownloadUrl(asset.id)
-  const hasAnchor = anchorStart !== null && anchorEnd !== null
 
   function handleErrors(errors: DocumentRenderError[]) {
     if (errors.length > 0) console.warn('document render errors', errors)
@@ -102,19 +92,9 @@ export default function DocumentPanel({
           <DocumentViewer
             asset={engineAsset}
             tokens={tokens}
-            interaction={mode === 'simple' ? 'view' : 'annotate'}
-            chrome={mode === 'simple' ? 'embedded' : 'full'}
-            layers={
-              mode === 'simple'
-                ? []
-                : [
-                    {
-                      anchor: hasAnchor ? { start: anchorStart!, end: anchorEnd!, label: anchorLabel } : null,
-                      markers: markers.map((m) => ({ id: m.id, offset: m.document_marker_offset })),
-                      onMarkerActivate: onJumpToQuestion,
-                    },
-                  ]
-            }
+            interaction={interaction}
+            chrome={chrome}
+            layers={layers ?? []}
             onErrors={handleErrors}
             renderGraph={renderGraph}
           />

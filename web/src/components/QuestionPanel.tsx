@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import GraphPanel from './GraphPanel'
 import DesmosPanel from './DesmosPanel'
-import DocumentPanel from './DocumentPanel'
+import TestDocument from './TestDocument'
 import './QuestionPanel.css'
 
 type PanelMode = 'graph' | 'desmos' | 'document'
@@ -64,7 +64,7 @@ export default function QuestionPanel({
         {activeMode === 'graph' && graphSpec && <GraphPanel key={graphSpec} spec={graphSpec} />}
         {activeMode === 'desmos' && <DesmosPanel />}
         {activeMode === 'document' && documentId && (
-          <DocumentPanel
+          <TestDocument
             documentId={documentId}
             anchorLabel={documentAnchorLabel ?? null}
             anchorStart={documentAnchorStart ?? null}

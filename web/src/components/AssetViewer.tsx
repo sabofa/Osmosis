@@ -1,9 +1,9 @@
 import { XIcon } from './icons'
-import DocumentPanel from './DocumentPanel'
+import DocumentView from './DocumentView'
 import './AssetViewer.css'
 
 // Full-size document viewer for an asset, opened from Settings → Documents
-// by double-clicking a row. Uses DocumentPanel in 'full' mode (highlights,
+// by double-clicking a row. Uses DocumentView (annotate) (highlights,
 // markers, PDF pages) rather than the compact panel the Take screen shows.
 export default function AssetViewer({ id, onClose }: { id: string; onClose: () => void }) {
   return (
@@ -13,7 +13,7 @@ export default function AssetViewer({ id, onClose }: { id: string; onClose: () =
           <XIcon size={14} />
         </button>
         <div className="asset-viewer-body">
-          <DocumentPanel documentId={id} anchorLabel={null} anchorStart={null} anchorEnd={null} mode="full" />
+          <DocumentView documentId={id} interaction="annotate" />
         </div>
       </div>
     </div>
