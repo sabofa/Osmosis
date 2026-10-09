@@ -16,7 +16,7 @@ const MD = [
   '',
   'Inline math $x^{n+1}$ sits in a line, and prices read $5 and $6 without turning into math.',
   '',
-  '$$\int_0^1 x^2\,dx$$',
+  String.raw`$$\int_0^1 x^2\,dx$$`,
   '',
   'Highlight after the math: this sentence is highlighted.',
   '',
