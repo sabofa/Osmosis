@@ -4,6 +4,7 @@ import { fittedCamera, pxPerUnit, screenToContent, visibleRect } from '../camera
 import { GestureRecognizer, type Intent, type PointerKind, type PointerSample } from '../input'
 import { clampCamera, DEFAULT_LIMITS, type LimitsPolicy } from '../limits'
 import { commitDue, liveTransform, type LiveTransform } from '../liveTransform'
+import { SETTLE_MS } from '../feel'
 import { ViewMotion } from '../motion'
 import { hitTest, PointerSelection, type HitItem } from '../pointing'
 import type { Camera, Rect, Size, Vec } from '../types'
@@ -29,7 +30,9 @@ export interface View2dOptions {
   limits?: LimitsPolicy
   // Draw the window. Called whenever the drawn camera changes; or, if `onLive`
   // is given, only when the drawing is *committed* (see onLive).
-  onApply(camera: Camera, visible: Rect, pxPerUnit: number): void
+  // `settled`: the view is at rest (a commit mid-gesture says false), so an
+  // engine can draw a cheaper drawing while it is not.
+  onApply(camera: Camera, visible: Rect, pxPerUnit: number, settled: boolean): void
   // A cheap live view for a drawing that is dear to redraw. When given, a
   // moving view is not drawn through `onApply` on every frame: the drawing is
   // left as it was last committed and this is told how to move it (a
@@ -470,7 +473,7 @@ class Controller {
     if (!onLive) {
       // The engine draws every change itself.
       if (!changed) return
-      onApply(camera, visible, ppu)
+      onApply(camera, visible, ppu, true)
     } else {
       // The drawing is committed now and then; between, it is moved.
       const prior = this.committed
@@ -486,7 +489,7 @@ class Controller {
       })
       if (due) {
         this.committed = { visible, screen: { ...this.screen }, at: now }
-        onApply(camera, visible, ppu)
+        onApply(camera, visible, ppu, !m.moving && now - this.lastChangeAt >= SETTLE_MS)
       } else if (changed && prior) {
         onLive(liveTransform(prior.visible, visible, this.screen))
       }

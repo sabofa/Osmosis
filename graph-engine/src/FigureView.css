@@ -107,3 +107,9 @@ text.figure-selected,
 .figure-selected text {
   font-weight: 600;
 }
+
+/* While the view moves, shading shows a third of its marks (figure/lod.ts);
+   all of them are back when it settles. */
+.figure-moving [data-lod-skip] {
+  display: none;
+}

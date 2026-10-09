@@ -4,6 +4,7 @@ import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './f
 import { figureMapping, type FigureFrame } from './figure/frame'
 import { highlightAccent, highlightOf, highlightOverlay, outermostMatches, selectedItems } from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
+import { thinnedIndices } from './figure/lod'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
 import { applyOverscan, applySvgViewBox } from './view2d/dom/appliers'
@@ -110,6 +111,23 @@ const LIVE = queryFlag('live') !== '0'
 const WILL_CHANGE = queryFlag('wc') !== '0'
 const OVERSCAN_USED = LIVE ? (Number.isFinite(Number(queryFlag('overscan') ?? NaN)) && queryFlag('overscan') !== null ? Number(queryFlag('overscan')) : OVERSCAN) : 0
 
+// Which marks of shading are hidden while the view moves (figure/lod.ts), found
+// once per <svg>: in each group of the regions layer, the marks to skip carry
+// `data-lod-skip`, and CSS hides them under `.figure-moving`.
+const thinned = new WeakSet<SVGSVGElement>()
+function markThinning(root: SVGSVGElement): void {
+  if (thinned.has(root)) return
+  thinned.add(root)
+  const parents = new Set<Element>()
+  root.querySelectorAll('[data-layer="regions"] polygon, [data-layer="regions"] path').forEach((mark) => {
+    if (mark.parentElement) parents.add(mark.parentElement)
+  })
+  for (const parent of parents) {
+    const marks = [...parent.children].filter((child) => child.tagName === 'polygon' || child.tagName === 'path')
+    for (const index of thinnedIndices(marks.length)) marks[index].setAttribute('data-lod-skip', '')
+  }
+}
+
 const NONE: readonly string[] = []
 
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
@@ -160,7 +178,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // place any of it is rewritten, so a move costs one of these every so often
   // (see view2d/liveTransform.ts's commitDue) and not one a frame.
   const paint = useCallback(
-    (visible: Rect, zoom: number) => {
+    (visible: Rect, zoom: number, settled = true) => {
       const root = containerRef.current?.querySelector('svg')
       if (!root) return
       const window = growRect(visible, OVERSCAN_USED)
@@ -168,6 +186,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       applySvgViewBox(root, window)
       root.style.transform = ''
       root.style.willChange = ''
+      if (settled) root.classList.remove('figure-moving')
       liveScale.current = 1
       compensation.current = compensate(root, zoom, compensation.current)
     },
@@ -178,6 +197,8 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   const paintLive = useCallback((transform: LiveTransform) => {
     const root = containerRef.current?.querySelector('svg')
     if (!root) return
+    markThinning(root)
+    root.classList.add('figure-moving')
     root.style.willChange = WILL_CHANGE ? 'transform' : ''
     root.style.transform = liveTransformValue(transform)
     liveScale.current = transform.scale
@@ -187,9 +208,9 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     frame: content,
     start,
     items,
-    onApply: (camera, visible, pxPerUnit) => {
+    onApply: (camera, visible, pxPerUnit, settled) => {
       applied.current = { zoom: camera.zoom, visible, window: growRect(visible, OVERSCAN_USED), pxPerUnit }
-      paint(visible, camera.zoom)
+      paint(visible, camera.zoom, settled)
     },
     onLive: LIVE ? paintLive : undefined,
     overscan: OVERSCAN_USED,
