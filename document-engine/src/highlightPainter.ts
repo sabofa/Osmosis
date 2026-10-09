@@ -97,17 +97,18 @@ import type { DocumentHighlight } from './types'
 export function usePaintHighlights(
   rootRef: RefObject<HTMLElement | null>,
   groupPrefix: string,
-  anchor: RangeSpec | null,
+  anchors: RangeSpec[],
   highlights: DocumentHighlight[],
   showOverlays: boolean,
   readySignal: unknown
 ): void {
+  const anchorsKey = anchors.map((a) => `${a.start}-${a.end}`).join(',')
   useEffect(() => {
     const root = rootRef.current
     const anchorName = `${groupPrefix}-anchor`
     const colorNames = HIGHLIGHT_PALETTE.map((c) => `${groupPrefix}-${c.id}`)
 
-    if (root && showOverlays && anchor) paintHighlightGroup(root, anchorName, [anchor])
+    if (root && showOverlays && anchors.length > 0) paintHighlightGroup(root, anchorName, anchors)
     else clearHighlightGroup(anchorName)
 
     for (const color of HIGHLIGHT_PALETTE) {
@@ -125,5 +126,5 @@ export function usePaintHighlights(
       for (const name of colorNames) clearHighlightGroup(name)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootRef, groupPrefix, anchor?.start, anchor?.end, highlights, showOverlays, readySignal])
+  }, [rootRef, groupPrefix, anchorsKey, highlights, showOverlays, readySignal])
 }

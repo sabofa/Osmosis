@@ -1,32 +1,31 @@
 import { useRef, type ElementType, type ReactNode } from 'react'
+import type { ResolvedMarker } from './viewerModel'
 import { findTokenSpan } from './core/findTokenSpan'
 import { usePaintHighlights } from './highlightPainter'
 import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
-import type { DocumentAnchor, DocumentHighlight, DocumentMarker } from './types'
+import type { DocumentAnchor, DocumentHighlight } from './types'
 
 interface Leaf extends InlineRun {
-  marker?: DocumentMarker
+  marker?: ResolvedMarker
 }
 
 export default function TextContent({
   text,
-  anchor,
+  anchors,
   markers,
   highlights = [],
   showOverlays = true,
   groupPrefix,
-  onJumpToQuestion,
 }: {
   text: string
-  anchor: DocumentAnchor | null
-  markers: DocumentMarker[]
+  anchors: DocumentAnchor[]
+  markers: ResolvedMarker[]
   highlights?: DocumentHighlight[]
   showOverlays?: boolean
   groupPrefix: string
-  onJumpToQuestion?: (id: string) => void
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  usePaintHighlights(rootRef, groupPrefix, anchor, highlights, showOverlays, text)
+  usePaintHighlights(rootRef, groupPrefix, anchors, highlights, showOverlays, text)
 
   // Anchor and highlight ranges are painted via the CSS Custom Highlight API
   // (see highlightPainter.ts) rather than wrapped in their own elements, so
@@ -35,7 +34,7 @@ export default function TextContent({
   // boundaries split the DOM into separate elements here.
   const markerSpans = markers
     .map((marker) => ({ marker, span: findTokenSpan(text, marker.offset) }))
-    .filter((m): m is { marker: DocumentMarker; span: { start: number; end: number } } => m.span !== null)
+    .filter((m): m is { marker: ResolvedMarker; span: { start: number; end: number } } => m.span !== null)
     .sort((a, b) => a.span.start - b.span.start)
 
   function leavesFor(runs: InlineRun[]): Leaf[] {
@@ -65,9 +64,9 @@ export default function TextContent({
           className: 'document-viewer-marker',
           role: 'button' as const,
           tabIndex: 0,
-          onClick: () => onJumpToQuestion?.(marker.id),
+          onClick: () => marker.activate(),
           onKeyDown: (e: React.KeyboardEvent) => {
-            if (e.key === 'Enter' || e.key === ' ') onJumpToQuestion?.(marker.id)
+            if (e.key === 'Enter' || e.key === ' ') marker.activate()
           },
         }
       : { 'data-start': leaf.start }

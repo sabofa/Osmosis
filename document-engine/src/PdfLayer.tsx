@@ -3,7 +3,8 @@ import { TextLayer } from 'pdfjs-dist'
 import { loadPdf, PAGE_JOIN, type TextItemLike } from './pdfSetup'
 import { findTokenSpan } from './core/findTokenSpan'
 import { usePaintHighlights } from './highlightPainter'
-import type { DocumentAnchor, DocumentHighlight, DocumentMarker, DocumentRenderError } from './types'
+import type { ResolvedMarker } from './viewerModel'
+import type { DocumentAnchor, DocumentHighlight, DocumentRenderError } from './types'
 
 // Logical/layout scale — independent of the device-pixel-ratio multiplier
 // applied to the canvas's backing buffer below. Bumped from the old 1.5:
@@ -21,21 +22,19 @@ interface RenderedPage {
 
 export default function PdfLayer({
   url,
-  anchor,
+  anchors,
   markers,
   highlights,
   showOverlays,
   groupPrefix,
-  onJumpToQuestion,
   onErrors,
 }: {
   url: string
-  anchor: DocumentAnchor | null
-  markers: DocumentMarker[]
+  anchors: DocumentAnchor[]
+  markers: ResolvedMarker[]
   highlights: DocumentHighlight[]
   showOverlays: boolean
   groupPrefix: string
-  onJumpToQuestion?: (id: string) => void
   onErrors?: (errors: DocumentRenderError[]) => void
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -43,8 +42,6 @@ export default function PdfLayer({
   const [fullText, setFullText] = useState('')
   const onErrorsRef = useRef(onErrors)
   onErrorsRef.current = onErrors
-  const onJumpRef = useRef(onJumpToQuestion)
-  onJumpRef.current = onJumpToQuestion
 
   useEffect(() => {
     let cancelled = false
@@ -151,7 +148,7 @@ export default function PdfLayer({
     if (pages.length === 0 || !fullText) return
     const markerSpans = markers
       .map((marker) => ({ marker, span: findTokenSpan(fullText, marker.offset) }))
-      .filter((m): m is { marker: DocumentMarker; span: { start: number; end: number } } => m.span !== null)
+      .filter((m): m is { marker: ResolvedMarker; span: { start: number; end: number } } => m.span !== null)
     if (markerSpans.length === 0) return
 
     const cleanups: (() => void)[] = []
@@ -165,7 +162,7 @@ export default function PdfLayer({
         div.classList.add('document-viewer-pdf-marker')
         div.setAttribute('role', 'button')
         div.tabIndex = 0
-        const onClick = () => onJumpRef.current?.(hit.marker.id)
+        const onClick = () => hit.marker.activate()
         const onKeyDown = (e: KeyboardEvent) => {
           if (e.key === 'Enter' || e.key === ' ') onClick()
         }
@@ -181,7 +178,7 @@ export default function PdfLayer({
     return () => cleanups.forEach((fn) => fn())
   }, [pages, fullText, markers])
 
-  usePaintHighlights(rootRef, groupPrefix, anchor, highlights, showOverlays, pages)
+  usePaintHighlights(rootRef, groupPrefix, anchors, highlights, showOverlays, pages)
 
   return (
     <div className="document-viewer-pdf-pages" ref={rootRef}>

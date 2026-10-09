@@ -40,3 +40,19 @@ export interface DocumentHighlight {
 export interface DocumentRenderError {
   message: string
 }
+
+// How much the viewer lets the reader do. 'edit' is a stub until the editing
+// mode lands; it still shows the content read-only.
+export type Interaction = 'view' | 'annotate' | 'edit'
+
+// 'full': content + zoom + settings menu. 'embedded': content + zoom buttons
+// only (no settings menu, no highlighting) for small inline use.
+export type Chrome = 'full' | 'embedded'
+
+// A layer composes over the viewer: it contributes an anchored range and/or
+// clickable markers. The viewer knows nothing about what the layer is for.
+export interface DocumentLayer {
+  anchor?: DocumentAnchor | null
+  markers?: DocumentMarker[]
+  onMarkerActivate?(id: string): void
+}

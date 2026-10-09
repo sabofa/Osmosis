@@ -7,39 +7,40 @@ import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
+import { capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
 import type {
   DocumentViewerAsset,
-  DocumentAnchor,
   DocumentHighlight,
-  DocumentMarker,
+  DocumentLayer,
+  Interaction,
+  Chrome,
   DocumentRenderError,
 } from './types'
 import './DocumentViewer.css'
 
-export interface DocumentViewerProps {
+export interface DocumentViewerProps extends LegacyViewerProps {
   asset: DocumentViewerAsset
   // Initializes the viewer's theme; the built-in settings menu can then
   // flip it locally without the host having to re-render this prop (same
   // "initializes, doesn't dictate every frame" pattern highlights/
   // onHighlightsChange below uses).
   theme?: 'light' | 'dark'
-  // 'full' (default): the complete engine — in-document anchor highlighting,
-  // clickable question markers, selectable/highlightable PDF and image-panel
-  // text, zoom controls, and a settings menu (theme, highlight visibility,
-  // download). 'simple': bare rendering for inline embedding (e.g. a small
-  // figure inside a question's description box) — just the content, native
-  // scroll, and zoom +/- buttons. No anchors, no markers, no highlighting,
-  // no settings menu.
-  mode?: 'full' | 'simple'
-  anchor?: DocumentAnchor | null
-  markers?: DocumentMarker[]
+  // What the reader may do: 'view' (select/search/zoom/theme only),
+  // 'annotate' (default: view + highlights and the colour popover), 'edit'
+  // (stub until editing lands; content stays read-only).
+  interaction?: Interaction
+  // 'full' (default): content, zoom, settings menu. 'embedded': content and
+  // zoom buttons only — no settings menu, no highlighting, no layers.
+  chrome?: Chrome
+  // Layers compose over the viewer: each contributes an anchor and/or
+  // clickable markers; marker activation goes to that layer's callback.
+  layers?: DocumentLayer[]
   // User-created highlights (select text, pick a color). Uncontrolled-with-
   // callback: this prop seeds/re-syncs internal state, onHighlightsChange is
   // how the host persists further changes — the host doesn't have to echo
   // every edit back down for the UI to keep working.
   highlights?: DocumentHighlight[]
   onHighlightsChange?: (highlights: DocumentHighlight[]) => void
-  onJumpToQuestion?: (questionId: string) => void
   onErrors?: (errors: DocumentRenderError[]) => void
 }
 
@@ -66,17 +67,19 @@ function makeHighlightId(): string {
 
 let instanceCounter = 0
 
-export default function DocumentViewer({
-  asset,
-  theme,
-  mode = 'full',
-  anchor = null,
-  markers = [],
-  highlights,
-  onHighlightsChange,
-  onJumpToQuestion,
-  onErrors,
-}: DocumentViewerProps) {
+export default function DocumentViewer(props: DocumentViewerProps) {
+  const { asset, theme, highlights, onHighlightsChange, onErrors } = props
+  // TODO(T3.6): remove adapter — normalizeProps also maps the legacy
+  // mode/anchor/markers/onJumpToQuestion props onto interaction/chrome/layers.
+  const { interaction, chrome, layers } = normalizeProps(props)
+  const caps = capabilities(interaction, chrome)
+  const embedded = chrome === 'embedded'
+  const resolved = useMemo(
+    () => (caps.layers ? resolveLayers(layers) : { anchors: [], markers: [] }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [caps.layers, JSON.stringify(layers.map((l) => [l.anchor, l.markers]))]
+  )
+  const { anchors, markers } = resolved
   const isPdf = asset.mime === 'application/pdf'
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
@@ -142,14 +145,14 @@ export default function DocumentViewer({
   }
 
   function handleMouseUp() {
-    if (mode !== 'full' || !contentRef.current) return
+    if (!caps.highlightPopover || !contentRef.current) return
     const range = getSelectionOffsetRange(contentRef.current)
     const rect = range ? getSelectionRect() : null
     setPendingSelection(range && rect ? { ...range, rect } : null)
   }
 
   function applyHighlight(colorId: string) {
-    if (!pendingSelection) return
+    if (!caps.highlight || !pendingSelection) return
     const next = toggleHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, colorId, makeHighlightId)
     setLocalHighlights(next)
     onHighlightsChange?.(next)
@@ -162,7 +165,7 @@ export default function DocumentViewer({
   // swatches, instead of having to reselect and pick the matching color to
   // toggle it off.
   function removeHighlight() {
-    if (!pendingSelection) return
+    if (!caps.highlight || !pendingSelection) return
     const next = removeHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, makeHighlightId)
     setLocalHighlights(next)
     onHighlightsChange?.(next)
@@ -179,8 +182,8 @@ export default function DocumentViewer({
       return
     }
     if (asset.content) {
-      // Text assets are treated as markdown natively — questions/passages
-      // routinely include emphasis/lists, and .md is what an author would
+      // Text assets are treated as markdown natively — authored prose
+      // routinely includes emphasis/lists, and .md is what an author would
       // actually want to re-open this in an editor as.
       const blob = new Blob([asset.content], { type: 'text/markdown' })
       const url = URL.createObjectURL(blob)
@@ -195,27 +198,26 @@ export default function DocumentViewer({
   let body: ReactNode
   let sidePanel: ReactNode = null
 
-  if (mode === 'simple') {
+  if (embedded) {
     if (isPdf && asset.url) body = <SimplePdfPages url={asset.url} onErrors={onErrors} />
     else if (isImage && asset.url) body = <img className="document-viewer-image" src={asset.url} alt="" draggable={false} />
     else if (isText) {
       // Reuses TextContent's markdown rendering (see markdown.ts) with
-      // every interactive feature switched off — 'simple' mode's whole
+      // every interactive feature switched off — embedded chrome's whole
       // point is no anchors/markers/highlighting/click-handling, but there
-      // is no reason its formatting should look worse than 'full' mode's.
-      body = <TextContent text={text} anchor={null} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} />
+      // is no reason its formatting should look worse than full chrome's.
+      body = <TextContent text={text} anchors={[]} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} />
     }
     else body = <div className="document-viewer-placeholder">Preview not available for this file type.</div>
   } else if (isPdf && asset.url) {
     body = (
       <PdfLayer
         url={asset.url}
-        anchor={anchor}
+        anchors={anchors}
         markers={markers}
         highlights={localHighlights}
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
-        onJumpToQuestion={onJumpToQuestion}
         onErrors={onErrors}
       />
     )
@@ -225,12 +227,11 @@ export default function DocumentViewer({
       sidePanel = (
         <TextContent
           text={text}
-          anchor={anchor}
+          anchors={anchors}
           markers={markers}
           highlights={localHighlights}
           showOverlays={showOverlays}
           groupPrefix={groupPrefix}
-          onJumpToQuestion={onJumpToQuestion}
         />
       )
     }
@@ -238,12 +239,11 @@ export default function DocumentViewer({
     body = (
       <TextContent
         text={text}
-        anchor={anchor}
+        anchors={anchors}
         markers={markers}
         highlights={localHighlights}
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
-        onJumpToQuestion={onJumpToQuestion}
       />
     )
   } else {
@@ -253,8 +253,8 @@ export default function DocumentViewer({
   const canDownload = !!asset.url || (asset.type === 'text' && !!asset.content)
 
   return (
-    <div className={`document-viewer document-viewer-${internalTheme} document-viewer-mode-${mode}`}>
-      {mode === 'full' && <style>{highlightCss}</style>}
+    <div className={`document-viewer document-viewer-${internalTheme} document-viewer-mode-${embedded ? 'simple' : 'full'}`}>
+      {!embedded && <style>{highlightCss}</style>}
       <div className="document-viewer-scroll">
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}`}
@@ -269,7 +269,7 @@ export default function DocumentViewer({
 
       <div className="document-viewer-toolbar">
         <ZoomControl zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
-        {mode === 'full' && (
+        {caps.settingsMenu && (
           <SettingsMenu
             theme={internalTheme}
             onToggleTheme={() => setInternalTheme((t) => (t === 'light' ? 'dark' : 'light'))}
@@ -280,7 +280,7 @@ export default function DocumentViewer({
         )}
       </div>
 
-      {mode === 'full' && pendingSelection && (
+      {caps.highlightPopover && pendingSelection && (
         <div
           className="document-viewer-highlight-action"
           style={{ left: pendingSelection.rect.left + pendingSelection.rect.width / 2, top: pendingSelection.rect.top }}
