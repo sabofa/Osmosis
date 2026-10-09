@@ -24,11 +24,19 @@ export default function DocumentView({
   const tokens = useDocumentTokens()
 
   useEffect(() => {
+    let cancelled = false
     setAsset(null)
     setError(null)
     getAsset(documentId)
-      .then(setAsset)
-      .catch((err) => setError(String(err)))
+      .then((a) => {
+        if (!cancelled) setAsset(a)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err))
+      })
+    return () => {
+      cancelled = true
+    }
   }, [documentId])
 
   if (error) return <div className="panel-placeholder">Could not load document: {error}</div>

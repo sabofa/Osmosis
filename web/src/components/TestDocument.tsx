@@ -23,11 +23,17 @@ export default function TestDocument({
   const [markers, setMarkers] = useState<ApiDocumentMarker[]>([])
 
   useEffect(() => {
+    let cancelled = false
     setMarkers([])
     if (mode === 'full') {
       getDocumentMarkers(documentId)
-        .then((r) => setMarkers(r.markers))
+        .then((r) => {
+          if (!cancelled) setMarkers(r.markers)
+        })
         .catch(() => {}) // markers are a nice-to-have overlay, not core to the document loading
+    }
+    return () => {
+      cancelled = true
     }
   }, [documentId, mode])
 
