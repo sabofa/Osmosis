@@ -63,4 +63,18 @@ describe('anchors', () => {
     const t2 = 'first   line\n\n\nsecond target line\nthird'
     expect(check(t2, a).start).toBe(t2.indexOf('target'))
   })
+  it('rejects a match whose end splits a surrogate pair', () => {
+    const text = 'a\u{1F600}'
+    const q = 'a\uD83D'
+    const r = resolveAnchor(text, { start: 5, end: 7, quote: q })
+    expect(r === null || sliceCp(text, r.start, r.end) === q).toBe(true)
+  })
+  it('stays fast for a short common quote in a large text', () => {
+    const t = 'the quick brown fox. '.repeat(15000)
+    const t0 = performance.now()
+    const r = resolveAnchor(t, { start: 150000, end: 150001, quote: 'e', prefix: 'th', suffix: ' q' })
+    expect(r).not.toBeNull()
+    expect(sliceCp(t, r!.start, r!.end)).toBe('e')
+    expect(performance.now() - t0).toBeLessThan(500)
+  })
 })
