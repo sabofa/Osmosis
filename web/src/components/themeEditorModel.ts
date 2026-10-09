@@ -119,3 +119,11 @@ export function layerNote(layer: LayerKind | undefined): string | null {
   if (layer === 'ambience') return 'An ambience theme controls colour, surface and graph; shape, type and space come from the workspace theme.'
   return null
 }
+
+export const WORKSPACE_OVERRIDE_NOTE =
+  'A workspace theme is active - shape, type, space and material settings here are overridden while it is selected.'
+
+// The edited manifest's shape/type controls are masked in the live preview by an active workspace theme.
+export function workspaceOverrides(layer: LayerKind | undefined, workspaceActive: boolean): boolean {
+  return workspaceActive && layer !== 'workspace'
+}

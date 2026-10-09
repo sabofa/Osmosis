@@ -9,6 +9,7 @@ import {
   putThemeLocation,
 } from '../lib/api'
 import type { ThemePreset } from '../hooks/useThemePresets'
+import { initSlot, choose, choiceSucceeded, choiceFailed, refreshStarted, refreshAdopt, deleted, type SlotState } from './activeSlot'
 import { Ctx, type CustomTheme, type ThemeContextValue } from './context'
 import { buildThemeSheet } from './applyTheme'
 import { activeManifest, activeWorkspaceManifest, applyPreview, composeActive, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
@@ -61,38 +62,35 @@ function safeStore(key: string, value: string) {
   }
 }
 
-// One active-theme pointer with optimistic updates: each choice bumps a
-// request counter, a failure rolls back to the last server-confirmed value,
-// and a stale response (superseded by a newer choice) is ignored.
+// Thin React wrapper over the pure reducer in activeSlot.ts.
 function useActiveSlot(initial: string | null, layer: 'ambience' | 'workspace', setError: (e: string | null) => void) {
-  const [value, setValue] = useState<string | null>(initial)
-  const confirmed = useRef<string | null>(initial)
-  const req = useRef(0)
+  const [state, setState] = useState<SlotState>(() => initSlot(initial))
+  const ref = useRef(state)
+  const commit = useCallback((next: SlotState) => {
+    ref.current = next
+    setState(next)
+  }, [])
   const set = useCallback(
     (id: string | null) => {
-      const mine = ++req.current
-      setValue(id)
+      const c = choose(ref.current, id)
+      commit(c.state)
       putActiveTheme(id, layer)
         .then(() => {
-          if (mine !== req.current) return
-          confirmed.current = id
-          setError(null)
+          commit(choiceSucceeded(ref.current, c.mine, id))
+          if (c.mine === ref.current.lastChoice) setError(null)
         })
         .catch((err) => {
-          if (mine !== req.current) return // superseded by a newer choice
-          setValue(confirmed.current)
+          if (c.mine !== ref.current.lastChoice) return
+          commit(choiceFailed(ref.current, c.mine))
           setError(err instanceof Error ? err.message : String(err))
         })
     },
-    [layer, setError]
+    [layer, setError, commit]
   )
-  // Server truth arrives: adopt it unless a newer choice was made since `snapshot`.
-  const adopt = useCallback((id: string | null, snapshot: number) => {
-    if (snapshot !== req.current) return
-    confirmed.current = id
-    setValue(id)
-  }, [])
-  return { value, setValue, req, set, adopt }
+  const begin = useCallback(() => refreshStarted(ref.current).snapshot, [])
+  const adopt = useCallback((id: string | null, snapshot: number) => commit(refreshAdopt(ref.current, snapshot, id)), [commit])
+  const remove = useCallback((id: string) => commit(deleted(ref.current, id)), [commit])
+  return { value: state.value, set, begin, adopt, remove }
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -175,13 +173,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [manifest, mode, blend])
 
   // ---- server sync ----
-  const { setValue: setAmbienceValue } = ambienceSlot
-  const { setValue: setWorkspaceValue } = workspaceSlot
-  const { req: ambReqRef, adopt: adoptAmbience } = ambienceSlot
-  const { req: wsReqRef, adopt: adoptWorkspace } = workspaceSlot
+  const { remove: removeAmbience, begin: beginAmbience, adopt: adoptAmbience } = ambienceSlot
+  const { remove: removeWorkspace, begin: beginWorkspace, adopt: adoptWorkspace } = workspaceSlot
   const refresh = useCallback(async () => {
-    const ambReq = ambReqRef.current
-    const wsReq = wsReqRef.current
+    const ambReq = beginAmbience()
+    const wsReq = beginWorkspace()
     try {
       const p = await getThemes()
       setCustom(p.themes.map((t) => ({ id: t.id, name: t.name, manifest: t.manifest, updated_at: t.updated_at })))
@@ -192,7 +188,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } catch {
       // Node unreachable: keep what we have.
     }
-  }, [ambReqRef, wsReqRef, adoptAmbience, adoptWorkspace])
+  }, [beginAmbience, beginWorkspace, adoptAmbience, adoptWorkspace])
 
   useEffect(() => {
     void refresh()
@@ -243,15 +239,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       await deleteThemeRecord(id)
       setCustom((prev) => prev.filter((t) => t.id !== id))
-      setAmbienceValue((cur) => (cur === id ? null : cur))
-      setWorkspaceValue((cur) => (cur === id ? null : cur))
+      removeAmbience(id)
+      removeWorkspace(id)
       setError(null)
       return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       return false
     }
-  }, [setAmbienceValue, setWorkspaceValue])
+  }, [removeAmbience, removeWorkspace])
 
   const setLocation = useCallback(async (loc: Location | null): Promise<boolean> => {
     try {

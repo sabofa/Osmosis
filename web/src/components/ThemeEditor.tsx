@@ -16,6 +16,8 @@ import {
   seedsVisible,
   fontVisible,
   layerNote,
+  workspaceOverrides,
+  WORKSPACE_OVERRIDE_NOTE,
   countOverrides,
   clearOverrides,
   reportFor,
@@ -102,11 +104,13 @@ function SeedRow({
 export default function ThemeEditor({
   initial,
   builtinSource,
+  workspaceActive,
   onSave,
   onCancel,
 }: {
   initial: ThemePreset | null
   builtinSource?: ThemePreset
+  workspaceActive?: boolean
   onSave: (manifest: ThemeManifest) => void
   onCancel: () => void
 }) {
@@ -167,6 +171,7 @@ export default function ThemeEditor({
         </select>
       </label>
       {layerNote(manifest.layer) && <div className="theme-token-hint">{layerNote(manifest.layer)}</div>}
+      {workspaceOverrides(manifest.layer, !!workspaceActive) && <div className="theme-token-hint">{WORKSPACE_OVERRIDE_NOTE}</div>}
 
       <div className="theme-mode-tabs">
         <button type="button" className={`theme-mode-tab${mode === 'light' ? ' active' : ''}`} onClick={() => setMode('light')}>

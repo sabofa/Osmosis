@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { builtinById, BUILTINS, resolve, DEFAULT_DIALS, DEFAULT_SEEDS } from 'theme-core'
 import type { ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
-import { startManifest, setSeed, setDial, setFont, setCss, setName, countOverrides, clearOverrides, reportFor, setLayer, dialVisible, seedsVisible, fontVisible, layerNote } from './themeEditorModel'
+import { startManifest, setSeed, setDial, setFont, setCss, setName, countOverrides, clearOverrides, reportFor, setLayer, dialVisible, seedsVisible, fontVisible, layerNote, workspaceOverrides } from './themeEditorModel'
 
 const fresh = () => startManifest(null)
 const presetOf = (m: ThemeManifest, builtin?: boolean): ThemePreset => ({
@@ -144,5 +144,15 @@ describe('layer', () => {
   it('hiding keeps values', () => {
     const m = setDial(fresh(), 'contrast', 0.9)
     expect(setLayer(m, 'workspace').dials.contrast).toBe(0.9)
+  })
+})
+
+describe('workspaceOverrides', () => {
+  it('only when a workspace theme is active and the edited layer is not workspace', () => {
+    expect(workspaceOverrides(undefined, true)).toBe(true)
+    expect(workspaceOverrides('ambience', true)).toBe(true)
+    expect(workspaceOverrides('workspace', true)).toBe(false)
+    expect(workspaceOverrides(undefined, false)).toBe(false)
+    expect(workspaceOverrides('ambience', false)).toBe(false)
   })
 })

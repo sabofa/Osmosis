@@ -658,6 +658,7 @@ export default function Settings({
           <ThemeEditor
             initial={editing === 'new' || dupSource ? null : editing}
             builtinSource={dupSource}
+            workspaceActive={activeWorkspaceId !== null}
             onCancel={() => {
               setEditing(null)
               setDupSource(undefined)
