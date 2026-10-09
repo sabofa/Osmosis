@@ -63,3 +63,28 @@ describe('parseInline', () => {
     expect(runs.every((r) => !r.bold)).toBe(true)
   })
 })
+
+describe('BLOCK_CLASS escapes', () => {
+  it('plain blocks have an empty class and none contain a backslash', async () => {
+    const { BLOCK_CLASS } = await import('./markdown')
+    for (const k of ['h1', 'h2', 'h3', 'p'] as const) expect(BLOCK_CLASS[k]).toBe('')
+    for (const v of Object.values(BLOCK_CLASS)) expect(v).not.toContain('\\')
+  })
+})
+
+describe('parseInline performance', () => {
+  it('200k-char paragraph of many spans parses fast', async () => {
+    const { parseInline } = await import('./markdown')
+    const t = '`a` *b* $c$ _d_ '.repeat(12500)
+    const s = performance.now()
+    const runs = parseInline(t, 0)
+    expect(performance.now() - s).toBeLessThan(500)
+    expect(runs.length).toBeGreaterThan(40000)
+  })
+  it('5000 lone asterisks parse fast', async () => {
+    const { parseInline } = await import('./markdown')
+    const s = performance.now()
+    parseInline('a '.repeat(10) + '* '.repeat(5000), 0)
+    expect(performance.now() - s).toBeLessThan(500)
+  })
+})

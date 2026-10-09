@@ -18,7 +18,7 @@ export interface MdBlock {
   // (between the delimiter lines); the delimiters themselves are omitted.
   start: number
   end: number
-  // Fence info string (e.g. "graph", "python"); '\\' when absent. Fences only.
+  // Fence info string (e.g. "graph", "python"); '' when absent. Fences only.
   info?: string
 }
 
@@ -172,7 +172,7 @@ function findMathClose(text: string, open: number): number {
     }
     if (ch === '$') {
       if (/\s/.test(text[j - 1])) return -1
-      if (/\d/.test(text[j + 1] ?? '\\')) return -1
+      if (/\d/.test(text[j + 1] ?? '')) return -1
       return j
     }
   }
@@ -235,7 +235,9 @@ function protectedSpans(text: string): Protected[] {
 export function parseInline(text: string, offset: number): InlineRun[] {
   const spans = protectedSpans(text)
   const spanAt = new Map(spans.map((s) => [s.start, s]))
-  const inSpan = (idx: number) => spans.some((s) => idx >= s.start && idx < s.end)
+  const mask = new Uint8Array(text.length + 1)
+  for (const s of spans) mask.fill(1, s.start, Math.min(s.end, text.length))
+  const inSpan = (idx: number) => mask[idx] === 1
   const runs: InlineRun[] = []
 
   // First occurrence of `needle` in [from, to) that is not inside a code/math span.
@@ -309,10 +311,10 @@ export const BLOCK_TAG: Record<BlockType, string> = {
 }
 
 export const BLOCK_CLASS: Record<BlockType, string> = {
-  h1: '\\',
-  h2: '\\',
-  h3: '\\',
-  p: '\\',
+  h1: '',
+  h2: '',
+  h3: '',
+  p: '',
   li: 'document-viewer-md-li',
   oli: 'document-viewer-md-li',
   math: 'document-viewer-math-block',

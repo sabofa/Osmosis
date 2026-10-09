@@ -10,7 +10,7 @@ import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForP
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import { DEFAULT_TOKENS, tokensToCssVars, highlightCss as buildHighlightCss } from './tokenVars'
 import type { DocumentTokens } from 'theme-core'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -119,6 +119,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // gone are skipped (never painted at a stale place) and reported once.
   // Empty text means "not loaded yet": nothing to re-anchor against.
   const painted = useMemo(() => {
+    if (awaitingPdfText(usesPdfLayer, pdfText)) return { highlights: [], anchors: [], markers: [], failed: [] as string[] }
     if (!text) return { highlights: localHighlights, anchors: layerAnchors, markers: layerMarkers, failed: [] as string[] }
     const h = resolveForPaint(text, localHighlights)
     const a = resolveForPaint(text, layerAnchors)
@@ -128,7 +129,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     if (a.failed.length) failed.push(`${a.failed.length} anchor(s)`)
     if (m.failed.length) failed.push(`${m.failed.length} marker(s)`)
     return { highlights: h.resolved, anchors: a.resolved, markers: m.resolved, failed }
-  }, [text, localHighlights, layerAnchors, layerMarkers])
+  }, [text, usesPdfLayer, pdfText, localHighlights, layerAnchors, layerMarkers])
   const { anchors, markers } = painted
   const failedMessage = painted.failed.length
     ? `Could not re-anchor ${painted.failed.join(', ')}: the quoted text is no longer in the document.`

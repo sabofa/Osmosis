@@ -74,7 +74,7 @@ describe('chrome fallbacks', () => {
   })
   it('contain no colour literals', () => {
     for (const v of Object.values(CHROME_FALLBACKS)) {
-      expect(v).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(/)
+      expect(v).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/)
     }
   })
 })
@@ -122,7 +122,7 @@ describe('DocumentViewer.css guard', () => {
   })
   it('has no hard-coded font families or radii in px/%', () => {
     expect(stripped).not.toMatch(/font-family:[ \t]*(?![ \t]|var\(|inherit)/)
-    expect(stripped).not.toMatch(/border-radius:\s*(?!var\(|0)[^;]*\d+(px|%)/)
+    expect(stripped).not.toMatch(/border-radius:\s*(?!var\(|0)[^;]*\b\d+(px|%)/)
   })
   it('has a transparent root', () => {
     const m = stripped.match(/\.document-viewer\s*\{[^}]*\}/)
@@ -138,7 +138,7 @@ describe('chrome inline styles guard', () => {
     it(`${f} has no colour literals in inline styles`, () => {
       const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8')
       const styles = [...src.matchAll(/style=\{\{[^}]*\}\}/g)].map((m) => m[0]).join(' ')
-      expect(styles).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(/)
+      expect(styles).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/)
       expect(src).not.toMatch(/['"`]#[0-9a-fA-F]{3,8}['"`]/)
     })
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
@@ -72,8 +72,13 @@ describe('offsetText', () => {
   it('uses the PDF layer text once loaded, even when extractedText is empty', () => {
     expect(offsetText(true, 'pdf words', '')).toBe('pdf words')
   })
-  it('falls back to the asset text before the PDF loads or for non-PDF', () => {
-    expect(offsetText(true, '', 'asset')).toBe('asset')
+  it('never falls back to the asset text while a PDF layer awaits its text', () => {
+    expect(offsetText(true, '', 'asset')).toBe('')
+    expect(awaitingPdfText(true, '')).toBe(true)
+    expect(awaitingPdfText(true, 'x')).toBe(false)
+    expect(awaitingPdfText(false, '')).toBe(false)
+  })
+  it('non-PDF text uses the asset text', () => {
     expect(offsetText(false, 'pdf words', 'asset')).toBe('asset')
   })
 })
