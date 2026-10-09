@@ -10,6 +10,8 @@ export interface ThemeContextValue {
   setSource(s: ModeSource): void
   twilightBlend: boolean
   setTwilightBlend(b: boolean): void
+  /** The composed active manifest (workspace + ambience + live preview). */
+  manifest: ThemeManifest
   mode: Mode
   blend: number
   effectiveSource: ModeSource

@@ -297,6 +297,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     mode,
     blend,
     effectiveSource,
+    manifest,
     location,
     setLocation,
     custom,
