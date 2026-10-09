@@ -1,7 +1,6 @@
 import React, { Suspense, useEffect, useState } from 'react'
 import { getAsset, assetDownloadUrl, getDocumentMarkers, type Asset, type DocumentMarker as ApiDocumentMarker } from '../lib/api'
-import { useTheme } from '../hooks/useTheme'
-import { useDocumentFont } from '../hooks/useDocumentFont'
+import { useDocumentTokens } from '../theme/useDocumentTokens'
 import { DownloadIcon } from './icons'
 import GraphPanel from './GraphPanel'
 import type { DocumentRenderError } from 'document-engine'
@@ -39,12 +38,8 @@ export default function DocumentPanel({
   const [asset, setAsset] = useState<Asset | null>(null)
   const [markers, setMarkers] = useState<ApiDocumentMarker[]>([])
   const [error, setError] = useState<string | null>(null)
-  const { resolvedMode } = useTheme()
-  // The reader's chosen document font (Settings › Appearance). The style
-  // redefines the variable document-engine's viewer reads (see
-  // documentFontStyle); data-doc-font lets index.css keep code spans monospace
-  // and nudge katex's size to match the surrounding prose.
-  const { font: docFont, style: fontStyle } = useDocumentFont()
+  // The document face and colours come from the active theme via tokens.
+  const tokens = useDocumentTokens()
 
   useEffect(() => {
     setAsset(null)
@@ -72,7 +67,7 @@ export default function DocumentPanel({
 
   if (asset.type === 'url') {
     return (
-      <div className="document-panel no-scrollbar" data-doc-font={docFont} style={fontStyle}>
+      <div className="document-panel no-scrollbar">
         <div className="document-panel-frame-wrap">
           <iframe className="document-panel-frame" src={asset.content ?? undefined} title={asset.title} />
           <a className="document-panel-fallback-link" href={asset.content ?? undefined} target="_blank" rel="noreferrer">
@@ -92,7 +87,7 @@ export default function DocumentPanel({
   }
 
   return (
-    <div className="document-panel no-scrollbar" data-doc-font={docFont} style={fontStyle}>
+    <div className="document-panel no-scrollbar">
       <div className="document-panel-header">
         <span className="document-panel-title">{asset.title}</span>
         {asset.type === 'file' && (
@@ -106,7 +101,7 @@ export default function DocumentPanel({
         <Suspense fallback={<div className="panel-loading">Loading document…</div>}>
           <DocumentViewer
             asset={engineAsset}
-            theme={resolvedMode}
+            tokens={tokens}
             interaction={mode === 'simple' ? 'view' : 'annotate'}
             chrome={mode === 'simple' ? 'embedded' : 'full'}
             layers={

@@ -16,7 +16,6 @@ import {
   FolderIcon,
 } from './icons'
 import type { useTheme, ThemeChoice } from '../hooks/useTheme'
-import { useDocumentFont, DOCUMENT_FONT_OPTIONS } from '../hooks/useDocumentFont'
 import {
   notificationsSupported,
   notifyPermission,
@@ -263,7 +262,6 @@ export default function Settings({
   const { ambienceThemes: themes, workspaceThemes, supportsWorkspace, activeWorkspaceId, setActiveWorkspaceId, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
   const [dupSource, setDupSource] = useState<ThemePreset | undefined>(undefined)
-  const { font: docFont, setFont: setDocFont } = useDocumentFont()
   // Which panel is showing. Remembered so a refresh lands where you were.
   const [tab, setTab] = useState<Tab>(() => {
     try {
@@ -590,28 +588,6 @@ export default function Settings({
             ))}
           </div>
         </div>
-
-        <div className="settings-row">
-          <div className="settings-row-main">
-            <div>
-              <div className="settings-row-title">Document font</div>
-              <div className="settings-row-sub">the typeface documents are read in</div>
-            </div>
-          </div>
-          <div className="theme-toggle">
-            {DOCUMENT_FONT_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                className={`theme-toggle-btn${docFont === opt.value ? ' active' : ''}`}
-                onClick={() => setDocFont(opt.value)}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        
 
         <div className="settings-row">
           <div className="settings-row-main">
