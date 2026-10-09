@@ -1,3 +1,5 @@
+import { cpLength, cpToUtf16, utf16ToCp } from './offsets'
+
 const WHITESPACE = /\s/
 
 export interface TokenSpan {
@@ -13,12 +15,15 @@ export interface TokenSpan {
 // region the renderer draws around it. Shared between server-side validation
 // and client-side rendering so both agree on exactly the same span.
 export function findTokenSpan(text: string, offset: number): TokenSpan | null {
-  if (text.length === 0 || offset < 0 || offset > text.length) return null
+  // Offsets in and out are codepoint indices; the scan runs on UTF-16 units
+  // (surrogate halves are never whitespace, so pairs stay inside one token).
+  if (text.length === 0 || offset < 0 || offset > cpLength(text)) return null
+  const u = cpToUtf16(text, offset)
 
   // An offset sitting exactly on whitespace (or at the very end of the text)
   // doesn't point at a token itself — fall back to the char immediately
   // before it if that one is non-whitespace, otherwise there's no token here.
-  let anchor = offset
+  let anchor = u
   if (anchor >= text.length || WHITESPACE.test(text[anchor])) {
     if (anchor > 0 && !WHITESPACE.test(text[anchor - 1])) anchor -= 1
     else return null
@@ -29,5 +34,5 @@ export function findTokenSpan(text: string, offset: number): TokenSpan | null {
   let end = anchor + 1
   while (end < text.length && !WHITESPACE.test(text[end])) end += 1
 
-  return { start, end }
+  return { start: utf16ToCp(text, start), end: utf16ToCp(text, end) }
 }

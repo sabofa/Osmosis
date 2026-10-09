@@ -34,4 +34,12 @@ describe('findTokenSpan', () => {
     expect(findTokenSpan('word', -1)).toBeNull()
     expect(findTokenSpan('word', 10)).toBeNull()
   })
+
+  it('uses codepoint offsets across surrogate pairs', () => {
+    const text = '\u{1F600} (A) x' // cp: 0=emoji 1=' ' 2='(' 3='A' 4=')' 5=' ' 6='x'
+    expect(findTokenSpan(text, 3)).toEqual({ start: 2, end: 5 })
+    expect(findTokenSpan(text, 0)).toEqual({ start: 0, end: 1 })
+    expect(findTokenSpan(text, 7)).toEqual({ start: 6, end: 7 })
+    expect(findTokenSpan(text, 8)).toBeNull()
+  })
 })
