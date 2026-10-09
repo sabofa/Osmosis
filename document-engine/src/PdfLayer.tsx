@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { TextLayer } from 'pdfjs-dist'
 import { loadPdf, PAGE_JOIN, type TextItemLike } from './pdfSetup'
-import { findTokenSpan } from './core/findTokenSpan'
+import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
 import type { ResolvedMarker } from './viewerModel'
 import type { DocumentAnchor, DocumentHighlight, DocumentRenderError } from './types'
@@ -147,7 +147,7 @@ export default function PdfLayer({
   useEffect(() => {
     if (pages.length === 0 || !fullText) return
     const markerSpans = markers
-      .map((marker) => ({ marker, span: findTokenSpan(fullText, marker.offset) }))
+      .map((marker) => ({ marker, span: markerSpanInternal(fullText, marker.offset) }))
       .filter((m): m is { marker: ResolvedMarker; span: { start: number; end: number } } => m.span !== null)
     if (markerSpans.length === 0) return
 

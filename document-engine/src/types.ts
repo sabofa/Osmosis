@@ -12,14 +12,16 @@ export interface DocumentViewerAsset {
   url?: string | null
 }
 
+// All offsets in this file are CODEPOINT indices into the document text
+// (not UTF-16 code units); the engine converts at its edges.
 export interface DocumentMarker {
   id: string
-  offset: number
+  offset: number // codepoint index
 }
 
 export interface DocumentAnchor {
-  start: number
-  end: number
+  start: number // codepoint index, inclusive
+  end: number // codepoint index, exclusive
   label?: string | null
 }
 
@@ -30,8 +32,8 @@ export interface DocumentAnchor {
 // persisting them (see DocumentViewerProps.onHighlightsChange).
 export interface DocumentHighlight {
   id: string
-  start: number
-  end: number
+  start: number // codepoint index, inclusive
+  end: number // codepoint index, exclusive
   // One of HIGHLIGHT_PALETTE's ids (see highlightPalette.ts); defaults to
   // the palette's first color when omitted.
   color?: string

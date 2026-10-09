@@ -1,6 +1,6 @@
 import { useRef, type ElementType, type ReactNode } from 'react'
 import type { ResolvedMarker } from './viewerModel'
-import { findTokenSpan } from './core/findTokenSpan'
+import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
 import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
 import type { DocumentAnchor, DocumentHighlight } from './types'
@@ -33,7 +33,7 @@ export default function TextContent({
   // visible gaps between them — only markdown formatting and marker
   // boundaries split the DOM into separate elements here.
   const markerSpans = markers
-    .map((marker) => ({ marker, span: findTokenSpan(text, marker.offset) }))
+    .map((marker) => ({ marker, span: markerSpanInternal(text, marker.offset) }))
     .filter((m): m is { marker: ResolvedMarker; span: { start: number; end: number } } => m.span !== null)
     .sort((a, b) => a.span.start - b.span.start)
 

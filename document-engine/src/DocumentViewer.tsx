@@ -6,6 +6,7 @@ import { ZoomControl, SettingsMenu } from './Toolbar'
 import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
+import { toInternalRange, fromInternalRange } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
 import type {
@@ -110,6 +111,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number; rect: DOMRect } | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
 
+  // Public offsets are codepoints; the DOM-facing children (TextContent,
+  // PdfLayer, highlightPainter) work in UTF-16. Convert once, here.
+  const internalHighlights = useMemo(() => localHighlights.map((h) => toInternalRange(text, h)), [localHighlights, text])
+  const internalAnchors = useMemo(() => anchors.map((a) => toInternalRange(text, a)), [anchors, text])
+
   // ::highlight() rules for this instance's groups — one per palette color
   // plus the anchor, re-generated when the theme changes. Literal hex/rgba
   // values rather than var(...): custom-highlight pseudo-elements aren't
@@ -148,7 +154,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     if (!caps.highlightPopover || !contentRef.current) return
     const range = getSelectionOffsetRange(contentRef.current)
     const rect = range ? getSelectionRect() : null
-    setPendingSelection(range && rect ? { ...range, rect } : null)
+    setPendingSelection(range && rect ? { ...fromInternalRange(text, range), rect } : null)
   }
 
   function applyHighlight(colorId: string) {
@@ -213,9 +219,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     body = (
       <PdfLayer
         url={asset.url}
-        anchors={anchors}
+        anchors={internalAnchors}
         markers={markers}
-        highlights={localHighlights}
+        highlights={internalHighlights}
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
         onErrors={onErrors}
@@ -227,9 +233,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       sidePanel = (
         <TextContent
           text={text}
-          anchors={anchors}
+          anchors={internalAnchors}
           markers={markers}
-          highlights={localHighlights}
+          highlights={internalHighlights}
           showOverlays={showOverlays}
           groupPrefix={groupPrefix}
         />
@@ -239,9 +245,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     body = (
       <TextContent
         text={text}
-        anchors={anchors}
+        anchors={internalAnchors}
         markers={markers}
-        highlights={localHighlights}
+        highlights={internalHighlights}
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
       />
