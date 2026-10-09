@@ -1,7 +1,7 @@
 import type { CommandContext, Page } from './types.js'
 import { Registry } from './registry.js'
 import { rank } from './fuzzy.js'
-import { resolve, sunTimes, BUILTINS } from 'theme-core'
+import { resolve, compose, ownerOf, sunTimes, BUILTINS } from 'theme-core'
 import type { ThemeManifest } from 'theme-core'
 
 // ----------------------------------------------------------------------------
@@ -33,12 +33,14 @@ interface ThemeRow {
   id: string
   name: string
   manifest?: ThemeManifest
+  layer?: 'ambience' | 'workspace' | null
   builtin?: boolean
 }
 interface ThemesRes {
   themes?: ThemeRow[]
   builtins?: ThemeRow[]
   active_theme_id?: string | null
+  active_workspace_theme_id?: string | null
   location?: { lat: number; lon: number; label?: string } | null
 }
 interface SessionRow {
@@ -92,13 +94,42 @@ async function pickOne<T>(
   return null
 }
 
-async function switchTheme(ctx: CommandContext, query: string): Promise<void> {
+type Slot = 'ambience' | 'workspace'
+
+// A theme's own layer: the row's, else its manifest's, else null (a full theme).
+function layerOf(t: ThemeRow): 'ambience' | 'workspace' | null {
+  return t.layer ?? t.manifest?.layer ?? null
+}
+const usableIn = (t: ThemeRow, slot: Slot) => layerOf(t) === null || layerOf(t) === slot
+const layerLabel = (t: ThemeRow) => layerOf(t) ?? 'full'
+
+// A PUT that the server may refuse (wrong_layer): show its message, no stack.
+async function putActive(ctx: CommandContext, body: { id: string | null; layer?: Slot }): Promise<boolean> {
+  try {
+    await ctx.api.put('/api/themes/active', body)
+    return true
+  } catch (e) {
+    ctx.out.error(e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
+async function switchTheme(ctx: CommandContext, query: string, slot: Slot = 'ambience'): Promise<void> {
   const all = await allThemes(ctx)
-  const byId = all.themes.find((x) => x.id.toLowerCase() === query.toLowerCase())
-  const t = byId ?? (await pickOne(ctx, 'theme', query, all.themes, (x) => x.name))
+  const q = query.toLowerCase()
+  const exact = all.themes.find((x) => x.id.toLowerCase() === q) ?? all.themes.find((x) => x.name.toLowerCase() === q)
+  if (exact && !usableIn(exact, slot)) {
+    if (slot === 'ambience') ctx.out.text(`${exact.name} is a workspace theme — use: theme workspace ${exact.name}`)
+    else ctx.out.error(`${exact.name} is an ambience theme — use: theme ${exact.name}`)
+    return
+  }
+  const t = exact ?? (await pickOne(ctx, 'theme', query, all.themes.filter((x) => usableIn(x, slot)), (x) => x.name))
   if (!t) return
-  await ctx.api.put('/api/themes/active', { id: t.id })
-  ctx.out.text(`Theme: ${t.name}`)
+  if (slot === 'workspace') {
+    if (await putActive(ctx, { id: t.id, layer: 'workspace' })) ctx.out.text(`Workspace theme: ${t.name}`)
+    return
+  }
+  if (await putActive(ctx, { id: t.id })) ctx.out.text(`Theme: ${t.name}`)
 }
 
 async function findTag(ctx: CommandContext, query: string): Promise<TagRow | null> {
@@ -171,7 +202,17 @@ export function buildRegistry(): Registry {
   })
   r.completer('theme', async (ctx) => {
     const all = await allThemes(ctx)
-    return [{ value: 'light' }, { value: 'dark' }, { value: 'system' }, { value: 'sun' }, ...all.themes.map((t) => ({ value: t.name, hint: t.id }))]
+    return [
+      { value: 'light' },
+      { value: 'dark' },
+      { value: 'system' },
+      { value: 'sun' },
+      ...all.themes.filter((t) => usableIn(t, 'ambience')).map((t) => ({ value: t.name, hint: t.id })),
+    ]
+  })
+  r.completer('workspace-theme', async (ctx) => {
+    const all = await allThemes(ctx)
+    return all.themes.filter((t) => usableIn(t, 'workspace')).map((t) => ({ value: t.name, hint: t.id }))
   })
   r.completer('session', async (ctx) => {
     const res = await ctx.api.get<{ sessions: SessionRow[] }>('/api/sessions', { limit: 50 })
@@ -479,11 +520,13 @@ export function buildRegistry(): Registry {
   })
   r.register({
     path: ['theme', 'list'],
-    describe: 'List every theme; the active one is starred',
+    describe: 'List every theme with its layer; * marks the active ambience theme, w the active workspace theme',
     async run(ctx) {
       const all = await allThemes(ctx)
       const active = activeManifest(all).id
-      for (const t of all.themes) ctx.out.text(`${t.id === active ? '*' : ' '} ${t.id}  ${t.name}${t.builtin ? '  (builtin)' : ''}`)
+      const ws = all.res.active_workspace_theme_id ?? null
+      for (const t of all.themes)
+        ctx.out.text(`${t.id === active ? '*' : ' '}${t.id === ws ? 'w' : ' '} ${t.id}  ${t.name}  ${layerLabel(t)}${t.builtin ? '  (builtin)' : ''}`)
     },
   })
   r.register({
@@ -492,7 +535,13 @@ export function buildRegistry(): Registry {
     async run(ctx) {
       const all = await allThemes(ctx)
       const act = activeManifest(all)
-      ctx.out.text(`Theme: ${act.name} (${act.id})`)
+      const wsId = all.res.active_workspace_theme_id ?? null
+      const wsRow = wsId ? all.themes.find((t) => t.id === wsId) : undefined
+      ctx.out.text(`ambience: ${act.name} (${act.id})`)
+      ctx.out.text(wsId ? `workspace: ${wsRow?.name ?? wsId} (${wsId})` : 'workspace: none')
+      ctx.out.text(
+        'layers: shape/type/space/material tokens come from the workspace theme when one is set; colours, graphs, ambience come from the ambience theme'
+      )
       const st = await ctx.ui.themeState()
       if (!st) ctx.out.text('device mode: unknown (terminal)')
       else
@@ -557,24 +606,58 @@ export function buildRegistry(): Registry {
   r.register({
     path: ['theme', 'tokens'],
     args: [{ name: 'filter', kind: 'text', optional: true, rest: true }],
-    describe: "List the active theme's resolved tokens: name | value | source",
+    describe: "List the active theme's resolved tokens: name | value | source | owner",
     async run(ctx, a) {
       const all = await allThemes(ctx)
       const act = activeManifest(all)
       if (!act.manifest) return ctx.out.error(`No manifest found for ${act.id}.`)
       const mode = (await ctx.ui.themeState())?.mode ?? 'light'
-      const res = resolve(act.manifest)
+      const wsId = all.res.active_workspace_theme_id ?? null
+      const wsRow = wsId ? all.themes.find((t) => t.id === wsId) : undefined
+      const wsManifest = wsRow ? (wsRow.manifest ?? BUILTINS.find((b) => b.id === wsRow.id)) : undefined
+      const res = resolve(wsManifest ? compose({ workspace: wsManifest, ambience: act.manifest }).manifest : act.manifest)
       const tokens = res[mode]
       const prov = res.provenance[mode]
       const f = (a.filter ?? '').toLowerCase()
       const names = Object.keys(tokens).filter((n) => n.toLowerCase().includes(f))
       if (f && names.length === 0) return ctx.out.text(`no tokens match "${a.filter}"`)
-      ctx.out.text(`${act.name} (${act.id}) — ${mode} tokens${f ? ` matching "${f}"` : ''}: ${names.length}`)
+      ctx.out.text(`${act.name} (${act.id}) — ${mode} tokens${f ? ` matching "${f}"` : ''}${wsManifest ? ` (composed: workspace ${wsRow!.name} + ambience ${act.name})` : ''}: ${names.length}`)
       for (const n of names.slice(0, 200)) {
         const p = prov[n]
-        ctx.out.text(`${n} | ${tokens[n]} | ${p ? p.source + (p.from ? ' from ' + p.from : '') : '?'}`)
+        let owner = '?'
+        try {
+          owner = ownerOf(n)
+        } catch {
+          // a token the registry does not know: leave the owner blank
+        }
+        ctx.out.text(`${n} | ${tokens[n]} | ${p ? p.source + (p.from ? ' from ' + p.from : '') : '?'} | ${owner}`)
       }
       if (names.length > 200) ctx.out.text(`…${names.length - 200} more, narrow the filter`)
+    },
+  })
+  r.register({
+    path: ['theme', 'workspace'],
+    args: [{ name: 'theme', kind: 'workspace-theme', rest: true }],
+    describe: "Set the workspace theme (shape, type, space, material) by name or id. 'theme workspace clear' removes it; 'theme workspace list' shows the choices",
+    async run(ctx, a) {
+      await switchTheme(ctx, a.theme, 'workspace')
+    },
+  })
+  r.register({
+    path: ['theme', 'workspace', 'clear'],
+    describe: 'Remove the workspace theme so the ambience theme controls everything',
+    async run(ctx) {
+      if (await putActive(ctx, { id: null, layer: 'workspace' })) ctx.out.text('Workspace theme: none (the ambience theme controls everything)')
+    },
+  })
+  r.register({
+    path: ['theme', 'workspace', 'list'],
+    describe: 'List the themes usable as the workspace theme; the active one is starred',
+    async run(ctx) {
+      const all = await allThemes(ctx)
+      const ws = all.res.active_workspace_theme_id ?? null
+      for (const t of all.themes.filter((x) => usableIn(x, 'workspace')))
+        ctx.out.text(`${t.id === ws ? '*' : ' '} ${t.id}  ${t.name}  ${layerLabel(t)}${t.builtin ? '  (builtin)' : ''}`)
     },
   })
   r.register({

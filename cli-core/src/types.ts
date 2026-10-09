@@ -79,6 +79,7 @@ export type ArgKind =
   | 'question'
   | 'asset'
   | 'theme'
+  | 'workspace-theme'
   | 'session'
   | 'setting'
   | 'date'
