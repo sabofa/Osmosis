@@ -163,9 +163,11 @@ export function getActiveThemeId(db: DatabaseSync): string | null {
     | { active_theme_id: string | null }
     | undefined;
   const id = mapRemoved(row?.active_theme_id ?? null);
-  if (id === null || isBuiltinId(id)) return id;
+  if (id === null) return null;
+  if (isBuiltinId(id)) return targetLayer(db, id) === "workspace" ? null : id;
   const live = db.prepare("SELECT 1 AS x FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
-  return live ? id : null;
+  if (!live) return null;
+  return targetLayer(db, id) === "workspace" ? null : id;
 }
 
 export function getActiveWorkspaceThemeId(db: DatabaseSync): string | null {
@@ -174,9 +176,10 @@ export function getActiveWorkspaceThemeId(db: DatabaseSync): string | null {
     | undefined;
   const id = row?.active_workspace_theme_id ?? null;
   if (id === null) return null;
-  if (isBuiltinId(id)) return builtinById(id) ? id : null;
+  if (isBuiltinId(id)) return builtinById(id) && targetLayer(db, id) !== "ambience" ? id : null;
   const live = db.prepare("SELECT 1 AS x FROM theme WHERE id = ? AND deleted_at IS NULL").get(id);
-  return live ? id : null;
+  if (!live) return null;
+  return targetLayer(db, id) === "ambience" ? null : id;
 }
 
 function fromLegacy(input: { id: string; name: string; tokens: ThemeTokens; custom_css?: string }): ThemeManifest {
@@ -209,6 +212,13 @@ function persist(db: DatabaseSync, manifest: ThemeManifest): SaveResult {
        manifest = excluded.manifest, schema_version = 1,
        updated_at = datetime('now'), deleted_at = NULL`
   ).run(manifest.id, manifest.name, m.tokens, m.custom_css, JSON.stringify(manifest));
+  // A layer change must not leave the theme in a slot its new layer can't fill
+  // (full themes keep both).
+  if (manifest.layer === "ambience") {
+    db.prepare("UPDATE theme_setting SET active_workspace_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_workspace_theme_id = ?").run(manifest.id);
+  } else if (manifest.layer === "workspace") {
+    db.prepare("UPDATE theme_setting SET active_theme_id = NULL, updated_at = datetime('now') WHERE id = 1 AND active_theme_id = ?").run(manifest.id);
+  }
   return { theme: getTheme(db, manifest.id)!, report };
 }
 
@@ -265,6 +275,18 @@ export function patchTheme(db: DatabaseSync, id: string, patch: unknown): SaveRe
     throw new DomainError("invalid_theme", (err as Error).message);
   }
   return persist(db, manifest);
+}
+
+// The layer a patch_theme would leave the theme with (so callers can validate a
+// target slot before persisting).
+export function patchedLayer(db: DatabaseSync, id: string, patch: unknown): "workspace" | "ambience" | null {
+  const cur = getTheme(db, id);
+  if (!cur || cur.deleted_at) throw new DomainError("not_found", `Theme "${id}" does not exist.`);
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new DomainError("invalid_theme", "A theme patch must be an object.");
+  }
+  const l = (mergePatch(cur.manifest, patch) as { layer?: unknown }).layer;
+  return l === "workspace" || l === "ambience" ? l : null;
 }
 
 export function deleteTheme(db: DatabaseSync, id: string): { id: string } {
@@ -411,11 +433,26 @@ export function applyThemesFromPull(
       console.warn(`pulled theme "${t?.id}" skipped: ${(err as Error).message}`);
     }
   }
+  // Tombstones also clear the raw pointers, so a later re-save of the same id
+  // does not silently reactivate it.
+  for (const t of themes) {
+    if (t && typeof t === "object" && t.deleted_at && typeof t.id === "string") {
+      const live = db.prepare("SELECT deleted_at FROM theme WHERE id = ?").get(t.id) as { deleted_at: string | null } | undefined;
+      if (live?.deleted_at) clearActiveIf(db, t.id);
+    }
+  }
+  // Pointers are validated by layer AFTER the rows are applied (the target row
+  // may arrive in this very pull); a known wrong-layer target is ignored.
   if (active !== undefined) {
-    db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(mapRemoved(active));
+    const id = mapRemoved(active);
+    if (id === null || targetLayer(db, id) !== "workspace") {
+      db.prepare("UPDATE theme_setting SET active_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(id);
+    }
   }
   if (activeWorkspace !== undefined) {
-    db.prepare("UPDATE theme_setting SET active_workspace_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(activeWorkspace);
+    if (activeWorkspace === null || targetLayer(db, activeWorkspace) !== "ambience") {
+      db.prepare("UPDATE theme_setting SET active_workspace_theme_id = ?, updated_at = datetime('now') WHERE id = 1").run(activeWorkspace);
+    }
   }
   if (location !== undefined) {
     db.prepare("UPDATE theme_setting SET location = ?, updated_at = datetime('now') WHERE id = 1").run(

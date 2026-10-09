@@ -358,3 +358,45 @@ describe("theme layers over HTTP", () => {
     await canonicalApp.close();
   });
 });
+
+describe("PUT /api/themes/active body and old-canonical guard", () => {
+  it("rejects non-string ids and a missing id key with 400", async () => {
+    const db = openTestDb();
+    const env = { role: "canonical" as const, label: "c", port: 0, dbPath: ":memory:", remoteUrl: null,
+                  uploadsDir: "/tmp", mcpAuthToken: "t", webDistDir: null };
+    const app = buildApp({ db, env, node: bootstrapNode(db, env), runtime: createSyncRuntime(), logger: false });
+    await app.ready();
+    for (const payload of [{ id: 5 }, { id: true }, {}, { layer: "workspace" }]) {
+      const res = await app.inject({ method: "PUT", url: "/api/themes/active", payload });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toMatch(/^invalid_(body|theme_id)$/);
+    }
+    const res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: null } });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("an old canonical (no active_workspace_theme_id) gives 502 canonical_too_old and nothing is mirrored", async () => {
+    const { createServer } = await import("node:http");
+    const fake = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ active_theme_id: "x" }));
+    });
+    await new Promise<void>((r) => fake.listen(0, "127.0.0.1", () => r()));
+    const port = (fake.address() as { port: number }).port;
+    const dir = mkdtempSync(join(tmpdir(), "osmosis-themes-"));
+    const localDb = openFileDb(dir, "l.db");
+    const env = { role: "local" as const, label: "l", port: 0, dbPath: join(dir, "l.db"), remoteUrl: `http://127.0.0.1:${port}`,
+                  uploadsDir: dir, mcpAuthToken: null, webDistDir: null };
+    const runtime = createSyncRuntime();
+    const app = buildApp({ db: localDb, env, node: bootstrapNode(localDb, env), runtime, logger: false });
+    runtime.online = true;
+    const res = await app.inject({ method: "PUT", url: "/api/themes/active", payload: { id: "builtin:ws-clean", layer: "workspace" } });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "canonical_too_old", reason: "canonical_too_old" });
+    expect(getActiveThemeId(localDb)).toBeNull();
+    expect(getActiveWorkspaceThemeId(localDb)).toBeNull();
+    await app.close();
+    await new Promise((r) => fake.close(r));
+  });
+});

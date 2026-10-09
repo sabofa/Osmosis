@@ -16,7 +16,7 @@ import { presentItem, getItemOutcome, quickCheck, submitQuickCheck, getAttemptDe
 import { createSession, endSession, listSessions, getSessionDetail } from "../domain/sessions.js";
 import { presentShow, updateShow, getShowOutcome } from "../domain/shows.js";
 import { setRetentionTarget, getDueItems } from "../domain/retention.js";
-import { listThemes, saveTheme, patchTheme, getTheme, deleteTheme, setActiveTheme, getActiveThemeId, setActiveWorkspaceTheme, getActiveWorkspaceThemeId } from "../domain/themes.js";
+import { listThemes, saveTheme, patchTheme, getTheme, deleteTheme, setActiveTheme, getActiveThemeId, setActiveWorkspaceTheme, getActiveWorkspaceThemeId, patchedLayer } from "../domain/themes.js";
 import {
   BUILTINS, builtinById, isBuiltinId, ownerOf, DEFAULT_THEME_ID, FONT_STACKS, TOKENS, resolve as resolveTheme, validate as validateManifest,
   type ThemeManifest,
@@ -1121,13 +1121,30 @@ export function registerTools(
   );
 
   // ---- Themes: a theme is a manifest (seeds + dials + fonts + overrides). ----
-  const themeResult = (saved: { theme: { id: string; name: string; updated_at: string }; report: unknown }, makeActive: boolean | undefined) => {
-    if (makeActive) setActiveTheme(db, saved.theme.id);
+  type Slot = "ambience" | "workspace";
+  // Which slot make_active targets, decided BEFORE anything is persisted: a layered theme
+  // can only go in its own slot; a full theme goes where `layer` says (default ambience).
+  const themeSlot = (themeLayer: unknown, requested: Slot | undefined): Slot => {
+    if (themeLayer === "workspace" || themeLayer === "ambience") {
+      if (requested !== undefined && requested !== themeLayer) {
+        throw new DomainError("wrong_layer", `This is a ${themeLayer} theme; it can only be made active in the ${themeLayer} slot, not ${requested}.`);
+      }
+      return themeLayer;
+    }
+    return requested ?? "ambience";
+  };
+  const themeResult = (saved: { theme: { id: string; name: string; updated_at: string }; report: unknown }, slot: Slot | null) => {
+    if (slot === "workspace") setActiveWorkspaceTheme(db, saved.theme.id);
+    else if (slot === "ambience") setActiveTheme(db, saved.theme.id);
+    const amb = getActiveThemeId(db);
+    const ws = getActiveWorkspaceThemeId(db);
     return ok({
       saved: true,
       theme: { id: saved.theme.id, name: saved.theme.name, updated_at: saved.theme.updated_at },
       report: saved.report,
-      active: getActiveThemeId(db) === saved.theme.id,
+      active: amb === saved.theme.id || ws === saved.theme.id,
+      active_theme_id: amb,
+      active_workspace_theme_id: ws,
     });
   };
   // An invalid manifest is an authoring result, not a crash: hand back the report so the author can fix it.
@@ -1241,12 +1258,13 @@ export function registerTools(
         "for token names and override only what you must. Dials: contrast, warmth, saturation, roundness, density, elevation, borders, " +
         "translucency, texture, motion are 0..1; typeScale 1.125..1.333; baseSize 13..18px. Fonts are named stacks: " + FONT_NAMES + ". " +
         "ALWAYS read report.warnings[].suggestion (e.g. low contrast) and apply them with patch_theme. ambience, sounds, assets, graph.papers " +
-        "are reserved: stored, no effect yet. Invalid manifests are not saved; the result carries report.errors. make_active switches to it.",
-      inputSchema: { manifest: z.record(z.string(), z.unknown()), make_active: z.boolean().optional() },
+        "are reserved: stored, no effect yet. Invalid manifests are not saved; the result carries report.errors. make_active also activates it in its slot: a workspace-layer theme in the workspace slot, an ambience-layer theme in the ambience slot, a full theme in the slot named by layer (default ambience); a layer that contradicts a layered theme is an error and nothing is saved.",
+      inputSchema: { manifest: z.record(z.string(), z.unknown()), make_active: z.boolean().optional(), layer: z.enum(["ambience", "workspace"]).optional() },
     },
-    async ({ manifest, make_active }) => {
+    async ({ manifest, make_active, layer }) => {
       try {
-        return themeResult(saveTheme(db, { manifest: manifest as unknown as ThemeManifest }), make_active);
+        const slot = make_active ? themeSlot((manifest as { layer?: unknown }).layer, layer) : null;
+        return themeResult(saveTheme(db, { manifest: manifest as unknown as ThemeManifest }), slot);
       } catch (err) {
         return themeFail(err);
       }
@@ -1259,12 +1277,13 @@ export function registerTools(
       description:
         "Edit a saved theme with a JSON merge patch: objects merge, null deletes a key, anything else replaces. E.g. {dials:{roundness:0.2}, " +
         "overrides:{any:{'radius-md':null}}}. Use it to apply report.warnings[].suggestion after save_theme. Same validation and result as " +
-        "save_theme; built-ins and unknown ids fail. make_active switches to it.",
-      inputSchema: { id: z.string(), patch: z.record(z.string(), z.unknown()), make_active: z.boolean().optional() },
+        "save_theme; built-ins and unknown ids fail. make_active also activates it in its slot, routed by layer exactly as in save_theme (optional layer picks the slot for a full theme).",
+      inputSchema: { id: z.string(), patch: z.record(z.string(), z.unknown()), make_active: z.boolean().optional(), layer: z.enum(["ambience", "workspace"]).optional() },
     },
-    async ({ id, patch, make_active }) => {
+    async ({ id, patch, make_active, layer }) => {
       try {
-        return themeResult(patchTheme(db, id, patch), make_active);
+        const slot = make_active && !isBuiltinId(id) ? themeSlot(patchedLayer(db, id, patch), layer) : null;
+        return themeResult(patchTheme(db, id, patch), slot);
       } catch (err) {
         return themeFail(err);
       }

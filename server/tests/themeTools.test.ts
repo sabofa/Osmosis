@@ -233,4 +233,61 @@ describe("theme MCP tools", () => {
     expect(r.isError).toBe(false);
     expect(r.body.warnings.some((w: any) => /roundness/.test(w.path + w.message))).toBe(true);
   });
+
+  describe("make_active routes by layer", () => {
+    const lm = (id: string, layer?: string) => ({ ...small(id), ...(layer ? { layer } : {}) });
+    it("workspace-layer manifest sets the workspace pointer only", async () => {
+      const db = openTestDb();
+      const client = await connectedClient(db);
+      const r = await callTool(client, "save_theme", { manifest: lm("w", "workspace"), make_active: true });
+      expect(r.isError).toBe(false);
+      expect(r.body.active_workspace_theme_id).toBe("w");
+      expect(r.body.active).toBe(true);
+      expect(getActiveWorkspaceThemeId(db)).toBe("w");
+      expect(getActiveThemeId(db)).toBeNull();
+    });
+    it("ambience-layer manifest sets the ambience pointer", async () => {
+      const db = openTestDb();
+      const client = await connectedClient(db);
+      const r = await callTool(client, "save_theme", { manifest: lm("a", "ambience"), make_active: true });
+      expect(r.isError).toBe(false);
+      expect(getActiveThemeId(db)).toBe("a");
+      expect(getActiveWorkspaceThemeId(db)).toBeNull();
+      expect(r.body.active_workspace_theme_id).toBeNull();
+    });
+    it("full theme goes to the slot named by layer, default ambience", async () => {
+      const db = openTestDb();
+      const client = await connectedClient(db);
+      await callTool(client, "save_theme", { manifest: lm("f"), make_active: true, layer: "workspace" });
+      expect(getActiveWorkspaceThemeId(db)).toBe("f");
+      expect(getActiveThemeId(db)).toBeNull();
+      await callTool(client, "save_theme", { manifest: lm("g"), make_active: true });
+      expect(getActiveThemeId(db)).toBe("g");
+    });
+    it("a mismatching explicit layer errors before anything is persisted", async () => {
+      const db = openTestDb();
+      const client = await connectedClient(db);
+      const r = await callTool(client, "save_theme", { manifest: lm("a", "ambience"), make_active: true, layer: "workspace" });
+      expect(r.isError).toBe(true);
+      expect(r.body.error).toBe("wrong_layer");
+      expect(listThemes(db)).toEqual([]);
+    });
+    it("patch_theme routes the same way and validates before persisting", async () => {
+      const db = openTestDb();
+      const client = await connectedClient(db);
+      await callTool(client, "save_theme", { manifest: lm("w", "workspace") });
+      await callTool(client, "save_theme", { manifest: lm("f") });
+      let r = await callTool(client, "patch_theme", { id: "w", patch: { dials: { roundness: 0.3 } }, make_active: true });
+      expect(r.isError).toBe(false);
+      expect(getActiveWorkspaceThemeId(db)).toBe("w");
+      expect(getActiveThemeId(db)).toBeNull();
+      r = await callTool(client, "patch_theme", { id: "f", patch: {}, make_active: true, layer: "workspace" });
+      expect(getActiveWorkspaceThemeId(db)).toBe("f");
+      r = await callTool(client, "patch_theme", { id: "w", patch: { layer: "ambience", dials: { roundness: 0.9 } }, make_active: true, layer: "workspace" });
+      expect(r.isError).toBe(true);
+      const g = await callTool(client, "get_theme", { id: "w" });
+      expect(g.body.layer).toBe("workspace");
+      expect(g.body.manifest.dials.roundness).toBe(0.3);
+    });
+  });
 });

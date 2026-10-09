@@ -4,7 +4,7 @@ import { openTestDb } from "./helpers.js";
 import { migrate } from "../src/db/migrate.js";
 import {
   listThemes, listThemesForSync, saveTheme, deleteTheme, setActiveTheme, getActiveThemeId,
-  getTheme, clearActiveIf, getActiveWorkspaceThemeId, setActiveWorkspaceTheme,
+  getTheme, clearActiveIf, getActiveWorkspaceThemeId, setActiveWorkspaceTheme, applyThemesFromPull,
 } from "../src/domain/themes.js";
 import { buildPullResponse, applyPullResponse } from "../src/domain/sync.js";
 import { DomainError } from "../src/domain/errors.js";
@@ -120,5 +120,82 @@ describe("migration 025", () => {
     db.prepare("DELETE FROM schema_migrations WHERE name = '025_theme_layers.sql'").run();
     expect(migrate(db).applied).toEqual(["025_theme_layers.sql"]);
     expect(raw(db)).toBeNull();
+  });
+});
+
+describe("layer changes and pointer integrity", () => {
+  const rawAmb = (db: DatabaseSync) =>
+    (db.prepare("SELECT active_theme_id AS a FROM theme_setting WHERE id = 1").get() as { a: string | null }).a;
+
+  it("re-saving the active workspace theme as ambience drops the workspace pointer", () => {
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("t", "workspace") });
+    setActiveWorkspaceTheme(db, "t");
+    saveTheme(db, { manifest: mk("t", "ambience") });
+    expect(raw(db)).toBeNull();
+    expect(getActiveWorkspaceThemeId(db)).toBeNull();
+  });
+
+  it("re-saving the active ambience theme as workspace drops the ambience pointer", () => {
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("t", "ambience") });
+    setActiveTheme(db, "t");
+    saveTheme(db, { manifest: mk("t", "workspace") });
+    expect(rawAmb(db)).toBeNull();
+    expect(getActiveThemeId(db)).toBeNull();
+  });
+
+  it("a full theme keeps both pointers across a re-save", () => {
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("t") });
+    setActiveTheme(db, "t");
+    setActiveWorkspaceTheme(db, "t");
+    saveTheme(db, { manifest: mk("t") });
+    expect(getActiveThemeId(db)).toBe("t");
+    expect(getActiveWorkspaceThemeId(db)).toBe("t");
+  });
+
+  it("getters hide a wrong-layer pointer even when stored raw", () => {
+    const db = openTestDb();
+    db.prepare("UPDATE theme_setting SET active_theme_id = 'builtin:ws-clean' WHERE id = 1").run();
+    expect(getActiveThemeId(db)).toBeNull();
+    db.prepare("UPDATE theme_setting SET active_workspace_theme_id = 'builtin:forest' WHERE id = 1").run();
+    expect(getActiveWorkspaceThemeId(db)).toBe("builtin:forest");
+    saveTheme(db, { manifest: mk("amb", "ambience") });
+    db.prepare("UPDATE theme_setting SET active_workspace_theme_id = 'amb' WHERE id = 1").run();
+    expect(getActiveWorkspaceThemeId(db)).toBeNull();
+  });
+
+  const row = (m: ReturnType<typeof mk>, deleted: string | null = null) =>
+    ({ id: m.id, name: m.name, manifest: m, updated_at: "2999-01-01 00:00:00", deleted_at: deleted });
+
+  it("a pull cannot put a wrong-layer theme in a slot", () => {
+    const db = openTestDb();
+    setActiveTheme(db, "builtin:forest");
+    applyThemesFromPull(db, [row(mk("w", "workspace")), row(mk("a", "ambience"))], "w", undefined, "a");
+    expect(getActiveThemeId(db)).toBe("builtin:forest");
+    expect(getActiveWorkspaceThemeId(db)).toBeNull();
+    applyThemesFromPull(db, [], "a", undefined, "w");
+    expect(getActiveThemeId(db)).toBe("a");
+    expect(getActiveWorkspaceThemeId(db)).toBe("w");
+  });
+
+  it("a pull may point at a theme whose row arrives in the same pull, and wrong layers there are rejected", () => {
+    const db = openTestDb();
+    applyThemesFromPull(db, [row(mk("a", "ambience"))], "a", undefined, null);
+    expect(getActiveThemeId(db)).toBe("a");
+  });
+
+  it("a pulled tombstone clears raw pointers so a re-save does not reactivate", () => {
+    const db = openTestDb();
+    saveTheme(db, { manifest: mk("t") });
+    setActiveTheme(db, "t");
+    setActiveWorkspaceTheme(db, "t");
+    applyThemesFromPull(db, [row(mk("t"), "2999-01-01 00:00:00")], undefined);
+    expect(raw(db)).toBeNull();
+    expect(rawAmb(db)).toBeNull();
+    saveTheme(db, { manifest: mk("t") });
+    expect(getActiveThemeId(db)).toBeNull();
+    expect(getActiveWorkspaceThemeId(db)).toBeNull();
   });
 });

@@ -963,8 +963,16 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
   });
 
   app.put("/api/themes/active", async (request, reply) => {
-    const body = (request.body ?? {}) as { id?: string | null; layer?: unknown };
-    const id = body.id ?? null;
+    const body = request.body as { id?: unknown; layer?: unknown } | null | undefined;
+    if (body === null || body === undefined || typeof body !== "object" || Array.isArray(body) || !("id" in body)) {
+      reply.code(400).send({ error: "invalid_body", reason: "invalid_body", message: "Body must be { id: string | null, layer? } (clear with an explicit id: null)." });
+      return;
+    }
+    if (body.id !== null && typeof body.id !== "string") {
+      reply.code(400).send({ error: "invalid_theme_id", reason: "invalid_theme_id", message: "id must be a string or null." });
+      return;
+    }
+    const id: string | null = body.id;
     const layer = body.layer === undefined ? "ambience" : body.layer;
     if (layer !== "ambience" && layer !== "workspace") {
       reply.code(400).send({ error: "invalid_layer", reason: "invalid_layer", message: 'layer must be "ambience" or "workspace".' });
@@ -978,6 +986,14 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
           ctx, "PUT", "/api/themes/active", { id, layer }
         ),
         (fromCanonical) => {
+          if (layer === "workspace" && fromCanonical && !("active_workspace_theme_id" in fromCanonical)) {
+            // An old canonical ignored `layer` and set ITS ambience pointer; don't mirror that.
+            reply.code(502).send({
+              error: "canonical_too_old", reason: "canonical_too_old",
+              message: "The server has not been updated to support workspace themes yet — update the server first.",
+            });
+            return undefined;
+          }
           if (layer === "workspace") setActiveWorkspaceTheme(db, fromCanonical ? fromCanonical.active_workspace_theme_id : id);
           else setActiveTheme(db, fromCanonical ? fromCanonical.active_theme_id : id);
           return pointers();
