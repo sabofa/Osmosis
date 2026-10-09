@@ -66,6 +66,7 @@ export function compose(layers: LayerSet): { manifest: ThemeManifest; ignored: I
   const overrides: NonNullable<ThemeManifest['overrides']> = {}
   for (const b of BUCKETS) {
     const out: Record<string, string> = {}
+    const wsShared = new Set<string>()
     const take = (m: ThemeManifest, layer: 'workspace' | 'ambience') => {
       const src = m.overrides?.[b]
       if (!src) return
@@ -74,7 +75,13 @@ export function compose(layers: LayerSet): { manifest: ThemeManifest; ignored: I
         const path = `overrides.${b}.${tok}`
         if (!tokenByName.has(tok)) { skip(m, layer, path, 'unknown token'); continue }
         const o = ownerOf(tok)
-        if (o === 'shared' || o === layer) out[tok] = val
+        if (o === 'shared' || o === layer) {
+          if (o === 'shared' && layer === 'ambience' && wsShared.has(tok)) {
+            skip(ws, 'workspace', path, 'overridden by the ambience layer')
+          }
+          out[tok] = val
+          if (o === 'shared' && layer === 'workspace') wsShared.add(tok)
+        }
         else skip(m, layer, path, ownedBy(other))
       }
     }

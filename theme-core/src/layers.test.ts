@@ -120,6 +120,38 @@ describe('compose', () => {
     }
   })
 
+  it('records a workspace override of a shared token overwritten by the ambience layer', () => {
+    const ws = normalise({ id: 'w2', name: 'W', layer: 'workspace', overrides: { any: { 'doc-measure': '60ch' } } })
+    const amb = normalise({ id: 'a2', name: 'A', layer: 'ambience', overrides: { any: { 'doc-measure': '70ch' } } })
+    const r = compose({ workspace: ws, ambience: amb })
+    expect(r.manifest.overrides?.any?.['doc-measure']).toBe('70ch')
+    expect(r.ignored).toContainEqual({
+      layer: 'workspace', themeId: 'w2', path: 'overrides.any.doc-measure', reason: 'overridden by the ambience layer',
+    })
+  })
+
+  it('ocean over ws-clean differs from ocean alone only in the documented workspace-owned tokens', () => {
+    const ocean = builtinById('builtin:ocean')!
+    const r = compose({ workspace: wsClean, ambience: ocean })
+    expect(r.ignored.map((i) => [i.layer, i.path]).sort()).toEqual([
+      ['ambience', 'dials.elevation'], ['ambience', 'dials.roundness'],
+    ])
+    const a = resolve(r.manifest)
+    const b = resolve(ocean)
+    const diff = (mode: 'light' | 'dark') =>
+      Object.keys(b[mode]).filter((k) => a[mode][k] !== b[mode][k]).sort()
+    // Intended consequence of workspace-owned dials (roundness, elevation) being dropped from an
+    // ambience theme under a workspace theme. Elevation also lifts surface-raised/overlay in dark
+    // mode: a cross-layer dependency by design.
+    const common = [
+      'radius-xs', 'radius-sm', 'radius-md', 'radius-lg', 'radius-xl', 'shadow-1', 'shadow-2', 'shadow-3',
+      'panel-shadow', 'card-shadow', 'menu-shadow', 'modal-shadow',
+      'panel-radius', 'card-radius', 'input-radius', 'button-radius', 'menu-radius', 'modal-radius',
+    ]
+    expect(diff('light')).toEqual([...common].sort())
+    expect(diff('dark')).toEqual([...common, 'color-surface-raised', 'color-surface-overlay', 'card-bg', 'menu-bg', 'modal-bg'].sort())
+  })
+
   it('a retro-like workspace over forest differs in shape tokens', () => {
     const forest = builtinById('builtin:forest')!
     const retro: ThemeManifest = normalise({

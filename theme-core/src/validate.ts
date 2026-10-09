@@ -1,5 +1,5 @@
 import { contrast, fitLightness, parseColour, toHex, type Oklch } from './colour.js'
-import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type Mode } from './manifest.js'
+import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type LayerKind, type Mode } from './manifest.js'
 import { tokenByName, isValidTokenValue } from './registry/index.js'
 import { mirrorSeed, resolve } from './resolve.js'
 import { compose, ownerOf } from './layers.js'
@@ -165,8 +165,6 @@ export function fitToHex(c: Oklch, against: Oklch, min: number): string | undefi
   return fitHex(c, [{ bg: against, min }])
 }
 
-type LayerKind = 'workspace' | 'ambience'
-
 function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warnings: Issue[], layer?: LayerKind): void {
   // a layer theme is only responsible for the tokens its layer owns
   const owned = (fg: string): boolean => {
@@ -240,11 +238,12 @@ function layerWarnings(raw: Record<string, unknown>, layer: LayerKind, errors: I
     : { workspace: wsDefault, ambience: probe })
   for (const f of ignored) {
     if (f.themeId !== probe.id) continue
-    warnings.push({ path: f.path, message: `${f.path} is ignored in a ${layer} theme (owned by the ${other} layer)` })
+    warnings.push({ path: f.path, message: `${f.path} is ignored in ${layer === 'ambience' ? 'an ambience' : 'a workspace'} theme (owned by the ${other} layer)` })
   }
   if (layer === 'workspace' && typeof raw.css === 'string' && raw.css.includes('@import')) {
     warnings.push({ path: 'css', message: '@import in css makes external requests; not recommended in a workspace theme' })
   }
+  // a workspace layer cannot control colours, so the contrast check is intentionally empty for it
   contrastWarnings(manifest as unknown as Record<string, unknown>, errors, warnings, layer)
 }
 
