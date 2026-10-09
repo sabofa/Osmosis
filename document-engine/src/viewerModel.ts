@@ -63,6 +63,9 @@ export function normalizeProps(p: NormalizableProps): NormalizedProps {
 export interface ResolvedMarker {
   id: string
   offset: number
+  quote?: string
+  prefix?: string
+  suffix?: string
   activate: () => void
 }
 
@@ -72,7 +75,7 @@ export function resolveLayers(layers: DocumentLayer[]): { anchors: DocumentAncho
   for (const layer of layers) {
     if (layer.anchor) anchors.push(layer.anchor)
     for (const m of layer.markers ?? []) {
-      markers.push({ id: m.id, offset: m.offset, activate: () => layer.onMarkerActivate?.(m.id) })
+      markers.push({ id: m.id, offset: m.offset, quote: m.quote, prefix: m.prefix, suffix: m.suffix, activate: () => layer.onMarkerActivate?.(m.id) })
     }
   }
   return { anchors, markers }

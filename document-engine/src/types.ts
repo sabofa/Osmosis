@@ -17,11 +17,21 @@ export interface DocumentViewerAsset {
 export interface DocumentMarker {
   id: string
   offset: number // codepoint index
+  // Optional re-anchoring context: when `quote` is set the viewer re-finds
+  // it in the current text before painting and skips (and reports) it if gone.
+  quote?: string
+  prefix?: string
+  suffix?: string
 }
 
 export interface DocumentAnchor {
   start: number // codepoint index, inclusive
   end: number // codepoint index, exclusive
+  // Optional re-anchoring context: when `quote` is set the viewer re-finds
+  // it in the current text before painting and skips (and reports) it if gone.
+  quote?: string
+  prefix?: string
+  suffix?: string
   label?: string | null
 }
 
@@ -34,6 +44,11 @@ export interface DocumentHighlight {
   id: string
   start: number // codepoint index, inclusive
   end: number // codepoint index, exclusive
+  // Optional re-anchoring context: when `quote` is set the viewer re-finds
+  // it in the current text before painting and skips (and reports) it if gone.
+  quote?: string
+  prefix?: string
+  suffix?: string
   // One of HIGHLIGHT_PALETTE's ids (see highlightPalette.ts); defaults to
   // the palette's first color when omitted.
   color?: string

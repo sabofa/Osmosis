@@ -6,7 +6,7 @@ import { ZoomControl, SettingsMenu } from './Toolbar'
 import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
-import { toInternalRange, fromInternalRange } from './offsetBoundary'
+import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
 import type {
@@ -80,7 +80,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [caps.layers, JSON.stringify(layers.map((l) => [l.anchor, l.markers]))]
   )
-  const { anchors, markers } = resolved
+  const { anchors: layerAnchors, markers: layerMarkers } = resolved
   const isPdf = asset.mime === 'application/pdf'
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
@@ -113,7 +113,30 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   // Public offsets are codepoints; the DOM-facing children (TextContent,
   // PdfLayer, highlightPainter) work in UTF-16. Convert once, here.
-  const internalHighlights = useMemo(() => localHighlights.map((h) => toInternalRange(text, h)), [localHighlights, text])
+  // Quoted items are re-found in the current text first; ones whose quote is
+  // gone are skipped (never painted at a stale place) and reported once.
+  // Empty text means "not loaded yet": nothing to re-anchor against.
+  const painted = useMemo(() => {
+    if (!text) return { highlights: localHighlights, anchors: layerAnchors, markers: layerMarkers, failed: [] as string[] }
+    const h = resolveForPaint(text, localHighlights)
+    const a = resolveForPaint(text, layerAnchors)
+    const m = resolveMarkersForPaint(text, layerMarkers)
+    const failed: string[] = []
+    if (h.failed.length) failed.push(`${h.failed.length} highlight(s)`)
+    if (a.failed.length) failed.push(`${a.failed.length} anchor(s)`)
+    if (m.failed.length) failed.push(`${m.failed.length} marker(s)`)
+    return { highlights: h.resolved, anchors: a.resolved, markers: m.resolved, failed }
+  }, [text, localHighlights, layerAnchors, layerMarkers])
+  const { anchors, markers } = painted
+  const failedMessage = painted.failed.length
+    ? `Could not re-anchor ${painted.failed.join(', ')}: the quoted text is no longer in the document.`
+    : null
+  const onErrorsRef = useRef(onErrors)
+  onErrorsRef.current = onErrors
+  useEffect(() => {
+    if (failedMessage) onErrorsRef.current?.([{ message: failedMessage }])
+  }, [failedMessage])
+  const internalHighlights = useMemo(() => painted.highlights.map((h) => toInternalRange(text, h)), [painted.highlights, text])
   const internalAnchors = useMemo(() => anchors.map((a) => toInternalRange(text, a)), [anchors, text])
 
   // ::highlight() rules for this instance's groups — one per palette color
@@ -157,9 +180,19 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     setPendingSelection(range && rect ? { ...fromInternalRange(text, range), rect } : null)
   }
 
+  // Edits run against the RESOLVED positions (what the reader sees); highlights
+  // whose quote is gone are carried through untouched, and anything the edit
+  // creates (new or split) gets a fresh quote.
+  function editHighlights(op: (resolved: DocumentHighlight[]) => DocumentHighlight[]): DocumentHighlight[] {
+    if (!text) return op(localHighlights)
+    const { resolved, failed } = resolveForPaint(text, localHighlights)
+    const known = new Set(localHighlights.map((h) => h.id))
+    return [...attachQuotes(text, op(resolved), known), ...failed]
+  }
+
   function applyHighlight(colorId: string) {
     if (!caps.highlight || !pendingSelection) return
-    const next = toggleHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, colorId, makeHighlightId)
+    const next = editHighlights((hs) => toggleHighlightRange(hs, pendingSelection.start, pendingSelection.end, colorId, makeHighlightId))
     setLocalHighlights(next)
     onHighlightsChange?.(next)
     setPendingSelection(null)
@@ -172,7 +205,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // toggle it off.
   function removeHighlight() {
     if (!caps.highlight || !pendingSelection) return
-    const next = removeHighlightRange(localHighlights, pendingSelection.start, pendingSelection.end, makeHighlightId)
+    const next = editHighlights((hs) => removeHighlightRange(hs, pendingSelection.start, pendingSelection.end, makeHighlightId))
     setLocalHighlights(next)
     onHighlightsChange?.(next)
     setPendingSelection(null)
