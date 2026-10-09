@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { DEFAULT_DIALS, DEFAULT_SEEDS, FONT_STACKS, resolve } from 'theme-core'
-import type { FontRole, Mode, StackName, ThemeManifest } from 'theme-core'
+import type { FontRole, LayerKind, Mode, StackName, ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
 import { useThemePresets } from '../hooks/useThemePresets'
 import { XIcon, SunIcon, MoonIcon } from './icons'
@@ -11,6 +11,11 @@ import {
   setFont,
   setCss,
   setName,
+  setLayer,
+  dialVisible,
+  seedsVisible,
+  fontVisible,
+  layerNote,
   countOverrides,
   clearOverrides,
   reportFor,
@@ -132,6 +137,7 @@ export default function ThemeEditor({
   const overrides = countOverrides(manifest)
   const seeds = manifest.seeds[mode] ?? {}
   const dials = { ...DEFAULT_DIALS, ...manifest.dials }
+  const showSeeds = seedsVisible(manifest.layer)
   const canSave = manifest.name.trim().length > 0 && report.errors.length === 0
 
   function cancel() {
@@ -148,6 +154,20 @@ export default function ThemeEditor({
         onChange={(e) => setManifest((m) => setName(m, e.target.value))}
       />
 
+      <label className="theme-dial-row">
+        <span className="theme-token-label">Layer</span>
+        <select
+          className="theme-font-select"
+          value={manifest.layer ?? 'full'}
+          onChange={(e) => setManifest((m) => setLayer(m, e.target.value === 'full' ? null : (e.target.value as LayerKind)))}
+        >
+          <option value="full">Full</option>
+          <option value="workspace">Workspace</option>
+          <option value="ambience">Ambience</option>
+        </select>
+      </label>
+      {layerNote(manifest.layer) && <div className="theme-token-hint">{layerNote(manifest.layer)}</div>}
+
       <div className="theme-mode-tabs">
         <button type="button" className={`theme-mode-tab${mode === 'light' ? ' active' : ''}`} onClick={() => setMode('light')}>
           <SunIcon size={13} />
@@ -159,11 +179,14 @@ export default function ThemeEditor({
         </button>
       </div>
 
+      {showSeeds && (
       <label className="theme-editor-check">
         <input type="checkbox" checked={derive} onChange={(e) => setDerive(e.target.checked)} />
         Derive the other mode from this one
       </label>
+      )}
 
+      {showSeeds && (
       <div className="theme-editor-tokens">
         {SEED_FIELDS.map((f) => (
           <SeedRow
@@ -175,10 +198,11 @@ export default function ThemeEditor({
           />
         ))}
       </div>
+      )}
 
       <div className="theme-editor-css-label">Dials</div>
       <div className="theme-editor-dials">
-        {UNIT_DIALS.map((k) => (
+        {UNIT_DIALS.filter((k) => dialVisible(manifest.layer, k)).map((k) => (
           <label className="theme-dial-row" key={k}>
             <span className="theme-token-label">{k}</span>
             <input
@@ -192,6 +216,7 @@ export default function ThemeEditor({
             <span className="theme-dial-value">{(dials[k] as number).toFixed(2)}</span>
           </label>
         ))}
+        {dialVisible(manifest.layer, 'typeScale') && (
         <label className="theme-dial-row">
           <span className="theme-token-label">typeScale</span>
           <input
@@ -204,6 +229,8 @@ export default function ThemeEditor({
             onChange={(e) => setManifest((m) => setDial(m, 'typeScale', Number(e.target.value)))}
           />
         </label>
+        )}
+        {dialVisible(manifest.layer, 'baseSize') && (
         <label className="theme-dial-row">
           <span className="theme-token-label">baseSize</span>
           <input
@@ -216,6 +243,8 @@ export default function ThemeEditor({
             onChange={(e) => setManifest((m) => setDial(m, 'baseSize', Number(e.target.value)))}
           />
         </label>
+        )}
+        {dialVisible(manifest.layer, 'twilightBlend') && (
         <label className="theme-editor-check">
           <input
             type="checkbox"
@@ -224,11 +253,12 @@ export default function ThemeEditor({
           />
           twilightBlend
         </label>
+        )}
       </div>
 
       <div className="theme-editor-css-label">Fonts</div>
       <div className="theme-editor-dials">
-        {FONT_ROLES.map((role) => {
+        {FONT_ROLES.filter((role) => fontVisible(manifest.layer, role)).map((role) => {
           const ref = manifest.fonts[role]
           const cur = ref && 'stack' in ref ? ref.stack : 'default'
           return (

@@ -12,6 +12,7 @@ export interface ThemePreset {
   customCss: string
   builtin?: boolean
   manifest?: ThemeManifest
+  layer?: 'workspace' | 'ambience' | null
 }
 
 // Themes live on the server (canonical); the ThemeProvider owns the list, the
@@ -22,8 +23,12 @@ export function useThemePresets(_mode?: ResolvedMode) {
   const c = useThemeContext()
   return {
     themes: c.presets,
+    ambienceThemes: c.presets.filter((p) => p.layer !== 'workspace'),
+    workspaceThemes: c.presets.filter((p) => p.layer === 'workspace' || !p.layer),
     activeId: c.activeId,
     setActiveId: c.setActiveId,
+    activeWorkspaceId: c.activeWorkspaceId,
+    setActiveWorkspaceId: c.setActiveWorkspaceId,
     saveTheme: c.saveTheme,
     saveManifest: c.saveManifest,
     previewManifest: c.previewManifest,

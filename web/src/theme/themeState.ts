@@ -1,18 +1,52 @@
-import { builtinById, DEFAULT_THEME_ID, LEGACY_TOKEN_MAP, migrate as migrateTheme, resolve, toLegacyTokens } from 'theme-core'
+import { builtinById, compose, DEFAULT_THEME_ID, LEGACY_TOKEN_MAP, migrate as migrateTheme, resolve, toLegacyTokens } from 'theme-core'
 import type { Location, ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
 
-// Which manifest is in force. Unknown, null or retired builtin ids fall back
-// to the default theme, never to nothing.
+// Which ambience manifest is in force. Unknown, null or retired builtin ids
+// fall back to the default theme, never to nothing. A stale pointer to a
+// workspace-layer theme is ignored the same way.
 export function activeManifest(custom: Array<{ id: string; manifest: ThemeManifest }>, activeId: string | null): ThemeManifest {
   const fallback = builtinById(DEFAULT_THEME_ID)!
   if (!activeId) return fallback
-  return custom.find((c) => c.id === activeId)?.manifest ?? builtinById(activeId) ?? fallback
+  const found = custom.find((c) => c.id === activeId)?.manifest ?? builtinById(activeId)
+  return found && found.layer !== 'workspace' ? found : fallback
+}
+
+// The workspace slot. Empty means "no workspace theme": no default is
+// substituted. An ambience-layer theme can't sit here (stale pointer).
+export function activeWorkspaceManifest(
+  custom: Array<{ id: string; manifest: ThemeManifest }>,
+  builtins: ReadonlyArray<ThemeManifest> | undefined,
+  activeWorkspaceId: string | null
+): ThemeManifest | null {
+  if (!activeWorkspaceId) return null
+  const found =
+    custom.find((c) => c.id === activeWorkspaceId)?.manifest ??
+    (builtins ? builtins.find((b) => b.id === activeWorkspaceId) : builtinById(activeWorkspaceId))
+  return found && found.layer !== 'ambience' ? found : null
+}
+
+// Both slots into the one manifest the stylesheet is built from. With an
+// empty workspace slot this is the ambience manifest itself, by identity.
+export function composeActive(workspace: ThemeManifest | null, ambience: ThemeManifest): ThemeManifest {
+  return compose({ workspace, ambience }).manifest
+}
+
+// A previewed manifest replaces the slot its layer names; a full theme (no
+// layer) or an ambience theme replaces the ambience slot.
+export function applyPreview(
+  preview: ThemeManifest | null,
+  workspace: ThemeManifest | null,
+  ambience: ThemeManifest
+): { workspace: ThemeManifest | null; ambience: ThemeManifest } {
+  if (!preview) return { workspace, ambience }
+  if (preview.layer === 'workspace') return { workspace: preview, ambience }
+  return { workspace, ambience: preview }
 }
 
 // The shape the editor and Settings still speak: legacy 8-token maps + css.
 export function toPresetView(id: string, name: string, manifest: ThemeManifest, builtin?: boolean): ThemePreset {
-  return { id, name, tokens: toLegacyTokens(resolve(manifest)), customCss: manifest.css ?? '', builtin, manifest }
+  return { id, name, tokens: toLegacyTokens(resolve(manifest)), customCss: manifest.css ?? '', builtin, manifest, layer: manifest.layer ?? null }
 }
 
 const SEED_OF: Record<string, 'canvas' | 'surface' | 'ink' | 'accent'> = {
@@ -60,6 +94,7 @@ export interface StorageLike {
 export interface ThemeCache {
   themes: Array<{ id: string; name: string; manifest: ThemeManifest; updated_at: string }>
   active_theme_id: string | null
+  active_workspace_theme_id?: string | null
   location: Location | null
 }
 
@@ -82,7 +117,12 @@ export function readCache(s: StorageLike): ThemeCache | null {
       }
     })
     if (c.themes.length > 0 && themes.length === 0) return null
-    return { themes, active_theme_id: c.active_theme_id ?? null, location: c.location ?? null }
+    return {
+      themes,
+      active_theme_id: c.active_theme_id ?? null,
+      active_workspace_theme_id: c.active_workspace_theme_id ?? null,
+      location: c.location ?? null,
+    }
   } catch {
     return null
   }

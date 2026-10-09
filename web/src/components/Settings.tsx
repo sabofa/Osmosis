@@ -260,7 +260,7 @@ export default function Settings({
   themePresets: ReturnType<typeof useThemePresets>
 }) {
   const { theme, setTheme, resolvedMode } = themeApi
-  const { themes, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
+  const { ambienceThemes: themes, workspaceThemes, activeWorkspaceId, setActiveWorkspaceId, activeId, setActiveId, saveManifest, deleteTheme, error: themeError } = themePresets
   const [editing, setEditing] = useState<ThemePreset | null | 'new'>(null)
   const [dupSource, setDupSource] = useState<ThemePreset | undefined>(undefined)
   const { font: docFont, setFont: setDocFont } = useDocumentFont()
@@ -629,6 +629,30 @@ export default function Settings({
             </button>
           )}
         </div>
+
+        {editing === null && (
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div>
+                <div className="settings-row-title">Workspace theme</div>
+                <div className="settings-row-sub">shape, type, space and material · colours come from the theme below</div>
+              </div>
+            </div>
+            <select
+              className="theme-font-select"
+              aria-label="Workspace theme"
+              value={activeWorkspaceId ?? ''}
+              onChange={(e) => setActiveWorkspaceId(e.target.value || null)}
+            >
+              <option value="">None</option>
+              {workspaceThemes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {editing !== null ? (
           <ThemeEditor

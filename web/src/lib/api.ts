@@ -724,12 +724,14 @@ export interface ThemeRecord {
   tokens: ThemeTokens
   custom_css: string
   updated_at: string
+  layer?: 'workspace' | 'ambience' | null
 }
 
 export interface ThemesPayload {
   themes: ThemeRecord[]
-  builtins: Array<{ id: string; name: string; manifest: ThemeManifest }>
+  builtins: Array<{ id: string; name: string; manifest: ThemeManifest; layer?: 'workspace' | 'ambience' | null }>
   active_theme_id: string | null
+  active_workspace_theme_id: string | null
   location: ThemeLocation | null
 }
 
@@ -800,11 +802,14 @@ export async function deleteThemeRecord(id: string): Promise<void> {
   if (!res.ok) throw await themeError(res, `DELETE /api/themes/${id} ${res.status}`)
 }
 
-export async function putActiveTheme(id: string | null): Promise<{ active_theme_id: string | null }> {
+export async function putActiveTheme(
+  id: string | null,
+  layer?: 'ambience' | 'workspace'
+): Promise<{ active_theme_id: string | null; active_workspace_theme_id: string | null }> {
   const res = await fetch('/api/themes/active', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
+    body: JSON.stringify(layer && layer !== 'ambience' ? { id, layer } : { id }),
   })
   if (!res.ok) throw await themeError(res, `PUT /api/themes/active ${res.status}`)
   return res.json()

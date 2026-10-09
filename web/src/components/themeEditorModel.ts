@@ -1,5 +1,5 @@
-import { DEFAULT_DIALS, DEFAULT_SEEDS, normalise, validate } from 'theme-core'
-import type { ColourSeeds, Dials, FontRole, Mode, Report, StackName, ThemeManifest } from 'theme-core'
+import { DEFAULT_DIALS, DEFAULT_SEEDS, OWNED_DIALS, normalise, validate } from 'theme-core'
+import type { ColourSeeds, Dials, FontRole, LayerKind, Mode, Report, StackName, ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
 import { presetToManifest } from '../theme/themeState'
 
@@ -63,6 +63,14 @@ export function setFont(m: ThemeManifest, role: FontRole, stack: StackName | nul
   return { ...m, fonts }
 }
 
+// Full theme = no layer key at all (hidden controls keep their values).
+export function setLayer(m: ThemeManifest, layer: LayerKind | null): ThemeManifest {
+  const out = { ...m }
+  if (layer) out.layer = layer
+  else delete out.layer
+  return out
+}
+
 export function setCss(m: ThemeManifest, css: string): ThemeManifest {
   const out = { ...m }
   if (css) out.css = css
@@ -88,4 +96,26 @@ export function clearOverrides(m: ThemeManifest): ThemeManifest {
 export function reportFor(m: ThemeManifest): Report {
   const forced = m.id.startsWith('builtin:') ? { ...m, id: customId() } : m
   return validate(forced)
+}
+
+// What the editor shows for a layer. A full theme (no layer) shows everything;
+// hidden controls keep their values, the validator warns that they're ignored.
+export function dialVisible(layer: LayerKind | undefined, key: DialKey): boolean {
+  if (!layer) return true
+  const other = layer === 'workspace' ? 'ambience' : 'workspace'
+  return !(OWNED_DIALS[other] as readonly string[]).includes(key)
+}
+
+export function seedsVisible(layer: LayerKind | undefined): boolean {
+  return layer !== 'workspace'
+}
+
+export function fontVisible(layer: LayerKind | undefined, role: FontRole): boolean {
+  return !(layer === 'ambience' && role !== 'math')
+}
+
+export function layerNote(layer: LayerKind | undefined): string | null {
+  if (layer === 'workspace') return 'A workspace theme controls shape, type, space and material; colours come from the ambience theme.'
+  if (layer === 'ambience') return 'An ambience theme controls colour, surface and graph; shape, type and space come from the workspace theme.'
+  return null
 }

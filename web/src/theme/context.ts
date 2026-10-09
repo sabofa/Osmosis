@@ -18,6 +18,8 @@ export interface ThemeContextValue {
   custom: CustomTheme[]
   activeId: string | null
   setActiveId(id: string | null): void
+  activeWorkspaceId: string | null
+  setActiveWorkspaceId(id: string | null): void
   previewManifest(m: ThemeManifest | null): void
   saveTheme(p: ThemePreset): Promise<boolean>
   saveManifest(m: ThemeManifest): Promise<boolean>

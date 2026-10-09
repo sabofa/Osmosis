@@ -11,7 +11,7 @@ import {
 import type { ThemePreset } from '../hooks/useThemePresets'
 import { Ctx, type CustomTheme, type ThemeContextValue } from './context'
 import { buildThemeSheet } from './applyTheme'
-import { activeManifest, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
+import { activeManifest, activeWorkspaceManifest, applyPreview, composeActive, presetToManifest, readCache, writeCache, toPresetView, type StorageLike } from './themeState'
 
 const SOURCE_KEY = 'osmosis:theme'
 const BLEND_KEY = 'osmosis:theme-blend'
@@ -61,15 +61,52 @@ function safeStore(key: string, value: string) {
   }
 }
 
+// One active-theme pointer with optimistic updates: each choice bumps a
+// request counter, a failure rolls back to the last server-confirmed value,
+// and a stale response (superseded by a newer choice) is ignored.
+function useActiveSlot(initial: string | null, layer: 'ambience' | 'workspace', setError: (e: string | null) => void) {
+  const [value, setValue] = useState<string | null>(initial)
+  const confirmed = useRef<string | null>(initial)
+  const req = useRef(0)
+  const set = useCallback(
+    (id: string | null) => {
+      const mine = ++req.current
+      setValue(id)
+      putActiveTheme(id, layer)
+        .then(() => {
+          if (mine !== req.current) return
+          confirmed.current = id
+          setError(null)
+        })
+        .catch((err) => {
+          if (mine !== req.current) return // superseded by a newer choice
+          setValue(confirmed.current)
+          setError(err instanceof Error ? err.message : String(err))
+        })
+    },
+    [layer, setError]
+  )
+  // Server truth arrives: adopt it unless a newer choice was made since `snapshot`.
+  const adopt = useCallback((id: string | null, snapshot: number) => {
+    if (snapshot !== req.current) return
+    confirmed.current = id
+    setValue(id)
+  }, [])
+  return { value, setValue, req, set, adopt }
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [cache] = useState(() => readCache(safeStorage()))
   const [custom, setCustom] = useState<CustomTheme[]>(cache?.themes ?? [])
-  const [activeId, setActiveIdState] = useState<string | null>(cache?.active_theme_id ?? null)
   const [location, setLocationState] = useState<Location | null>(cache?.location ?? null)
   const [source, setSourceState] = useState<ModeSource>(readSource)
   const [twilightBlend, setTwilightBlendState] = useState<boolean>(readBlend)
   const [preview, setPreview] = useState<ThemeManifest | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const ambienceSlot = useActiveSlot(cache?.active_theme_id ?? null, 'ambience', setError)
+  const workspaceSlot = useActiveSlot(cache?.active_workspace_theme_id ?? null, 'workspace', setError)
+  const activeId = ambienceSlot.value
+  const activeWorkspaceId = workspaceSlot.value
   const [systemDark, setSystemDark] = useState<boolean>(systemDarkNow)
   const [tick, setTick] = useState(0)
 
@@ -105,7 +142,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // ---- apply: data-theme + the one stylesheet ----
-  const manifest = preview ?? activeManifest(custom, activeId)
+  const ambienceManifest = useMemo(() => activeManifest(custom, activeId), [custom, activeId])
+  const workspaceManifest = useMemo(
+    () => activeWorkspaceManifest(custom, BUILTINS, activeWorkspaceId),
+    [custom, activeWorkspaceId]
+  )
+  const manifest = useMemo(() => {
+    const slots = applyPreview(preview, workspaceManifest, ambienceManifest)
+    return composeActive(slots.workspace, slots.ambience)
+  }, [preview, workspaceManifest, ambienceManifest])
   const appliedKey = useRef('')
 
   useLayoutEffect(() => {
@@ -130,23 +175,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [manifest, mode, blend])
 
   // ---- server sync ----
-  const confirmedActive = useRef<string | null>(cache?.active_theme_id ?? null)
-  const activeReq = useRef(0)
-
+  const { setValue: setAmbienceValue } = ambienceSlot
+  const { setValue: setWorkspaceValue } = workspaceSlot
+  const { req: ambReqRef, adopt: adoptAmbience } = ambienceSlot
+  const { req: wsReqRef, adopt: adoptWorkspace } = workspaceSlot
   const refresh = useCallback(async () => {
-    const req = activeReq.current
+    const ambReq = ambReqRef.current
+    const wsReq = wsReqRef.current
     try {
       const p = await getThemes()
-      if (req !== activeReq.current) return // a newer choice was made while this was in flight
-      confirmedActive.current = p.active_theme_id
       setCustom(p.themes.map((t) => ({ id: t.id, name: t.name, manifest: t.manifest, updated_at: t.updated_at })))
-      setActiveIdState(p.active_theme_id)
       setLocationState(p.location ?? null)
+      adoptAmbience(p.active_theme_id, ambReq)
+      adoptWorkspace(p.active_workspace_theme_id ?? null, wsReq)
       setError(null)
     } catch {
       // Node unreachable: keep what we have.
     }
-  }, [])
+  }, [ambReqRef, wsReqRef, adoptAmbience, adoptWorkspace])
 
   useEffect(() => {
     void refresh()
@@ -160,8 +206,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [refresh])
 
   useEffect(() => {
-    writeCache(safeStorage(), { themes: custom, active_theme_id: activeId, location })
-  }, [custom, activeId, location])
+    writeCache(safeStorage(), { themes: custom, active_theme_id: activeId, active_workspace_theme_id: activeWorkspaceId, location })
+  }, [custom, activeId, activeWorkspaceId, location])
 
   // ---- actions ----
   const setSource = useCallback((s: ModeSource) => {
@@ -174,21 +220,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTwilightBlendState(b)
   }, [])
 
-  const setActiveId = useCallback((id: string | null) => {
-    const req = ++activeReq.current
-    setActiveIdState(id)
-    putActiveTheme(id)
-      .then(() => {
-        if (req !== activeReq.current) return
-        confirmedActive.current = id
-        setError(null)
-      })
-      .catch((err) => {
-        if (req !== activeReq.current) return // superseded by a newer choice
-        setActiveIdState(confirmedActive.current)
-        setError(err instanceof Error ? err.message : String(err))
-      })
-  }, [])
+  const setActiveId = ambienceSlot.set
+  const setActiveWorkspaceId = workspaceSlot.set
 
   const saveManifest = useCallback(async (m: ThemeManifest): Promise<boolean> => {
     try {
@@ -210,14 +243,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       await deleteThemeRecord(id)
       setCustom((prev) => prev.filter((t) => t.id !== id))
-      setActiveIdState((cur) => (cur === id ? null : cur))
+      setAmbienceValue((cur) => (cur === id ? null : cur))
+      setWorkspaceValue((cur) => (cur === id ? null : cur))
       setError(null)
       return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       return false
     }
-  }, [])
+  }, [setAmbienceValue, setWorkspaceValue])
 
   const setLocation = useCallback(async (loc: Location | null): Promise<boolean> => {
     try {
@@ -260,6 +294,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     custom,
     activeId,
     setActiveId,
+    activeWorkspaceId,
+    setActiveWorkspaceId,
     previewManifest,
     saveTheme,
     saveManifest,

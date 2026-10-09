@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { builtinById, BUILTINS, resolve, DEFAULT_DIALS, DEFAULT_SEEDS } from 'theme-core'
 import type { ThemeManifest } from 'theme-core'
 import type { ThemePreset } from '../hooks/useThemePresets'
-import { startManifest, setSeed, setDial, setFont, setCss, setName, countOverrides, clearOverrides, reportFor } from './themeEditorModel'
+import { startManifest, setSeed, setDial, setFont, setCss, setName, countOverrides, clearOverrides, reportFor, setLayer, dialVisible, seedsVisible, fontVisible, layerNote } from './themeEditorModel'
 
 const fresh = () => startManifest(null)
 const presetOf = (m: ThemeManifest, builtin?: boolean): ThemePreset => ({
@@ -112,5 +112,37 @@ describe('reportFor', () => {
     for (const x of [m, startManifest(null, presetOf(BUILTINS[0], true))]) {
       expect(() => resolve(x)).not.toThrow()
     }
+  })
+})
+
+describe('layer', () => {
+  it('setLayer sets and clears the key without mutating', () => {
+    const m = fresh()
+    const w = setLayer(m, 'workspace')
+    expect(w.layer).toBe('workspace')
+    expect('layer' in m).toBe(false)
+    const back = setLayer(w, null)
+    expect('layer' in back).toBe(false)
+    expect(w.layer).toBe('workspace')
+    expect(setLayer(w, 'ambience').layer).toBe('ambience')
+  })
+  it('visibility follows OWNED_DIALS', () => {
+    expect(dialVisible(undefined, 'contrast')).toBe(true)
+    expect(dialVisible('workspace', 'roundness')).toBe(true)
+    expect(dialVisible('workspace', 'contrast')).toBe(false)
+    expect(dialVisible('ambience', 'roundness')).toBe(false)
+    expect(dialVisible('ambience', 'saturation')).toBe(true)
+    expect(seedsVisible('workspace')).toBe(false)
+    expect(seedsVisible('ambience')).toBe(true)
+    expect(seedsVisible(undefined)).toBe(true)
+    expect(fontVisible('ambience', 'body')).toBe(false)
+    expect(fontVisible('ambience', 'math')).toBe(true)
+    expect(fontVisible('workspace', 'body')).toBe(true)
+    expect(layerNote(undefined)).toBeNull()
+    expect(layerNote('workspace')).toContain('colours come from the ambience theme')
+  })
+  it('hiding keeps values', () => {
+    const m = setDial(fresh(), 'contrast', 0.9)
+    expect(setLayer(m, 'workspace').dials.contrast).toBe(0.9)
   })
 })
