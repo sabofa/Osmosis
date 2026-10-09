@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
@@ -8,6 +8,8 @@ import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
+import { DEFAULT_TOKENS, tokensToCssVars, highlightCss as buildHighlightCss } from './tokenVars'
+import type { DocumentTokens } from 'theme-core'
 import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
@@ -22,11 +24,10 @@ import './DocumentViewer.css'
 
 export interface DocumentViewerProps {
   asset: DocumentViewerAsset
-  // Initializes the viewer's theme; the built-in settings menu can then
-  // flip it locally without the host having to re-render this prop (same
-  // "initializes, doesn't dictate every frame" pattern highlights/
-  // onHighlightsChange below uses).
-  theme?: 'light' | 'dark'
+  // Theme tokens (colours, fonts, scale). The host owns light/dark: the
+  // tokens already say which mode they are. Absent: a neutral built-in set.
+  // The viewer root is transparent; the host frame owns the sheet behind it.
+  tokens?: DocumentTokens
   // What the reader may do: 'view' (select/search/zoom/theme only),
   // 'annotate' (default: view + highlights and the colour popover), 'edit'
   // (stub until editing lands; content stays read-only).
@@ -58,17 +59,6 @@ const ZOOM_MIN = 1
 const ZOOM_MAX = 4
 const ZOOM_STEP = 0.25
 
-// See the highlightCss comment below for why this can't be 1 (opaque).
-const HIGHLIGHT_ALPHA = 0.55
-
-function hexToRgba(hex: string, alpha: number): string {
-  const clean = hex.replace('#', '')
-  const r = parseInt(clean.slice(0, 2), 16)
-  const g = parseInt(clean.slice(2, 4), 16)
-  const b = parseInt(clean.slice(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
 let highlightCounter = 0
 function makeHighlightId(): string {
   highlightCounter += 1
@@ -78,7 +68,7 @@ function makeHighlightId(): string {
 let instanceCounter = 0
 
 export default function DocumentViewer(props: DocumentViewerProps) {
-  const { asset, theme, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
+  const { asset, tokens = DEFAULT_TOKENS, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
   const gate = gatedPresentation(gated, gatedLabel)
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome)
@@ -104,10 +94,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   }
   const groupPrefix = instanceIdRef.current
 
-  const [internalTheme, setInternalTheme] = useState<'light' | 'dark'>(theme ?? 'light')
-  useEffect(() => {
-    if (theme) setInternalTheme(theme)
-  }, [theme])
+  const cssVars = useMemo(() => tokensToCssVars(tokens), [tokens])
 
   const [zoom, setZoom] = useState(1)
   const [showOverlays, setShowOverlays] = useState(true)
@@ -148,28 +135,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const internalAnchors = useMemo(() => anchors.map((a) => toInternalRange(text, a)), [anchors, text])
 
   // ::highlight() rules for this instance's groups — one per palette color
-  // plus the anchor, re-generated when the theme changes. Literal hex/rgba
-  // values rather than var(...): custom-highlight pseudo-elements aren't
-  // guaranteed to resolve custom properties from this stylesheet's own
-  // cascade context across browsers, so this sidesteps that entirely.
-  //
-  // Alpha is not optional here, and not just cosmetic: a PDF's text-layer
-  // spans render with color:transparent (the visible glyphs are painted on
-  // the canvas underneath, not by these DOM text nodes — see PdfLayer). An
-  // opaque highlight background would sit *above* that transparent text and
-  // fully block the canvas glyphs below it, i.e. exactly the "solid block,
-  // no visible text underneath" bug. Translucent backgrounds let the canvas
-  // show through, same as how a native PDF viewer's own selection/highlight
-  // color is always translucent, never solid.
-  const highlightCss = useMemo(() => {
-    const rules = HIGHLIGHT_PALETTE.map(
-      (c) => `::highlight(${groupPrefix}-${c.id}) { background-color: ${hexToRgba(internalTheme === 'dark' ? c.dark : c.light, HIGHLIGHT_ALPHA)}; }`
-    )
-    rules.push(
-      `::highlight(${groupPrefix}-anchor) { background-color: ${hexToRgba(internalTheme === 'dark' ? '#8a6d1a' : '#f4d35e', HIGHLIGHT_ALPHA)}; }`
-    )
-    return rules.join('\n')
-  }, [groupPrefix, internalTheme])
+  // plus the anchor, generated from the tokens (see tokenVars.highlightCss
+  // for the palette -> token mapping and why alpha is not optional).
+  const highlightCss = useMemo(() => buildHighlightCss(groupPrefix, tokens), [groupPrefix, tokens])
 
   function zoomIn() {
     setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100))
@@ -306,7 +274,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const canDownload = !!asset.url || (asset.type === 'text' && !!asset.content)
 
   return (
-    <div className={`document-viewer document-viewer-${internalTheme} document-viewer-mode-${embedded ? 'simple' : 'full'}`}>
+    <div
+      className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}`}
+      data-mode={tokens.mode}
+      style={cssVars as CSSProperties}
+    >
       {!embedded && <style>{highlightCss}</style>}
       {caps.editStub && (
         <div className="document-viewer-edit-stub" role="status">
@@ -336,8 +308,6 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         <ZoomControl zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
         {caps.settingsMenu && (
           <SettingsMenu
-            theme={internalTheme}
-            onToggleTheme={() => setInternalTheme((t) => (t === 'light' ? 'dark' : 'light'))}
             showOverlays={showOverlays}
             onToggleOverlays={() => setShowOverlays((v) => !v)}
             onDownload={canDownload ? handleDownload : null}
@@ -350,12 +320,12 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           className="document-viewer-highlight-action"
           style={{ left: pendingSelection.rect.left + pendingSelection.rect.width / 2, top: pendingSelection.rect.top }}
         >
-          {HIGHLIGHT_PALETTE.map((c) => (
+          {HIGHLIGHT_PALETTE.map((c, i) => (
             <button
               key={c.id}
               type="button"
               className="document-viewer-highlight-swatch"
-              style={{ background: internalTheme === 'dark' ? c.dark : c.light }}
+              style={{ background: `var(--de-highlight-${(i % 4) + 1})` }}
               title={`Highlight ${c.label.toLowerCase()}`}
               onClick={() => applyHighlight(c.id)}
             />

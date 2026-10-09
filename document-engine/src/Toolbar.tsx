@@ -30,14 +30,10 @@ export function ZoomControl({
 // Full-mode-only: the hamburger button and its floating settings menu.
 // Zoom lives in the always-present ZoomControl above, not duplicated here.
 export function SettingsMenu({
-  theme,
-  onToggleTheme,
   showOverlays,
   onToggleOverlays,
   onDownload,
 }: {
-  theme: 'light' | 'dark'
-  onToggleTheme: () => void
   showOverlays: boolean
   onToggleOverlays: () => void
   onDownload: (() => void) | null
@@ -61,9 +57,6 @@ export function SettingsMenu({
       </button>
       {open && (
         <div className="document-viewer-settings-menu">
-          <button type="button" onClick={onToggleTheme}>
-            {theme === 'light' ? 'Switch to dark' : 'Switch to light'}
-          </button>
           <button type="button" onClick={onToggleOverlays}>
             <EyeIcon size={13} off={!showOverlays} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}

@@ -4,6 +4,23 @@ import { extractPdfText } from './core/extractPdfText'
 import { findTokenSpan } from './core/findTokenSpan'
 import type { DocumentAnchor, DocumentHighlight, DocumentMarker } from './types'
 import './App.css'
+import type { DocumentTokens } from 'theme-core'
+import { DEFAULT_TOKENS } from './tokenVars'
+
+// Demo-only tokens (hard-coded colours are fine here; the real host builds
+// these from its theme).
+const DEMO_TOKENS_LIGHT: DocumentTokens = { ...DEFAULT_TOKENS, mode: 'light', key: 'demo-light' }
+const DEMO_TOKENS_DARK: DocumentTokens = {
+  ...DEFAULT_TOKENS,
+  mode: 'dark',
+  key: 'demo-dark',
+  colors: {
+    ...DEFAULT_TOKENS.colors,
+    page: '#201e15', text: '#f2efe2', textMuted: '#b5b09a', rule: '#4a4530', selection: '#5a5030',
+    codeBg: '#2c2a1e', codeText: '#f2efe2', tableHeader: '#38352a', tableStripe: '#2a281d',
+    highlight: ['#8a6d1a', '#3f6b3a', '#7a3552', '#2d5a7a'],
+  },
+}
 
 type Kind = 'text' | 'file'
 
@@ -303,7 +320,7 @@ export default function App() {
       <main className="app-main">
         <DocumentViewer
           asset={engineAsset}
-          theme={theme}
+          tokens={theme === 'dark' ? DEMO_TOKENS_DARK : DEMO_TOKENS_LIGHT}
           interaction={mode === 'simple' ? 'view' : 'annotate'}
           chrome={mode === 'simple' ? 'embedded' : 'full'}
           layers={[
