@@ -33,7 +33,13 @@ describe("deleteAsset", () => {
       },
     ]).created[0];
 
+    expect(
+      (db.prepare("SELECT document_anchor_quote AS a FROM question WHERE id = ?").get(q.id) as { a: string | null }).a
+    ).not.toBeNull();
     deleteAsset(db, uploadsDir, asset.id);
+    expect(
+      db.prepare("SELECT document_anchor_quote AS a, document_marker_quote AS m FROM question WHERE id = ?").get(q.id)
+    ).toEqual({ a: null, m: null });
 
     const detail = getQuestionDetail(db, q.id);
     expect(detail.document_id).toBeNull();

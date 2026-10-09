@@ -310,6 +310,16 @@ function validateQuestionInput(
     };
   }
 
+  if (
+    (q.document_anchor_start != null && !Number.isInteger(q.document_anchor_start)) ||
+    (q.document_anchor_end != null && !Number.isInteger(q.document_anchor_end))
+  ) {
+    return { reason: "invalid_document_anchor", detail: "document_anchor_start and document_anchor_end must be integers" };
+  }
+  if (q.document_marker_offset != null && !Number.isInteger(q.document_marker_offset)) {
+    return { reason: "invalid_document_marker", detail: "document_marker_offset must be an integer" };
+  }
+
   if (q.document_anchor_start !== undefined && q.document_anchor_start !== null) {
     if (q.document_anchor_end === undefined || q.document_anchor_end === null) {
       return { reason: "invalid_document_anchor", detail: "document_anchor_end is required when document_anchor_start is set" };

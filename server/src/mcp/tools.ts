@@ -77,9 +77,9 @@ const questionInputShape = z.object({
   ),
   document_id: z.string().nullable().optional(),
   document_anchor_label: z.string().nullable().optional(),
-  document_anchor_start: z.number().nullable().optional(),
-  document_anchor_end: z.number().nullable().optional(),
-  document_marker_offset: z.number().nullable().optional().describe(
+  document_anchor_start: z.number().int().nullable().optional(),
+  document_anchor_end: z.number().int().nullable().optional(),
+  document_marker_offset: z.number().int().nullable().optional().describe(
     "Codepoint offset (Unicode codepoints, not UTF-16 units) into the linked document's extracted_text where this question's inline " +
       "reference marker sits (e.g. the '(A)' or '12.' in an ACT-English-style passage that " +
       "this question is about). Requires document_id. Clicking the rendered marker jumps " +
@@ -427,9 +427,9 @@ export function registerTools(
           ),
           document_id: z.string().nullable().optional(),
           document_anchor_label: z.string().nullable().optional(),
-          document_anchor_start: z.number().nullable().optional(),
-          document_anchor_end: z.number().nullable().optional(),
-          document_marker_offset: z.number().nullable().optional(),
+          document_anchor_start: z.number().int().nullable().optional(),
+          document_anchor_end: z.number().int().nullable().optional(),
+          document_marker_offset: z.number().int().nullable().optional(),
           claim_rung: z.enum(["can_state", "can_apply", "can_discriminate", "can_explain_why", "can_transfer"]).nullable().optional()
             .describe("The highest rung on the claim ladder this item can support evidence for. Leave unset if this item doesn't map to a specific rung."),
           tests_error: z.string().nullable().optional()

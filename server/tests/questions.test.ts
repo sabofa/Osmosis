@@ -321,4 +321,56 @@ describe("anchor and marker quotes", () => {
     expect(snap.document_anchor_quote).toBeNull();
     expect(snap.document_anchor_start).toBe(2);
   });
+
+  function attempt(db: ReturnType<typeof openTestDb>, qid: string) {
+    db.prepare(
+      "INSERT INTO attempt (id, node_id, source, started_at, submitted_at) VALUES ('at1', 'n', 'adhoc', datetime('now'), datetime('now'))"
+    ).run();
+    db.prepare("INSERT INTO response (id, attempt_id, question_id, ordinal) VALUES ('rs1', 'at1', ?, 0)").run(qid);
+  }
+
+  it("versioned edit: new row gets the new anchor quote, the old row keeps the old one", async () => {
+    const { db, asset } = await setup();
+    const id = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 7 })])
+      .created[0]!.id;
+    attempt(db, id);
+    const r = editQuestion(db, id, { document_anchor_end: 13 });
+    expect(r.versioned).toBe(true);
+    expect(quotes(db, r.id).a).toBe("hello world");
+    expect(quotes(db, id).a).toBe("hello");
+  });
+
+  it("versioned edit: moving only the marker updates the marker quote", async () => {
+    const { db, asset } = await setup();
+    const id = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 2 })]).created[0]!.id;
+    attempt(db, id);
+    const r = editQuestion(db, id, { document_marker_offset: 8 });
+    expect(r.versioned).toBe(true);
+    expect(quotes(db, r.id).m).toBe("world");
+    expect(quotes(db, id).m).toBe("hello");
+  });
+
+  it("an unrelated edit backfills quotes on a legacy row (versioned and in place)", async () => {
+    for (const withAttempt of [false, true]) {
+      const { db, asset } = await setup();
+      const id = createQuestions(db, [
+        mc({ document_id: asset.id, document_anchor_start: 2, document_anchor_end: 7, document_marker_offset: 2 }),
+      ]).created[0]!.id;
+      db.prepare("UPDATE question SET document_anchor_quote = NULL, document_marker_quote = NULL WHERE id = ?").run(id);
+      if (withAttempt) attempt(db, id);
+      const r = editQuestion(db, id, { prompt: "Reworded?" });
+      expect(r.versioned).toBe(withAttempt);
+      expect(quotes(db, r.id)).toEqual({ a: "hello", m: "hello" });
+    }
+  });
+
+  it("rejects non-integer anchor and marker offsets", async () => {
+    const { db, asset } = await setup();
+    const m = createQuestions(db, [mc({ document_id: asset.id, document_marker_offset: 2.5 })]);
+    expect(m.rejected[0]?.reason).toBe("invalid_document_marker");
+    const a = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 1.5, document_anchor_end: 7 })]);
+    expect(a.rejected[0]?.reason).toBe("invalid_document_anchor");
+    const e = createQuestions(db, [mc({ document_id: asset.id, document_anchor_start: 1, document_anchor_end: 7.5 })]);
+    expect(e.rejected[0]?.reason).toBe("invalid_document_anchor");
+  });
 });

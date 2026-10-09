@@ -86,7 +86,7 @@ export async function createAsset(
   }
 
   const isAuthoredFile = input.type === "file" && (input.mime === "text/markdown" || input.mime === "text/plain");
-  if (extractedText != null && (input.type === "text" || isAuthoredFile)) extractedText = toNfc(extractedText);
+  if (extractedText != null && isAuthoredFile) extractedText = toNfc(extractedText);
 
   db.prepare(
     `INSERT INTO asset (id, title, type, content, filename, mime, storage_path, extracted_text, created_by)
@@ -218,7 +218,8 @@ export function deleteAsset(db: DatabaseSync, uploadsDir: string, id: string): {
     db.prepare(
       `UPDATE question
        SET document_id = NULL, document_anchor_label = NULL, document_anchor_start = NULL,
-           document_anchor_end = NULL, document_marker_offset = NULL, updated_at = datetime('now')
+           document_anchor_end = NULL, document_marker_offset = NULL,
+           document_anchor_quote = NULL, document_marker_quote = NULL, updated_at = datetime('now')
        WHERE document_id = ?`
     ).run(id);
     db.prepare("DELETE FROM asset WHERE id = ?").run(id);
