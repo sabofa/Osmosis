@@ -13,7 +13,7 @@ describe('renderMath', () => {
   })
 
   it('does not throw on invalid TeX', () => {
-    const r = renderMath(String.raw`rac{`, false)
+    const r = renderMath(String.raw`\frac{`, false)
     expect('html' in r || 'error' in r).toBe(true)
     if ('html' in r) expect(r.html).toContain('katex-error')
   })
