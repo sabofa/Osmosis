@@ -60,6 +60,22 @@ export function normalizeProps(p: NormalizableProps): NormalizedProps {
   }
 }
 
+export const GATED_DEFAULT_LABEL = 'Hidden'
+
+export interface GatedPresentation {
+  gated: boolean
+  contentHidden: boolean
+  placeholder: string | null
+}
+
+// What the viewer shows while the host has gated it. The viewer does not know
+// why; it only hides content from sight and the accessibility tree. Zoom and
+// scroll are viewer state and are deliberately not part of this.
+export function gatedPresentation(gated: boolean | undefined, label?: string): GatedPresentation {
+  if (!gated) return { gated: false, contentHidden: false, placeholder: null }
+  return { gated: true, contentHidden: true, placeholder: label && label.trim() ? label : GATED_DEFAULT_LABEL }
+}
+
 export interface ResolvedMarker {
   id: string
   offset: number

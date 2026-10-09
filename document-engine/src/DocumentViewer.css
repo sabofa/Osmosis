@@ -505,3 +505,26 @@
   opacity: 0.75;
   border-bottom: 1px solid rgba(128, 128, 128, 0.3);
 }
+
+/* Gated: the content stays mounted and laid out (so scroll position and zoom
+   survive) but is invisible and inert; a neutral box stands in for it. */
+.document-viewer-scroll-gated {
+  overflow: hidden;
+}
+
+.document-viewer-content-hidden {
+  visibility: hidden;
+}
+
+.document-viewer-gated {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--de-border-light, rgba(128, 128, 128, 0.12));
+  color: inherit;
+  opacity: 0.85;
+  font-size: 0.9rem;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, normalizeProps, resolveLayers } from './viewerModel'
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
@@ -78,5 +78,25 @@ describe('resolveLayers', () => {
     r.markers[1].activate()
     expect(b).toHaveBeenCalledWith('m')
     expect(a).not.toHaveBeenCalled()
+  })
+})
+
+describe('gatedPresentation', () => {
+  it('open: content exposed, no placeholder', () => {
+    expect(gatedPresentation(false)).toEqual({ gated: false, contentHidden: false, placeholder: null })
+    expect(gatedPresentation(undefined, 'x').placeholder).toBeNull()
+  })
+  it('gated: content hidden from the accessibility tree, default label', () => {
+    expect(gatedPresentation(true)).toEqual({ gated: true, contentHidden: true, placeholder: 'Hidden' })
+  })
+  it('gated: custom label, blank falls back to default', () => {
+    expect(gatedPresentation(true, 'Locked').placeholder).toBe('Locked')
+    expect(gatedPresentation(true, '  ').placeholder).toBe('Hidden')
+  })
+  it('is a pure presentation function: it carries no zoom or scroll values', () => {
+    const keys = Object.keys(gatedPresentation(true))
+    expect(keys).not.toContain('zoom')
+    expect(keys.some((k) => /scroll/i.test(k))).toBe(false)
+    expect(gatedPresentation(true)).toEqual(gatedPresentation(true))
   })
 })

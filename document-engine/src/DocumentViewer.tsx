@@ -8,7 +8,7 @@ import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
-import { EDIT_STUB_MESSAGE, capabilities, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, normalizeProps, resolveLayers, type LegacyViewerProps } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -43,6 +43,11 @@ export interface DocumentViewerProps extends LegacyViewerProps {
   highlights?: DocumentHighlight[]
   onHighlightsChange?: (highlights: DocumentHighlight[]) => void
   onErrors?: (errors: DocumentRenderError[]) => void
+  // When true the content collapses to an unreadable placeholder (hidden from
+  // sight and the accessibility tree). Zoom and scroll position are kept, so
+  // reopening picks up where the reader was. The viewer does not know why.
+  gated?: boolean
+  gatedLabel?: string
 }
 
 const ZOOM_MIN = 1
@@ -69,7 +74,8 @@ function makeHighlightId(): string {
 let instanceCounter = 0
 
 export default function DocumentViewer(props: DocumentViewerProps) {
-  const { asset, theme, highlights, onHighlightsChange, onErrors } = props
+  const { asset, theme, highlights, onHighlightsChange, onErrors, gated, gatedLabel } = props
+  const gate = gatedPresentation(gated, gatedLabel)
   // TODO(T3.6): remove adapter — normalizeProps also maps the legacy
   // mode/anchor/markers/onJumpToQuestion props onto interaction/chrome/layers.
   const { interaction, chrome, layers } = normalizeProps(props)
@@ -299,12 +305,19 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           {EDIT_STUB_MESSAGE}
         </div>
       )}
-      <div className="document-viewer-scroll">
+      {gate.placeholder && (
+        <div className="document-viewer-gated" role="status">
+          {gate.placeholder}
+        </div>
+      )}
+      <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}`}>
         <div
-          className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}`}
+          className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}${gate.contentHidden ? ' document-viewer-content-hidden' : ''}`}
           style={{ zoom }}
           ref={contentRef}
           onMouseUp={handleMouseUp}
+          aria-hidden={gate.contentHidden || undefined}
+          inert={gate.contentHidden}
         >
           {body}
           {sidePanel && <div className="document-viewer-side-panel">{sidePanel}</div>}
@@ -324,7 +337,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         )}
       </div>
 
-      {caps.highlightPopover && pendingSelection && (
+      {caps.highlightPopover && pendingSelection && !gate.gated && (
         <div
           className="document-viewer-highlight-action"
           style={{ left: pendingSelection.rect.left + pendingSelection.rect.width / 2, top: pendingSelection.rect.top }}
