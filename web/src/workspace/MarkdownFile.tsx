@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import RichText from '../components/RichText'
+import DocumentTextView from '../components/DocumentTextView'
 import ConflictBanner from './ConflictBanner'
 import type { FileViewProps } from './fileTypes'
 import { useFileDraft } from './useFileDraft'
@@ -85,7 +85,7 @@ export default function MarkdownFile({ nodeId, body, version, onSaved }: FileVie
         />
       ) : (
         <div className="ws-md-view">
-          {(f.draft ?? f.saved.body).trim() === '' ? <div className="ws-note">This file is empty.</div> : <RichText text={f.draft ?? f.saved.body} />}
+          {(f.draft ?? f.saved.body).trim() === '' ? <div className="ws-note">This file is empty.</div> : <DocumentTextView text={f.draft ?? f.saved.body} interaction="annotate" />}
         </div>
       )}
     </div>

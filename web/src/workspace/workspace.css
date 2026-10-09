@@ -694,6 +694,21 @@
   min-height: 0;
   max-width: 780px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The engine viewer fills the pane and scrolls inside; the frame owns the sheet. */
+.ws-md-view > .document-text-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-md-view > .document-text-view > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- the picker ---------------------------------------------------------------- */

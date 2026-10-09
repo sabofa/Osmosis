@@ -1,24 +1,9 @@
-import React, { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { getAsset, assetDownloadUrl, type Asset } from '../lib/api'
 import { useDocumentTokens } from '../theme/useDocumentTokens'
 import { DownloadIcon } from './icons'
-import GraphPanel from './GraphPanel'
+import { DocumentViewer, renderGraph } from './documentViewerShared'
 import type { DocumentRenderError, DocumentLayer } from 'document-engine'
-// document-engine's Vite library build extracts CSS into its own file rather
-// than injecting it via the JS bundle (same convention as graph-engine — see
-// GraphPanel.tsx's comment) — without this, DocumentViewer has no
-// display/sizing/theme rules at all.
-import 'document-engine/style.css'
-
-// document-engine pulls in pdfjs-dist, real weight for the PDF renderer —
-// lazy-load it so pages that never show a document question don't pay for it.
-const DocumentViewer = React.lazy(() => import('document-engine').then((m) => ({ default: m.DocumentViewer })))
-
-// Inline ```graph fences: the engine stays graph-agnostic, we hand it the
-// lazy graph viewer.
-const renderGraph = (spec: string, ctx: { onErrors(msgs: string[]): void }) => (
-  <GraphPanel spec={spec} onErrors={ctx.onErrors} />
-)
 
 // A plain document viewer: loads an asset and shows it. Knows nothing about
 // questions, markers or attempts; callers compose behaviour through `layers`.
