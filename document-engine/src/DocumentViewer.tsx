@@ -10,7 +10,7 @@ import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForP
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import { DEFAULT_TOKENS, tokensToCssVars, highlightCss as buildHighlightCss } from './tokenVars'
 import type { DocumentTokens } from 'theme-core'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -73,8 +73,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome)
   const embedded = chrome === 'embedded'
+  const layersRef = useRef(layers)
+  layersRef.current = layers
   const resolved = useMemo(
-    () => (caps.layers ? resolveLayers(layers) : { anchors: [], markers: [] }),
+    () => (caps.layers ? resolveLayers(layers, () => layersRef.current) : { anchors: [], markers: [] }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [caps.layers, JSON.stringify(layers.map((l) => [l.anchor, l.markers]))]
   )
@@ -82,7 +84,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const isPdf = asset.mime === 'application/pdf'
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
-  const text = asset.extractedText ?? asset.content ?? ''
+  const usesPdfLayer = isPdf && !!asset.url && !embedded
+  const [pdfText, setPdfText] = useState('')
+  const text = offsetText(usesPdfLayer, pdfText, asset.extractedText ?? asset.content ?? '')
 
   // CSS.highlights is a single document-wide registry — namespace every
   // group name under a per-instance prefix so two mounted DocumentViewers
@@ -105,6 +109,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number; rect: DOMRect } | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (gated) setPendingSelection(null)
+  }, [gated])
 
   // Public offsets are codepoints; the DOM-facing children (TextContent,
   // PdfLayer, highlightPainter) work in UTF-16. Convert once, here.
@@ -236,6 +243,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         showOverlays={showOverlays}
         groupPrefix={groupPrefix}
         onErrors={onErrors}
+        onText={setPdfText}
       />
     )
   } else if (isImage && asset.url) {
@@ -310,7 +318,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           <SettingsMenu
             showOverlays={showOverlays}
             onToggleOverlays={() => setShowOverlays((v) => !v)}
-            onDownload={canDownload ? handleDownload : null}
+            onDownload={canDownload && !gate.gated ? handleDownload : null}
           />
         )}
       </div>
@@ -329,6 +337,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
               data-component="pill"
               style={{ background: `var(--de-highlight-${(i % 4) + 1})` }}
               title={`Highlight ${c.label.toLowerCase()}`}
+              aria-label={`Highlight ${c.label.toLowerCase()}`}
               onClick={() => applyHighlight(c.id)}
             />
           ))}

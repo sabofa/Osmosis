@@ -28,6 +28,7 @@ export default function PdfLayer({
   showOverlays,
   groupPrefix,
   onErrors,
+  onText,
 }: {
   url: string
   anchors: DocumentAnchor[]
@@ -36,15 +37,22 @@ export default function PdfLayer({
   showOverlays: boolean
   groupPrefix: string
   onErrors?: (errors: DocumentRenderError[]) => void
+  // The pdfjs full text the highlights are painted against; the viewer
+  // converts and resolves offsets against this, not the asset's own text.
+  onText?: (text: string) => void
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [pages, setPages] = useState<RenderedPage[]>([])
   const [fullText, setFullText] = useState('')
   const onErrorsRef = useRef(onErrors)
   onErrorsRef.current = onErrors
+  const onTextRef = useRef(onText)
+  onTextRef.current = onText
 
   useEffect(() => {
     let cancelled = false
+    setFullText('')
+    onTextRef.current?.('')
     const loadingTask = loadPdf(url)
 
     async function run() {
@@ -128,6 +136,7 @@ export default function PdfLayer({
         if (!cancelled) {
           setPages(built)
           setFullText(text)
+          onTextRef.current?.(text)
         }
       } catch (err) {
         onErrorsRef.current?.([{ message: err instanceof Error ? err.message : String(err) }])
@@ -164,7 +173,10 @@ export default function PdfLayer({
         div.tabIndex = 0
         const onClick = () => hit.marker.activate()
         const onKeyDown = (e: KeyboardEvent) => {
-          if (e.key === 'Enter' || e.key === ' ') onClick()
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onClick()
+          }
         }
         div.addEventListener('click', onClick)
         div.addEventListener('keydown', onKeyDown)

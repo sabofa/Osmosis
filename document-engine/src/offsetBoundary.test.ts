@@ -114,3 +114,12 @@ describe('resolveMarkersForPaint', () => {
     expect(failed.map((m) => m.id)).toEqual(['(B)'])
   })
 })
+
+describe('conversion needs the text the view paints against', () => {
+  it('collapses against empty text but is exact against the pdf text', () => {
+    const pdf = 'x😀 hello'
+    const r = { start: 3, end: 8 }
+    expect(fromInternalRange('', toInternalRange(pdf, r))).toEqual({ start: 0, end: 0 })
+    expect(fromInternalRange(pdf, toInternalRange(pdf, r))).toEqual(r)
+  })
+})

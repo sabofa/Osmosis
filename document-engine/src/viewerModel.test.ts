@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, resolveLayers } from './viewerModel'
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
@@ -65,5 +65,28 @@ describe('gatedPresentation', () => {
     expect(keys).not.toContain('zoom')
     expect(keys.some((k) => /scroll/i.test(k))).toBe(false)
     expect(gatedPresentation(true)).toEqual(gatedPresentation(true))
+  })
+})
+
+describe('offsetText', () => {
+  it('uses the PDF layer text once loaded, even when extractedText is empty', () => {
+    expect(offsetText(true, 'pdf words', '')).toBe('pdf words')
+  })
+  it('falls back to the asset text before the PDF loads or for non-PDF', () => {
+    expect(offsetText(true, '', 'asset')).toBe('asset')
+    expect(offsetText(false, 'pdf words', 'asset')).toBe('asset')
+  })
+})
+
+describe('resolveLayers activation', () => {
+  it('reads the current layer callback at activation time', () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    let current = [{ markers: [{ id: 'm', offset: 0 }], onMarkerActivate: first }]
+    const { markers } = resolveLayers(current, () => current)
+    current = [{ markers: [{ id: 'm', offset: 0 }], onMarkerActivate: second }]
+    markers[0].activate()
+    expect(first).not.toHaveBeenCalled()
+    expect(second).toHaveBeenCalledWith('m')
   })
 })

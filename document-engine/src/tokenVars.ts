@@ -109,10 +109,14 @@ export const HIGHLIGHT_ALPHA = 0.55
 // Literal colour values rather than var(...): ::highlight() isn't guaranteed
 // to resolve custom properties from the stylesheet cascade across browsers.
 export function highlightCss(groupPrefix: string, t: DocumentTokens): string {
+  // A malformed tokens object may carry fewer than four highlight colours:
+  // fall back to the last one present rather than emitting `undefined`.
+  const hl = t.colors.highlight ?? []
+  const pick = (i: number): string => hl[i] ?? hl[hl.length - 1] ?? 'transparent'
   const mix = (col: string) => `color-mix(in srgb, ${col} ${Math.round(HIGHLIGHT_ALPHA * 100)}%, transparent)`
   const rules = HIGHLIGHT_PALETTE.map(
-    (c, i) => `::highlight(${groupPrefix}-${c.id}) { background-color: ${mix(t.colors.highlight[i % 4])}; }`
+    (c, i) => `::highlight(${groupPrefix}-${c.id}) { background-color: ${mix(pick(i % 4))}; }`
   )
-  rules.push(`::highlight(${groupPrefix}-anchor) { background-color: ${mix(t.colors.highlight[0])}; }`)
+  rules.push(`::highlight(${groupPrefix}-anchor) { background-color: ${mix(pick(0))}; }`)
   return rules.join('\n')
 }

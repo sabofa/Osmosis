@@ -49,14 +49,27 @@ export interface ResolvedMarker {
   activate: () => void
 }
 
-export function resolveLayers(layers: DocumentLayer[]): { anchors: DocumentAnchor[]; markers: ResolvedMarker[] } {
+// The text offsets are converted and quotes re-found against. A PDF is painted
+// against the PdfLayer's own pdfjs text, so that wins once it has loaded;
+// otherwise the asset's extracted text / content.
+export function offsetText(usesPdfLayer: boolean, pdfText: string, assetText: string): string {
+  return usesPdfLayer && pdfText ? pdfText : assetText
+}
+
+// `getLayers` lets marker activation read the CURRENT layers at click time, so a
+// callback that changes between renders is honoured even though this result is
+// memoised on the layers' data only.
+export function resolveLayers(
+  layers: DocumentLayer[],
+  getLayers?: () => DocumentLayer[]
+): { anchors: DocumentAnchor[]; markers: ResolvedMarker[] } {
   const anchors: DocumentAnchor[] = []
   const markers: ResolvedMarker[] = []
-  for (const layer of layers) {
+  layers.forEach((layer, idx) => {
     if (layer.anchor) anchors.push(layer.anchor)
     for (const m of layer.markers ?? []) {
-      markers.push({ id: m.id, offset: m.offset, quote: m.quote, prefix: m.prefix, suffix: m.suffix, activate: () => layer.onMarkerActivate?.(m.id) })
+      markers.push({ id: m.id, offset: m.offset, quote: m.quote, prefix: m.prefix, suffix: m.suffix, activate: () => (getLayers ? getLayers()[idx] : layer)?.onMarkerActivate?.(m.id) })
     }
-  }
+  })
   return { anchors, markers }
 }

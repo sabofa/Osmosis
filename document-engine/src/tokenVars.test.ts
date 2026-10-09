@@ -101,6 +101,17 @@ describe('highlightCss', () => {
   })
 })
 
+describe('highlightCss with a malformed tokens object', () => {
+  it('never emits undefined when highlight colours are missing', () => {
+    const bad = { ...T, colors: { ...T.colors, highlight: ['only'] } } as typeof T
+    const css = highlightCss('de1', bad)
+    expect(css).not.toContain('undefined')
+    expect(css).toContain('color-mix(in srgb, only 55%')
+    const none = { ...T, colors: { ...T.colors, highlight: [] } } as unknown as typeof T
+    expect(highlightCss('de1', none)).not.toContain('undefined')
+  })
+})
+
 describe('DocumentViewer.css guard', () => {
   const css = readFileSync(fileURLToPath(new URL('./DocumentViewer.css', import.meta.url)), 'utf8')
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '')

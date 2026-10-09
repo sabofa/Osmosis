@@ -53,7 +53,7 @@
   background-color: var(--de-rule);
   background-clip: padding-box;
   border: 2px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--de-radius-sm);
 }
 
 .document-viewer-content {
