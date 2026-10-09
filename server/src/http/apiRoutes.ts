@@ -990,7 +990,7 @@ export function registerApiRoutes(app: FastifyInstance, ctx: AppContext): void {
             // An old canonical ignored `layer` and set ITS ambience pointer; don't mirror that.
             reply.code(502).send({
               error: "canonical_too_old", reason: "canonical_too_old",
-              message: "The server has not been updated to support workspace themes yet — update the server first.",
+              message: "The server has not been updated to support workspace themes yet - update the server first.",
             });
             return undefined;
           }
