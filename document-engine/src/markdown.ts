@@ -18,7 +18,7 @@ export interface MdBlock {
   // (between the delimiter lines); the delimiters themselves are omitted.
   start: number
   end: number
-  // Fence info string (e.g. "graph", "python"); '' when absent. Fences only.
+  // Fence info string (e.g. "graph", "python"); '\\' when absent. Fences only.
   info?: string
 }
 
@@ -151,81 +151,149 @@ export interface InlineRun {
 // Pandoc-style inline math: the opening `$` is followed by a non-space, the
 // closing `$` is preceded by a non-space and not followed by a digit. Only
 // the FIRST unescaped `$` after the opener is a candidate, so "$5 and $x$"
-// reads as a price followed by math rather than one big span.
+// reads as a price followed by math rather than one big span. Math never
+// spans a newline, and a `$` inside a code span is not a closer.
 function findMathClose(text: string, open: number): number {
   const first = text[open + 1]
-  if (first === undefined || first === '$' || /\s/.test(first)) return -1
+  if (first === undefined || first === '$' || first === '\n' || /\s/.test(first)) return -1
   for (let j = open + 1; j < text.length; j++) {
-    if (text[j] === '\\') {
+    const ch = text[j]
+    if (ch === '\n') return -1
+    if (ch === '\\') {
       j++
       continue
     }
-    if (text[j] === '$') {
+    if (ch === '`') {
+      const c = text.indexOf('`', j + 1)
+      if (c !== -1 && c > j + 1) {
+        j = c
+        continue
+      }
+    }
+    if (ch === '$') {
       if (/\s/.test(text[j - 1])) return -1
-      if (/\d/.test(text[j + 1] ?? '')) return -1
+      if (/\d/.test(text[j + 1] ?? '\\')) return -1
       return j
     }
   }
   return -1
 }
 
-// Scans one block's text left-to-right for `code`, **bold**, and
-// *italic*/_italic_ spans. Deliberately simple (no nesting, no escaping) —
-// matches the scope of what a question/passage author actually writes.
-export function parseInline(text: string, offset: number): InlineRun[] {
-  const runs: InlineRun[] = []
+interface Protected {
+  start: number // index of the opening delimiter
+  bodyStart: number
+  bodyEnd: number
+  end: number // index just past the closing delimiter
+  kind: 'code' | 'math'
+}
+
+// Code spans and math spans are atomic: nothing inside them is emphasis, and
+// emphasis closers are never found inside them. Found first, left to right.
+function protectedSpans(text: string): Protected[] {
+  const out: Protected[] = []
   let i = 0
-  let plainStart = 0
-
-  function flushPlain(end: number) {
-    if (end > plainStart) runs.push({ start: offset + plainStart, end: offset + end })
-  }
-
   while (i < text.length) {
-    if (text[i] === '`') {
+    const ch = text[i]
+    if (ch === '\\' && text[i + 1] === '$') {
+      i += 2
+      continue
+    }
+    if (ch === '`') {
       const close = text.indexOf('`', i + 1)
       if (close !== -1 && close > i + 1) {
-        flushPlain(i)
-        runs.push({ start: offset + i + 1, end: offset + close, code: true })
+        out.push({ start: i, bodyStart: i + 1, bodyEnd: close, end: close + 1, kind: 'code' })
         i = close + 1
-        plainStart = i
         continue
       }
     }
-    if (text[i] === '$') {
+    if (ch === '$') {
+      if (text[i + 1] === '$') {
+        // Mid-line `$$x$$`: inline math over the body. Otherwise literal.
+        const nl = text.indexOf('\n', i + 2)
+        const close = text.indexOf('$$', i + 2)
+        if (close !== -1 && close > i + 2 && (nl === -1 || close < nl)) {
+          out.push({ start: i, bodyStart: i + 2, bodyEnd: close, end: close + 2, kind: 'math' })
+          i = close + 2
+        } else i += 2
+        continue
+      }
       const close = findMathClose(text, i)
       if (close !== -1) {
-        flushPlain(i)
-        runs.push({ start: offset + i + 1, end: offset + close, math: true })
+        out.push({ start: i, bodyStart: i + 1, bodyEnd: close, end: close + 1, kind: 'math' })
         i = close + 1
-        plainStart = i
-        continue
-      }
-    }
-    if (text[i] === '*' && text[i + 1] === '*') {
-      const close = text.indexOf('**', i + 2)
-      if (close !== -1 && close > i + 2) {
-        flushPlain(i)
-        runs.push({ start: offset + i + 2, end: offset + close, bold: true })
-        i = close + 2
-        plainStart = i
-        continue
-      }
-    }
-    if (text[i] === '*' || text[i] === '_') {
-      const marker = text[i]
-      const close = text.indexOf(marker, i + 1)
-      if (close !== -1 && close > i + 1) {
-        flushPlain(i)
-        runs.push({ start: offset + i + 1, end: offset + close, italic: true })
-        i = close + 1
-        plainStart = i
         continue
       }
     }
     i++
   }
-  flushPlain(text.length)
+  return out
+}
+
+// Scans one block's text left-to-right for `code`, $math$, **bold**, and
+// *italic*/_italic_ spans. Bold/italic bodies are parsed recursively, so math,
+// code and nested emphasis work inside them. No escaping beyond `\$`.
+export function parseInline(text: string, offset: number): InlineRun[] {
+  const spans = protectedSpans(text)
+  const spanAt = new Map(spans.map((s) => [s.start, s]))
+  const inSpan = (idx: number) => spans.some((s) => idx >= s.start && idx < s.end)
+  const runs: InlineRun[] = []
+
+  // First occurrence of `needle` in [from, to) that is not inside a code/math span.
+  function findOutside(needle: string, from: number, to: number): number {
+    let j = text.indexOf(needle, from)
+    while (j !== -1 && j + needle.length <= to) {
+      if (!inSpan(j) && !inSpan(j + needle.length - 1)) return j
+      j = text.indexOf(needle, j + 1)
+    }
+    return -1
+  }
+
+  function parse(from: number, to: number, bold: boolean, italic: boolean) {
+    const flags = (): Pick<InlineRun, 'bold' | 'italic'> => ({ ...(bold ? { bold } : {}), ...(italic ? { italic } : {}) })
+    let i = from
+    let plainStart = from
+    function flushPlain(end: number) {
+      if (end > plainStart) runs.push({ start: offset + plainStart, end: offset + end, ...flags() })
+    }
+    while (i < to) {
+      const sp = spanAt.get(i)
+      if (sp && sp.end <= to) {
+        flushPlain(i)
+        runs.push(
+          sp.kind === 'code'
+            ? { start: offset + sp.bodyStart, end: offset + sp.bodyEnd, code: true, ...flags() }
+            : { start: offset + sp.bodyStart, end: offset + sp.bodyEnd, math: true }
+        )
+        i = sp.end
+        plainStart = i
+        continue
+      }
+      if (text[i] === '*' && text[i + 1] === '*') {
+        const close = findOutside('**', i + 2, to)
+        if (close !== -1 && close > i + 2) {
+          flushPlain(i)
+          parse(i + 2, close, true, italic)
+          i = close + 2
+          plainStart = i
+          continue
+        }
+      }
+      if (text[i] === '*' || text[i] === '_') {
+        const close = findOutside(text[i], i + 1, to)
+        if (close !== -1 && close > i + 1) {
+          flushPlain(i)
+          parse(i + 1, close, bold, true)
+          i = close + 1
+          plainStart = i
+          continue
+        }
+      }
+      i++
+    }
+    flushPlain(to)
+  }
+
+  parse(0, text.length, false, false)
   return runs
 }
 
@@ -241,10 +309,10 @@ export const BLOCK_TAG: Record<BlockType, string> = {
 }
 
 export const BLOCK_CLASS: Record<BlockType, string> = {
-  h1: '',
-  h2: '',
-  h3: '',
-  p: '',
+  h1: '\\',
+  h2: '\\',
+  h3: '\\',
+  p: '\\',
   li: 'document-viewer-md-li',
   oli: 'document-viewer-md-li',
   math: 'document-viewer-math-block',

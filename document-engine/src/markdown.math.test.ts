@@ -95,3 +95,43 @@ describe('inline math', () => {
     expect(runs[2].start).toBe(9)
   })
 })
+
+describe('inline math inside emphasis and edge cases', () => {
+  const texts = (src: string, kind: 'math' | 'bold' | 'italic' | 'code') =>
+    parseInline(src, 0).filter((r) => r[kind]).map((r) => src.slice(r.start, r.end))
+
+  it('renders math inside bold and italic bodies', () => {
+    const b = '**the $x^2$ term**'
+    expect(texts(b, 'math')).toEqual(['x^2'])
+    expect(parseInline(b, 0).every((r) => r.bold || r.math)).toBe(true)
+    const i = '_see $y$ here_'
+    expect(texts(i, 'math')).toEqual(['y'])
+    expect(parseInline(i, 0).every((r) => r.italic || r.math)).toBe(true)
+  })
+
+  it('does not let an underscore pair with one inside math', () => {
+    const s = 'f_1 is $f_1$'
+    expect(texts(s, 'math')).toEqual(['f_1'])
+    expect(parseInline(s, 0).some((r) => r.italic)).toBe(false)
+  })
+
+  it('does not close math on a $ inside a code span', () => {
+    const s = '$a `x$` b'
+    expect(texts(s, 'math')).toEqual([])
+    expect(texts(s, 'code')).toEqual(['x$'])
+  })
+
+  it('respects an escaped dollar opener', () => {
+    expect(texts('cost \\$5 and \\$x$', 'math')).toEqual([])
+  })
+
+  it('reads a mid-line $$x$$ as one math run, not stray dollars', () => {
+    const s = 'so $$x$$ holds'
+    expect(texts(s, 'math')).toEqual(['x'])
+    expect(parseInline(s, 0).filter((r) => !r.math).map((r) => s.slice(r.start, r.end)).join('|')).toBe('so | holds')
+  })
+
+  it('math never spans a newline', () => {
+    expect(texts('a $x\ny$ b', 'math')).toEqual([])
+  })
+})
