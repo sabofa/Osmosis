@@ -289,3 +289,68 @@ describe('validate: layer + workspace', () => {
     expect(r.ok).toBe(true)
   })
 })
+
+describe('validate: layer ownership warnings', () => {
+  const paths = (r: ReturnType<typeof validate>) => r.warnings.map((w) => w.path)
+  it('workspace theme with seeds warns and stays ok', () => {
+    const r = validate(base({ layer: 'workspace', seeds: { light: { accent: '#c65d22' } } }))
+    expect(r.ok).toBe(true)
+    const w = r.warnings.find((x) => x.path === 'seeds')!
+    expect(w.message).toBe('seeds is ignored in a workspace theme (owned by the ambience layer)')
+    expect(w.suggestion).toBeUndefined()
+  })
+  it('workspace theme: ambience dials and tokens', () => {
+    const r = validate(base({ layer: 'workspace', dials: { contrast: 0.5 }, overrides: { any: { 'color-accent': '#123456' } } }))
+    expect(paths(r)).toEqual(expect.arrayContaining(['dials.contrast', 'overrides.any.color-accent']))
+    expect(r.ok).toBe(true)
+  })
+  it('ambience theme: one warning per workspace-owned field', () => {
+    const r = validate(base({
+      layer: 'ambience', dials: { roundness: 0.5 }, overrides: { light: { 'radius-md': '4px' } },
+      fonts: { body: { stack: 'inter' } }, workspace: { x: 1 },
+    }))
+    expect(r.ok).toBe(true)
+    for (const p of ['dials.roundness', 'overrides.light.radius-md', 'fonts.body', 'workspace']) {
+      expect(r.warnings.filter((w) => w.path === p)).toHaveLength(1)
+    }
+  })
+  it('full themes get no ownership warnings', () => {
+    const r = validate(base({
+      seeds: { light: { accent: '#c65d22' } }, dials: { roundness: 0.5, contrast: 0.5 },
+      overrides: { light: { 'radius-md': '4px', 'color-accent': '#c65d22' } }, fonts: { body: { stack: 'inter' } }, workspace: { x: 1 },
+    }))
+    expect(r.warnings.filter((w) => w.message.includes('is ignored'))).toEqual([])
+  })
+  it.each(['workspace', 'ambience'])('shared tokens in a %s theme do not warn', (layer) => {
+    const r = validate(base({ layer, overrides: { any: { 'font-math': 'serif', 'doc-font-body': 'serif', 'doc-measure': '60ch' } } }))
+    expect(r.warnings.filter((w) => w.message.includes('is ignored'))).toEqual([])
+  })
+  it('builtin copies produce no warnings, including ws-clean as either layer', () => {
+    for (const b of BUILTINS) {
+      const copy = { ...b, id: b.id.replace('builtin:', 'copy-') }
+      expect(validate(copy).warnings).toEqual([])
+    }
+    const ws = BUILTINS.find((b) => b.id === 'builtin:ws-clean')!
+    expect(validate({ ...ws, id: 'copy-ws', layer: 'workspace' }).warnings).toEqual([])
+  })
+  it('ambience theme still gets text contrast with a suggestion that clears it', () => {
+    const seeds = { light: { ink: '#dddddd', canvas: '#ffffff' } }
+    const r = validate(base({ layer: 'ambience', seeds }))
+    const w = r.warnings.find((x) => x.path === 'overrides.light.color-text' && x.message.includes('color-canvas'))!
+    expect(w).toBeTruthy()
+    const hex = /set color-text to (#[0-9a-f]{6})/.exec(w.suggestion!)![1]
+    const r2 = validate(base({ layer: 'ambience', seeds, overrides: { light: { 'color-text': hex } } }))
+    expect(r2.warnings.find((x) => x.path === 'overrides.light.color-text' && x.message.includes('color-canvas'))).toBeUndefined()
+  })
+  it('workspace theme gets no contrast warning for colours it cannot control', () => {
+    const r = validate(base({ layer: 'workspace', seeds: { light: { ink: '#dddddd', canvas: '#ffffff' } } }))
+    expect(r.warnings.filter((w) => w.message.includes('contrast'))).toEqual([])
+  })
+  it('@import warns only for workspace themes', () => {
+    const css = '@import url(x.css);'
+    expect(validate(base({ layer: 'workspace', css })).warnings.find((w) => w.path === 'css')?.message)
+      .toBe('@import in css makes external requests; not recommended in a workspace theme')
+    expect(validate(base({ layer: 'ambience', css })).warnings.find((w) => w.path === 'css')).toBeUndefined()
+    expect(validate(base({ css })).warnings.find((w) => w.path === 'css')).toBeUndefined()
+  })
+})

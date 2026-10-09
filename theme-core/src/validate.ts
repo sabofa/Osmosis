@@ -2,6 +2,8 @@ import { contrast, fitLightness, parseColour, toHex, type Oklch } from './colour
 import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type Mode } from './manifest.js'
 import { tokenByName, isValidTokenValue } from './registry/index.js'
 import { mirrorSeed, resolve } from './resolve.js'
+import { compose, ownerOf } from './layers.js'
+import { DEFAULT_THEME_ID, DEFAULT_WORKSPACE_THEME_ID, builtinById } from './builtins/index.js'
 
 export interface Issue { path: string; message: string; suggestion?: string }
 export interface Report { ok: boolean; errors: Issue[]; warnings: Issue[] }
@@ -163,7 +165,14 @@ export function fitToHex(c: Oklch, against: Oklch, min: number): string | undefi
   return fitHex(c, [{ bg: against, min }])
 }
 
-function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warnings: Issue[]): void {
+type LayerKind = 'workspace' | 'ambience'
+
+function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warnings: Issue[], layer?: LayerKind): void {
+  // a layer theme is only responsible for the tokens its layer owns
+  const owned = (fg: string): boolean => {
+    if (!layer) return true
+    try { const o = ownerOf(fg); return o === 'shared' || o === layer } catch { return false }
+  }
   let r
   try { r = resolve(normalise(raw as never)) } catch (e) {
     errors.push({ path: 'resolve', message: trunc(e instanceof Error ? e.message : 'resolve failed', 100) })
@@ -193,6 +202,7 @@ function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warning
     for (const { fg, bg, min } of checks) {
       const f = col(fg), b = col(bg)
       if (!f || !b) continue
+      if (!owned(fg)) continue
       const ratio = contrast(f, b)
       if (ratio >= min) continue
       const hex = suggest(fg)
@@ -205,11 +215,12 @@ function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warning
       warnings.push(issue)
     }
     // closeness: only series colours the user supplied (this mode's, or the other mode's mirrored in)
+    if (layer === 'workspace') continue
     const other = mode === 'light' ? 'dark' : 'light'
-    const mine = isObj(seedsRaw[mode]) ? (seedsRaw[mode] as Record<string, unknown>).series : undefined
+    const mineS = isObj(seedsRaw[mode]) ? (seedsRaw[mode] as Record<string, unknown>).series : undefined
     const theirs = isObj(seedsRaw[other]) ? (seedsRaw[other] as Record<string, unknown>).series : undefined
     let user: Oklch[] = []
-    if (Array.isArray(mine)) user = mine.map((s) => parseColour(s as string))
+    if (Array.isArray(mineS)) user = mineS.map((s) => parseColour(s as string))
     else if (Array.isArray(theirs)) user = theirs.map((s) => mirrorSeed('accent', parseColour(s as string), mode))
     for (let a = 0; a < user.length; a++) for (let b = a + 1; b < user.length; b++) {
       const d = dist(user[a]!, user[b]!)
@@ -218,12 +229,35 @@ function contrastWarnings(raw: Record<string, unknown>, errors: Issue[], warning
   }
 }
 
+function layerWarnings(raw: Record<string, unknown>, layer: LayerKind, errors: Issue[], warnings: Issue[]): void {
+  const probe = { ...normalise(raw as never), id: '__validated__' }
+  const wsDefault = builtinById(DEFAULT_WORKSPACE_THEME_ID)
+  const ambDefault = builtinById(DEFAULT_THEME_ID)
+  if (!wsDefault || !ambDefault) return
+  const other = layer === 'workspace' ? 'ambience' : 'workspace'
+  const { manifest, ignored } = compose(layer === 'workspace'
+    ? { workspace: probe, ambience: ambDefault }
+    : { workspace: wsDefault, ambience: probe })
+  for (const f of ignored) {
+    if (f.themeId !== probe.id) continue
+    warnings.push({ path: f.path, message: `${f.path} is ignored in a ${layer} theme (owned by the ${other} layer)` })
+  }
+  if (layer === 'workspace' && typeof raw.css === 'string' && raw.css.includes('@import')) {
+    warnings.push({ path: 'css', message: '@import in css makes external requests; not recommended in a workspace theme' })
+  }
+  contrastWarnings(manifest as unknown as Record<string, unknown>, errors, warnings, layer)
+}
+
 export function validate(raw: unknown): Report {
   const errors: Issue[] = []
   const warnings: Issue[] = []
   try {
     structural(raw, errors)
-    if (errors.length === 0) contrastWarnings(raw as Record<string, unknown>, errors, warnings)
+    if (errors.length === 0) {
+      const r = raw as Record<string, unknown>
+      if (r.layer === 'workspace' || r.layer === 'ambience') layerWarnings(r, r.layer, errors, warnings)
+      else contrastWarnings(r, errors, warnings)
+    }
   } catch (e) {
     errors.push({ path: '', message: `validate failed: ${trunc(e instanceof Error ? e.message : 'unknown error', 100)}` })
   }
