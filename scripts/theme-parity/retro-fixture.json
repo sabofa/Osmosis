@@ -1,0 +1,5 @@
+{"id":"retro-fixture","name":"Retro fixture","layer":"workspace",
+ "dials":{"roundness":0,"borders":1,"elevation":0},
+ "fonts":{"display":{"stack":"system-mono"},"body":{"stack":"system-serif"}},
+ "overrides":{"any":{"corner-shape":"bevel","elevation-mode":"bevel"}},
+ "seeds":{"light":{"accent":"#ff0000"}}}
