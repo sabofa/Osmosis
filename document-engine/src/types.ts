@@ -1,5 +1,9 @@
 import type { ReactNode } from 'react'
 
+// What the viewer uses of the workspace host: icon set, toolbar and layer
+// publication (types-only package; no runtime import).
+export type DocumentHost = Pick<import('engine-host').EngineHost, 'icons' | 'toolbar' | 'layers'>
+
 export interface DocumentViewerAsset {
   type: 'text' | 'file'
   mime?: string | null

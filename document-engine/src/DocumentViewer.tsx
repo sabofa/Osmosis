@@ -29,7 +29,7 @@ import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForP
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
 import { DEFAULT_TOKENS, tokensToCssVars, highlightCss as buildHighlightCss } from './tokenVars'
 import type { DocumentTokens } from 'theme-core'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, engineLayers, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
   DocumentHighlight,
@@ -37,6 +37,7 @@ import type {
   Interaction,
   Chrome,
   DocumentRenderError,
+  DocumentHost,
   RenderGraph,
 } from './types'
 import './DocumentViewer.css'
@@ -47,6 +48,8 @@ export interface DocumentViewerProps {
   // tokens already say which mode they are. Absent: a neutral built-in set.
   // The viewer root is transparent; the host frame owns the sheet behind it.
   tokens?: DocumentTokens
+  // Workspace host: the viewer publishes its layer list through it.
+  host?: DocumentHost
   // What the reader may do: 'view' (select/search/zoom/theme only),
   // 'annotate' (default: view + highlights and the colour popover), 'edit'
   // (stub until editing lands; content stays read-only).
@@ -102,6 +105,11 @@ function sidePanelSized(sizes: Size[], split: boolean): Size[] {
 export default function DocumentViewer(props: DocumentViewerProps) {
   const { asset, tokens = DEFAULT_TOKENS, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
   const gate = gatedPresentation(gated, gatedLabel)
+  const { host } = props
+  // Publish the layer list once per host identity.
+  useEffect(() => {
+    host?.layers(engineLayers())
+  }, [host])
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome)
   const embedded = chrome === 'embedded'

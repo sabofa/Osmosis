@@ -1,3 +1,4 @@
+import type { EngineLayer } from 'engine-host'
 import type { Chrome, DocumentAnchor, DocumentLayer, Interaction } from './types'
 
 export interface Capabilities {
@@ -7,6 +8,15 @@ export interface Capabilities {
   settingsMenu: boolean
   layers: boolean
   editStub: boolean
+}
+
+// Layers this viewer publishes to the host's layer controls.
+export function engineLayers(): EngineLayer[] {
+  return [
+    { id: 'surface', label: 'Document surfaces', token: 'doc-surface-alpha' },
+    { id: 'callout', label: 'Callouts', token: 'callout-alpha' },
+    { id: 'media', label: 'Pages and images', token: 'doc-media-alpha' },
+  ]
 }
 
 export const EDIT_STUB_MESSAGE = 'Editing arrives in a later release'

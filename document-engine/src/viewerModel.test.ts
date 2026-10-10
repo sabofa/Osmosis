@@ -1,5 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-import { EDIT_STUB_MESSAGE, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
+import { EDIT_STUB_MESSAGE, engineLayers, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
+
+describe('engineLayers', () => {
+  it('lists the surface, callout and media layers with their theme tokens', () => {
+    expect(engineLayers()).toEqual([
+      { id: 'surface', label: 'Document surfaces', token: 'doc-surface-alpha' },
+      { id: 'callout', label: 'Callouts', token: 'callout-alpha' },
+      { id: 'media', label: 'Pages and images', token: 'doc-media-alpha' },
+    ])
+  })
+})
 
 describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {

@@ -58,8 +58,20 @@ describe('tokensToCssVars', () => {
       '--de-leading': '1.6',
       '--de-measure': '70ch',
       '--de-scale-ratio': '1.25',
+      '--de-alpha-surface': '0.9',
+      '--de-alpha-callout': '0.92',
+      '--de-alpha-media': '1',
       ...CHROME_FALLBACKS,
     })
+  })
+  it('falls back to default alphas when missing or NaN', () => {
+    const bad = { ...T, alphas: { sheet: 1, surface: NaN, callout: 0.5 } } as unknown as DocumentTokens
+    const v = tokensToCssVars(bad)
+    expect(v['--de-alpha-surface']).toBe('0.9')
+    expect(v['--de-alpha-callout']).toBe('0.5')
+    expect(v['--de-alpha-media']).toBe('1')
+    const none = { ...T, alphas: undefined } as unknown as DocumentTokens
+    expect(tokensToCssVars(none)['--de-alpha-callout']).toBe('0.92')
   })
   it('default tokens produce the same key set', () => {
     expect(Object.keys(tokensToCssVars(DEFAULT_TOKENS)).sort()).toEqual(Object.keys(tokensToCssVars(T)).sort())
@@ -124,6 +136,23 @@ describe('DocumentViewer.css guard', () => {
   it('has no hard-coded font families or radii in px/%', () => {
     expect(stripped).not.toMatch(/font-family:[ \t]*(?![ \t]|var\(|inherit)/)
     expect(stripped).not.toMatch(/border-radius:\s*(?!var\(|0)[^;]*\b\d+(px|%)/)
+  })
+  it('has no literal NN% inside color-mix other than alpha-var calc, 0%, and allow-listed shadows', () => {
+    // Allow-list: the drop shadow of the floating panel (line ~227) is chrome
+    // depth, not a layer, so it keeps its fixed 25% ink mix. Nothing else.
+    const allowed = ['0 2px 10px color-mix(in srgb, var(--de-text) 25%, transparent)']
+    let rest = stripped
+    for (const a of allowed) rest = rest.split(a).join('')
+    const bareRest = rest.replace(/calc\(var\(--de-alpha-(surface|callout|media)\) \* \d+%\)/g, '')
+    const mixes = bareRest.match(/color-mix\([^;{}]*/g) ?? []
+    expect(mixes.length).toBeGreaterThan(0)
+    for (const m of mixes) {
+      expect(m, m).not.toMatch(/(?<![\d.])(?!0%)\d+(\.\d+)?%/)
+    }
+  })
+  it('layer alphas flow through the alpha vars', () => {
+    expect(stripped).toContain('--de-surface: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 100%)')
+    expect(stripped).toMatch(/opacity: var\(--de-alpha-media\)/)
   })
   it('has a transparent root', () => {
     const m = stripped.match(/\.document-viewer\s*\{[^}]*\}/)

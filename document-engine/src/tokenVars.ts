@@ -31,8 +31,7 @@ export const DEFAULT_TOKENS: DocumentTokens = {
   },
   scale: { base: '1rem', ratio: 1.25, leading: '1.6', measure: '70ch' },
   key: 'default',
-  // Layer opacities. The engine does not read these yet (H1 will); they only
-  // satisfy the DocumentTokens contract for the fallback set.
+  // Layer opacities, emitted as --de-alpha-* by tokensToCssVars.
   alphas: { sheet: 1, surface: 0.9, callout: 0.92, media: 1 },
 }
 
@@ -99,6 +98,14 @@ export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   v['--de-leading'] = t.scale.leading
   v['--de-measure'] = t.scale.measure
   v['--de-scale-ratio'] = String(t.scale.ratio)
+  // Layer alphas, as the host gave them; a missing/NaN value falls back to
+  // the default set rather than emitting "undefined".
+  const a = t.alphas
+  const d = DEFAULT_TOKENS.alphas
+  for (const k of ['surface', 'callout', 'media'] as const) {
+    const n = a?.[k]
+    v[`--de-alpha-${k}`] = String(typeof n === 'number' && Number.isFinite(n) ? n : d[k])
+  }
   return { ...v, ...CHROME_FALLBACKS }
 }
 
