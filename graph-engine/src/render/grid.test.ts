@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { niceStep, resolveStep, shouldLabel } from './grid'
+import { gridPlan, niceStep, resolveStep, shouldLabel } from './grid'
 import { defaultConfig } from '../parser/config'
 
 describe('resolveStep', () => {
@@ -114,6 +114,73 @@ describe('resolveStep in fixed mode', () => {
   // Without a guard this would ask for 40,000 gridlines and lock the tab.
   it('falls back to nice rather than drawing a pathological number of lines', () => {
     expect(resolveStep(0.25, 100000, 6, 'fixed')).toBe(niceStep(100000, 6))
+  })
+})
+
+describe('gridPlan', () => {
+  const SIZE = { widthPx: 800, heightPx: 480 }
+  const MARGINS = { x: 0.7, y: 0.4 }
+  const OFFSET = { x: 0.5, y: 0.5 }
+  const bounds = (xMin: number, xMax: number, yMin: number, yMax: number) => ({ xMin, xMax, yMin, yMax })
+
+  // The step loops GridRenderer.draw used before frameTicks, run by hand.
+  const oldWalk = (min: number, max: number, step: number) => {
+    const out: number[] = []
+    for (let v = Math.ceil(min / step) * step; v <= max; v += step) out.push(v)
+    return out
+  }
+
+  it('reproduces the linear step loops exactly', () => {
+    const plan = gridPlan(bounds(-10, 10, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    const stepX = resolveStep(null, 20, 6)
+    const stepY = resolveStep(null, 12, 6)
+    expect(plan.faintX).toEqual(oldWalk(-10, 10, stepX))
+    expect(plan.faintY).toEqual(oldWalk(-6, 6, stepY))
+    expect(plan.strongX).toEqual(oldWalk(-10, 10, stepX * 5))
+    expect(plan.strongY).toEqual(oldWalk(-6, 6, stepY * 5))
+    expect(plan.strongX).toEqual([-10, -5, 0, 5, 10])
+  })
+
+  it('labels linear ticks with the precise formatter, "0" only on the y pass', () => {
+    const plan = gridPlan(bounds(-10, 10, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    expect(plan.labelsX.map((l) => l.label)).toEqual(
+      ['−10', '−9', '−8', '−7', '−6', '−5', '−4', '−3', '−2', '−1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    )
+    expect(plan.labelsX[0].at).toEqual({ x: -10, y: -OFFSET.y })
+    expect(plan.labelsY.map((l) => l.label)).toContain('0')
+    expect(plan.labelsY[0].at).toEqual({ x: -OFFSET.x, y: -6 })
+  })
+
+  it('draws a log axis: decades strong with power labels, 2..9 faint', () => {
+    const config = defaultConfig()
+    config.scales.y = 'log'
+    const plan = gridPlan(bounds(-10, 10, 0, 4), config, SIZE, MARGINS, OFFSET)
+    expect(plan.strongY).toEqual([0, 1, 2, 3, 4])
+    expect(plan.labelsY.map((l) => l.label)).toEqual(['1', '10', '10²', '10³', '10⁴'])
+    const minors: number[] = []
+    for (let k = 0; k < 4; k++) for (let m = 2; m <= 9; m++) minors.push(Math.log10(m) + k)
+    expect(plan.faintY).toHaveLength(minors.length)
+    plan.faintY.forEach((v, i) => expect(v).toBeCloseTo(minors[i], 12))
+    // labels are drawn at forward(value): 1 sits at v = 0
+    expect(plan.labelsY[0].at.y).toBeCloseTo(0, 12)
+  })
+
+  it('walks pi steps with pi labels', () => {
+    const config = defaultConfig()
+    config.space.ticks.x = { value: Math.PI / 2, pi: { num: 1, den: 2 } }
+    const plan = gridPlan(bounds(0, 2 * Math.PI, -2, 2), config, SIZE, MARGINS, OFFSET)
+    expect(plan.faintX).toHaveLength(5)
+    plan.faintX.forEach((v, k) => expect(v).toBeCloseTo((k * Math.PI) / 2, 12))
+    // 0 is skipped on the x pass (the y pass owns it), the rest are pi labels
+    expect(plan.labelsX.map((l) => l.label)).toEqual(['π/2', 'π', '3π/2', '2π'])
+  })
+
+  it('pins y labels to the left edge when the y-axis is off-screen', () => {
+    const plan = gridPlan(bounds(20, 30, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    expect(plan.labelsY.length).toBeGreaterThan(0)
+    for (const l of plan.labelsY) expect(l.at.x).toBeCloseTo(20 + MARGINS.x, 12)
+    // x labels keep riding the on-screen x-axis
+    for (const l of plan.labelsX) expect(l.at.y).toBe(-OFFSET.y)
   })
 })
 

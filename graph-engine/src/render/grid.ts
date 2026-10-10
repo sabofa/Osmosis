@@ -2,7 +2,8 @@ import * as THREE from 'three'
 import type { GraphConfig, StepMode } from '../parser/config'
 import type { Bounds } from './marchingSquares'
 import { AxisLabelPool } from './axisLabelPool'
-import { formatCoord } from '../scene/format'
+import { frameTicks, labelAnchors, type Tick } from '../plot/frame/ticks'
+import { scaleOf, type Scale } from '../plot/frame/scale'
 
 function hexToCss(color: number): string {
   return '#' + color.toString(16).padStart(6, '0')
@@ -117,6 +118,112 @@ export function shouldLabel(index: number, config: GraphConfig): boolean {
   return index % every === 0
 }
 
+export interface GridLabel {
+  value: number // world value of the tick
+  label: string
+  kind: 'major' | 'minor'
+  at: { x: number; y: number } // where the label is drawn, in the plane the camera views
+}
+
+export interface GridPlan {
+  // Line positions in the plane the camera views (transformed coordinates on a log axis).
+  faintX: number[]
+  faintY: number[]
+  strongX: number[]
+  strongY: number[]
+  labelsX: GridLabel[]
+  labelsY: GridLabel[]
+}
+
+interface AxisLines {
+  faint: number[]
+  strong: number[]
+}
+
+// Linear axis: every tick is a faint line, every 5th step a strong one (the old
+// "ruled paper" walk, kept verbatim so linear output does not move).
+function linearLines(min: number, max: number, step: number, ticks: Tick[]): AxisLines {
+  const faint = ticks.map((t) => t.value)
+  const strong: number[] = []
+  const majorStep = step * MAJOR_EVERY
+  const start = Math.ceil(min / majorStep) * majorStep
+  for (let v = start; v <= max; v += majorStep) strong.push(v)
+  return { faint, strong }
+}
+
+// Pi axis: the same every-5th-step rule, counted in steps from zero.
+function piLines(ticks: Tick[]): AxisLines {
+  const faint = ticks.map((t) => t.value)
+  if (ticks.length < 2) return { faint, strong: [] }
+  const step = ticks[1].value - ticks[0].value
+  const strong = ticks.filter((t) => Math.abs(Math.round(t.value / step) % MAJOR_EVERY) === 0).map((t) => t.value)
+  return { faint, strong }
+}
+
+function axisLines(
+  axis: 'x' | 'y',
+  bounds: Bounds,
+  config: GraphConfig,
+  ticks: Tick[],
+  scale: Scale,
+): AxisLines {
+  if (ticks.length === 0) return { faint: [], strong: [] }
+  if (scale.kind === 'log') {
+    return {
+      faint: ticks.filter((t) => t.kind === 'minor').map((t) => scale.forward(t.value)),
+      strong: ticks.filter((t) => t.kind === 'major').map((t) => scale.forward(t.value)),
+    }
+  }
+  if (config.space.ticks[axis]?.pi) return piLines(ticks)
+  const min = axis === 'x' ? bounds.xMin : bounds.yMin
+  const max = axis === 'x' ? bounds.xMax : bounds.yMax
+  const step = resolveStep(axis === 'x' ? config.xstep : config.ystep, max - min, 6, config.stepMode)
+  return linearLines(min, max, step, ticks)
+}
+
+// Everything the grid draws, as data: line positions and positioned labels.
+// `bounds` are the camera's (the plane being viewed); on a log axis that plane is
+// (log10 x, log10 y), so ticks are computed on the world values and drawn at
+// scale.forward(value). `margins` inset pinned labels (plane units); `offset` is
+// how far below / left of its axis an on-axis label sits.
+export function gridPlan(
+  bounds: Bounds,
+  config: GraphConfig,
+  size: { widthPx: number; heightPx: number },
+  margins: { x: number; y: number },
+  offset: { x: number; y: number },
+): GridPlan {
+  const sx = scaleOf(config.scales.x)
+  const sy = scaleOf(config.scales.y)
+  const world: Bounds = {
+    xMin: sx.inverse(bounds.xMin),
+    xMax: sx.inverse(bounds.xMax),
+    yMin: sy.inverse(bounds.yMin),
+    yMax: sy.inverse(bounds.yMax),
+  }
+  const ticks = frameTicks({ bounds: world, ...size }, config)
+  const lx = axisLines('x', bounds, config, ticks.x, sx)
+  const ly = axisLines('y', bounds, config, ticks.y, sy)
+
+  const labelsX: GridLabel[] = []
+  const labelsY: GridLabel[] = []
+  if (config.axes && config.labels !== 'none') {
+    const anchors = labelAnchors(ticks, { bounds, ...size }, margins, config.scales)
+    for (const a of anchors.x) {
+      if (a.label === '') continue
+      const onAxis = sy.kind === 'linear' && a.at.y === 0
+      if (onAxis && a.label === '0') continue // "0" comes from the y-axis pass
+      labelsX.push({ ...a, at: { x: sx.forward(a.at.x), y: onAxis ? a.at.y - offset.y : a.at.y } })
+    }
+    for (const a of anchors.y) {
+      if (a.label === '') continue
+      const onAxis = sx.kind === 'linear' && a.at.x === 0
+      labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
+    }
+  }
+  return { faintX: lx.faint, faintY: ly.faint, strongX: lx.strong, strongY: ly.strong, labelsX, labelsY }
+}
+
 // Owns the axis/grid line meshes and redraws them against the current camera
 // bounds. Split out of SceneRenderer since grid drawing is synchronous and
 // cheap (unlike the rest of a scene rebuild — see geometryGroup.ts) and has
@@ -154,71 +261,51 @@ export class GridRenderer {
   // current zoom — same convention SceneRenderer uses for point/marker sizes
   // — so tick labels stay a constant, readable pixel size instead of
   // shrinking/growing with the plotted geometry as you zoom.
-  draw(bounds: Bounds, config: GraphConfig, pixelToWorld: (px: number) => number) {
+  // `sizePx` is the canvas size; without it the pixel size is inferred from
+  // pixelToWorld(1) (density only, so an approximation is harmless).
+  draw(
+    bounds: Bounds,
+    config: GraphConfig,
+    pixelToWorld: (px: number) => number,
+    sizePx?: { widthPx: number; heightPx: number },
+  ) {
     if (config.grid) {
-      const stepX = resolveStep(config.xstep, bounds.xMax - bounds.xMin, 6, config.stepMode)
-      const stepY = resolveStep(config.ystep, bounds.yMax - bounds.yMin, 6, config.stepMode)
+      const perPx = pixelToWorld(1)
+      const size = sizePx ?? {
+        widthPx: (bounds.xMax - bounds.xMin) / perPx,
+        heightPx: (bounds.yMax - bounds.yMin) / perPx,
+      }
+      const plan = gridPlan(
+        bounds,
+        config,
+        size,
+        { x: pixelToWorld(20), y: pixelToWorld(14) },
+        { x: pixelToWorld(14), y: pixelToWorld(14) },
+      )
 
       const positions: number[] = []
-      const startX = Math.ceil(bounds.xMin / stepX) * stepX
-      for (let x = startX; x <= bounds.xMax; x += stepX) {
-        positions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      }
-      const startY = Math.ceil(bounds.yMin / stepY) * stepY
-      for (let y = startY; y <= bounds.yMax; y += stepY) {
-        positions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
-      }
+      for (const x of plan.faintX) positions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
+      for (const y of plan.faintY) positions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
       updateGeometryPositions(this.gridLines.geometry, positions)
       this.gridLines.visible = positions.length > 0
 
-      const majorStepX = stepX * MAJOR_EVERY
-      const majorStepY = stepY * MAJOR_EVERY
       const majorPositions: number[] = []
-      const majorStartX = Math.ceil(bounds.xMin / majorStepX) * majorStepX
-      for (let x = majorStartX; x <= bounds.xMax; x += majorStepX) {
-        majorPositions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      }
-      const majorStartY = Math.ceil(bounds.yMin / majorStepY) * majorStepY
-      for (let y = majorStartY; y <= bounds.yMax; y += majorStepY) {
-        majorPositions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
-      }
+      for (const x of plan.strongX) majorPositions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
+      for (const y of plan.strongY) majorPositions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
       updateGeometryPositions(this.gridLinesMajor.geometry, majorPositions)
       this.gridLinesMajor.visible = majorPositions.length > 0
 
-      // Tick labels ride the same "nice" minor step as the grid lines
-      // themselves (1/2/5 × 10^n) — matches the progression as you zoom
-      // (…1, 2, 5, 10, 20, 50, 100…) rather than the ×5 major-gridline
-      // spacing, which would read as a coarser sequence than the visible
-      // minor lines. Only drawn when axes are on, since labels are placed
-      // relative to the x=0/y=0 lines.
+      // Tick labels (text, thinning and position) come from gridPlan: they ride
+      // the same ticks as the grid lines, sit by the x=0/y=0 axes when those are
+      // in view and pin to the nearest edge when not. Only drawn when axes are on.
       if (config.axes && config.labels !== 'none') {
-        const labelOffsetX = pixelToWorld(14)
-        const labelOffsetY = pixelToWorld(14)
-        const showXLabels = bounds.yMin <= 0 && 0 <= bounds.yMax
-        const showYLabels = bounds.xMin <= 0 && 0 <= bounds.xMax
         const labelScaleX = pixelToWorld(34)
         const labelScaleY = pixelToWorld(16)
-
         let xIndex = 0
-        let xTick = 0
-        if (showXLabels) {
-          for (let x = startX; x <= bounds.xMax; x += stepX, xTick++) {
-            if (Math.abs(x) < stepX / 1e6) continue // "0" comes from the y-axis pass below
-            if (!shouldLabel(xTick, config)) continue
-            this.xLabels.place(xIndex++, formatCoord(x), x, -labelOffsetY, labelScaleX, labelScaleY)
-          }
-        }
+        for (const l of plan.labelsX) this.xLabels.place(xIndex++, l.label, l.at.x, l.at.y, labelScaleX, labelScaleY)
         this.xLabels.hideFrom(xIndex)
-
         let yIndex = 0
-        let yTick = 0
-        if (showYLabels) {
-          for (let y = startY; y <= bounds.yMax; y += stepY, yTick++) {
-            if (!shouldLabel(yTick, config)) continue
-            const text = Math.abs(y) < stepY / 1e6 ? '0' : formatCoord(y)
-            this.yLabels.place(yIndex++, text, -labelOffsetX, y, labelScaleX, labelScaleY)
-          }
-        }
+        for (const l of plan.labelsY) this.yLabels.place(yIndex++, l.label, l.at.x, l.at.y, labelScaleX, labelScaleY)
         this.yLabels.hideFrom(yIndex)
       } else {
         this.xLabels.hideFrom(0)

@@ -535,7 +535,11 @@ export class SceneRenderer {
   }
 
   private drawGrid() {
-    this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px))
+    const rect = this.canvas.getBoundingClientRect()
+    this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px), {
+      widthPx: Math.max(rect.width, 1),
+      heightPx: Math.max(rect.height, 1),
+    })
     this.needsRender = true
   }
 
