@@ -11,8 +11,8 @@
 .document-viewer {
   --de-radius: 0.9em;
   --de-radius-sm: 0.6em;
-  --de-surface: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 100%), transparent);
-  --de-surface-soft: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 70%), transparent);
+  --de-surface: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 94%), transparent);
+  --de-surface-soft: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 67%), transparent);
   --de-marker-bg: color-mix(in srgb, var(--de-accent) calc(var(--de-alpha-callout) * 17%), transparent);
   --de-marker-border: var(--de-accent);
 
@@ -163,11 +163,11 @@
 }
 
 .document-viewer-markdown th {
-  background: color-mix(in srgb, var(--de-table-header) calc(var(--de-alpha-surface) * 100%), transparent);
+  background: color-mix(in srgb, var(--de-table-header) calc(var(--de-alpha-surface) * 94%), transparent);
 }
 
 .document-viewer-markdown tr:nth-child(even) td {
-  background: color-mix(in srgb, var(--de-table-stripe) calc(var(--de-alpha-surface) * 100%), transparent);
+  background: color-mix(in srgb, var(--de-table-stripe) calc(var(--de-alpha-surface) * 89%), transparent);
 }
 
 .document-viewer-markdown th,
@@ -342,7 +342,8 @@
 .document-viewer-settings-menu,
 .document-viewer-zoom-menu,
 .document-viewer-highlight-action {
-  background: var(--menu-bg, var(--de-chrome-bg));
+  /* Fallback fill follows the callout alpha; a host --menu-bg wins. */
+  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
   color: var(--color-text, var(--de-chrome-text));
   border: var(--border-width, 0px) solid var(--menu-border, var(--de-chrome-border));
   border-top: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);
@@ -498,12 +499,6 @@
     opacity: 1;
     transform: scale(1) translateY(0);
   }
-}
-
-/* The colour popover is a callout: its fallback fill follows the callout
-   alpha (a host --menu-bg still wins). */
-.document-viewer-highlight-action {
-  background: var(--menu-bg, color-mix(in srgb, var(--de-text) calc(var(--de-alpha-callout) * 100%), transparent));
 }
 
 /* Selection-to-highlight color picker — fixed positioning since it's

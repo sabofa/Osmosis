@@ -64,6 +64,13 @@ describe('tokensToCssVars', () => {
       ...CHROME_FALLBACKS,
     })
   })
+  it('clamps out-of-range alphas to [0,1]', () => {
+    const t = { ...T, alphas: { sheet: 1, surface: 1.2, callout: -0.1, media: Infinity } } as unknown as DocumentTokens
+    const v = tokensToCssVars(t)
+    expect(v['--de-alpha-surface']).toBe('1')
+    expect(v['--de-alpha-callout']).toBe('0')
+    expect(v['--de-alpha-media']).toBe('1')
+  })
   it('falls back to default alphas when missing or NaN', () => {
     const bad = { ...T, alphas: { sheet: 1, surface: NaN, callout: 0.5 } } as unknown as DocumentTokens
     const v = tokensToCssVars(bad)
@@ -151,7 +158,7 @@ describe('DocumentViewer.css guard', () => {
     }
   })
   it('layer alphas flow through the alpha vars', () => {
-    expect(stripped).toContain('--de-surface: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 100%)')
+    expect(stripped).toContain('--de-surface: color-mix(in srgb, var(--de-code-bg) calc(var(--de-alpha-surface) * 94%)')
     expect(stripped).toMatch(/opacity: var\(--de-alpha-media\)/)
   })
   it('has a transparent root', () => {

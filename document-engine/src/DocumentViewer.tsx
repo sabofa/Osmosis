@@ -23,7 +23,7 @@ import {
   type ZoomMode,
 } from './zoomModel'
 import { resolveIcon } from './iconSheet'
-import { buildCommands, commandsShape } from './commands'
+import { useHostCommands } from './useHostCommands'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
@@ -110,7 +110,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // Publish the layer list once per host identity.
   useEffect(() => {
     host?.layers(engineLayers())
-  }, [host])
+  }, [host?.layers])
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
   const caps = capabilities(interaction, chrome, !!host)
   const iconRef = host?.icons ?? { kind: 'default' as const }
@@ -526,23 +526,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     onRemoveHighlight: removeHighlight,
     onDownload: handleDownload,
   }
-  const latestRef = useRef(latest)
-  latestRef.current = latest
-  const commandsKey = commandsShape(buildCommands(latest))
-  useEffect(() => {
-    if (!host) return
-    const cmds = buildCommands({
-      ...latestRef.current,
-      onZoomIn: () => latestRef.current.onZoomIn(),
-      onZoomOut: () => latestRef.current.onZoomOut(),
-      onFit: (m) => latestRef.current.onFit(m),
-      onToggleOverlays: () => latestRef.current.onToggleOverlays(),
-      onRemoveHighlight: () => latestRef.current.onRemoveHighlight(),
-      onDownload: () => latestRef.current.onDownload(),
-    })
-    host.toolbar.publishCommands(cmds)
-    return () => host.toolbar.clear()
-  }, [host, commandsKey])
+  useHostCommands(host, latest)
 
   return (
     <div

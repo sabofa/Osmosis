@@ -104,7 +104,7 @@ export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   const d = DEFAULT_TOKENS.alphas
   for (const k of ['surface', 'callout', 'media'] as const) {
     const n = a?.[k]
-    v[`--de-alpha-${k}`] = String(typeof n === 'number' && Number.isFinite(n) ? n : d[k])
+    v[`--de-alpha-${k}`] = String(typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : d[k])
   }
   return { ...v, ...CHROME_FALLBACKS }
 }
