@@ -31,6 +31,9 @@ export const DEFAULT_TOKENS: DocumentTokens = {
   },
   scale: { base: '1rem', ratio: 1.25, leading: '1.6', measure: '70ch' },
   key: 'default',
+  // Layer opacities. The engine does not read these yet (H1 will); they only
+  // satisfy the DocumentTokens contract for the fallback set.
+  alphas: { sheet: 1, surface: 0.9, callout: 0.92, media: 1 },
 }
 
 // Body text: the theme's body face, then the math face (so stray math

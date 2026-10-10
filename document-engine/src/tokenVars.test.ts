@@ -17,6 +17,7 @@ const T: DocumentTokens = {
   fonts: { body: 'Body', display: 'Disp', mono: 'Mono', math: 'Math', cjk: 'Cjk' },
   scale: { base: '1rem', ratio: 1.25, leading: '1.6', measure: '70ch' },
   key: 'k',
+  alphas: { sheet: 1, surface: 0.9, callout: 0.92, media: 1 },
 }
 
 describe('tokensToCssVars', () => {

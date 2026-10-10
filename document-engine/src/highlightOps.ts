@@ -53,7 +53,8 @@ export function highlightAtOffset(highlights: DocumentHighlight[], offset: numbe
 
 // Unconditional "dehighlight" — strips whatever highlight coverage exists
 // in [start, end) regardless of color (unlike toggleHighlightRange, which
-// only removes a same-color match and recolors everything else). Existing
+// removes only when the whole selection is already highlighted in the
+// pressed color, and otherwise fills gaps or recolors). Existing
 // highlights touched by the range are split around the overlap so their
 // untouched portions keep their original color.
 export function removeHighlightRange(
