@@ -219,3 +219,41 @@ describe('gridPlan titles', () => {
     expect(gridPlan(view, off, SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
   })
 })
+
+describe('gridPlan step agreement and hand-built configs', () => {
+  const bounds = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+  const size = { widthPx: 800, heightPx: 800 }
+  const m = { x: 0.5, y: 0.5 }
+
+  it('puts strong lines on the tick step even when a fixed @xstep is outside the readable band', () => {
+    // 0.25 over a span of 20 is 80 divisions: ticks fall back to a nice step, and so must the strong lines
+    const config = { ...defaultConfig(), xstep: 0.25 }
+    const plan = gridPlan(bounds, config, size, m, m)
+    const ticks = plan.faintX
+    const step = ticks[1] - ticks[0]
+    expect(step).toBeGreaterThan(0.25)
+    expect(plan.strongX.length).toBeGreaterThan(0)
+    for (const v of plan.strongX) expect(Math.abs(v / (step * 5) - Math.round(v / (step * 5)))).toBeLessThan(1e-9)
+    expect(plan.strongX[1] - plan.strongX[0]).toBeCloseTo(step * 5, 9)
+  })
+
+  it('takes the step from the view size when the span alone would give another', () => {
+    // fixed-mode step 0.25 over span 20 stays 0.25 (80 divisions <= 1000); strong lines every 1.25
+    const config = { ...defaultConfig(), xstep: 0.25, stepMode: 'fixed' as const }
+    const plan = gridPlan(bounds, config, size, m, m)
+    expect(plan.strongX[1] - plan.strongX[0]).toBeCloseTo(1.25, 9)
+  })
+
+  it('plans a config without scales as linear', () => {
+    const config = { ...defaultConfig() } as Record<string, unknown>
+    delete config.scales
+    const plan = gridPlan(bounds, config as never, size, m, m)
+    expect(plan.faintX.length).toBeGreaterThan(0)
+    expect(plan.labelsX.length).toBeGreaterThan(0)
+  })
+
+  it('treats a title equal to the space default as not authored', () => {
+    const plan = gridPlan(bounds, defaultConfig(), size, m, m)
+    expect(plan.titles).toEqual([])
+  })
+})

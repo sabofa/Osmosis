@@ -158,6 +158,15 @@ describe('sceneToSvg', () => {
       expect(count(out, /<line [^>]*data-grid="faint" data-axis="y"/g)).toBe(8 * 4)
     })
 
+    it('draws the crossing axis of a log axis at plane 0 (value 1) when the view holds it, and not at all when it does not', () => {
+      // the renderer draws axes at plane 0 and never clamps them to an edge: off-view they are simply off-view
+      const verticals = (svg: string) => [...svg.matchAll(/<line x1="([^"]+)" y1="[^"]+" x2="([^"]+)" y2="[^"]+" [^>]*data-grid="axis"/g)].filter((m) => m[1] === m[2]).map((m) => Number(m[1]))
+      const inside = framed(['y = x', '@xscale: log', '@bounds: -1,3,-5,5'].join('\n'), view(-1, 3, -5, 5, 800, 800))
+      expect(verticals(inside)).toEqual([200]) // u=0 is a quarter of the way across
+      const outside = framed(['y = x', '@xscale: log', '@bounds: 1,3,-5,5'].join('\n'), view(1, 3, -5, 5, 800, 800))
+      expect(verticals(outside)).toEqual([])
+    })
+
     it('pins y labels to the left edge when the y axis is off screen', () => {
       const out = framed('y = x', view(20, 30, -5, 5))
       const ys = texts(out).filter((q) => /^[−-]?[0-4]$/.test(q.s))

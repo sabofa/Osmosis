@@ -36,6 +36,11 @@ export const TITLE = {
   marginPx: 8,
 } as const
 
+/** Inset (px) of pinned tick labels from the view edge. */
+export const LABEL_MARGIN_PX = { x: 20, y: 14 } as const
+/** How far (px) an on-axis tick label sits below / left of its axis line. */
+export const LABEL_OFFSET_PX = { x: 14, y: 14 } as const
+
 /** Tick count a linear or pi axis aims for. */
 export const TARGET_DIVISIONS = 6
 /** Fewest divisions a configured step may give before the axis picks its own. */

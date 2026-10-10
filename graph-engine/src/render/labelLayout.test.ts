@@ -70,6 +70,18 @@ describe('titleLayout', () => {
   const hit = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
   type Box = { x: number; y: number; w: number; h: number }
 
+  it('returns nothing for a degenerate view', () => {
+    const t = { x: 'a', y: 'b' }
+    const run = (b: typeof B, w: number, h: number) => titleLayout({ bounds: b, widthPx: w, heightPx: h, titles: t, labelBoxesPx: [] })
+    expect(run({ ...B, xMax: B.xMin }, 800, 600)).toEqual([])
+    expect(run({ ...B, yMax: B.yMin }, 800, 600)).toEqual([])
+    expect(run({ ...B, xMin: NaN }, 800, 600)).toEqual([])
+    expect(run({ ...B, yMax: Infinity }, 800, 600)).toEqual([])
+    expect(run(B, 0, 600)).toEqual([])
+    expect(run(B, 800, 0)).toEqual([])
+    expect(run(B, NaN, 600)).toEqual([])
+  })
+
   it('returns nothing without titles', () => {
     expect(titleLayout({ bounds: B, widthPx: 800, heightPx: 600, titles: { x: '', y: '' }, labelBoxesPx: [] })).toEqual([])
   })

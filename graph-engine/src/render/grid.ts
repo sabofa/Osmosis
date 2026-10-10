@@ -5,7 +5,8 @@ import { AxisLabelPool } from './axisLabelPool'
 import { frameTicks, labelAnchors, type Tick } from '../plot/frame/ticks'
 import { scaleOf, type Scale } from '../plot/frame/scale'
 import { labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
-import { TITLE } from '../plot/frame/tuning'
+import { LABEL_MARGIN_PX, LABEL_OFFSET_PX, TITLE } from '../plot/frame/tuning'
+import { defaultSpaceConfig } from '../space/config'
 
 function hexToCss(color: number): string {
   return '#' + color.toString(16).padStart(6, '0')
@@ -169,6 +170,7 @@ function axisLines(
   config: GraphConfig,
   ticks: Tick[],
   scale: Scale,
+  resolvedStep: number,
 ): AxisLines {
   if (ticks.length === 0) return { faint: [], strong: [] }
   if (scale.kind === 'log') {
@@ -180,7 +182,8 @@ function axisLines(
   if (config.space.ticks[axis]?.pi) return piLines(ticks)
   const min = axis === 'x' ? bounds.xMin : bounds.yMin
   const max = axis === 'x' ? bounds.xMax : bounds.yMax
-  const step = resolveStep(axis === 'x' ? config.xstep : config.ystep, max - min, 6, config.stepMode)
+  // The step the ticks were laid on, so strong lines and tick spacing agree; resolve afresh only without one.
+  const step = resolvedStep > 0 ? resolvedStep : resolveStep(axis === 'x' ? config.xstep : config.ystep, max - min, 6, config.stepMode)
   return linearLines(min, max, step, ticks)
 }
 
@@ -196,8 +199,8 @@ export function gridPlan(
   margins: { x: number; y: number },
   offset: { x: number; y: number },
 ): GridPlan {
-  const sx = scaleOf(config.scales.x)
-  const sy = scaleOf(config.scales.y)
+  const sx = scaleOf(config.scales?.x)
+  const sy = scaleOf(config.scales?.y)
   const world: Bounds = {
     xMin: sx.inverse(bounds.xMin),
     xMax: sx.inverse(bounds.xMax),
@@ -205,13 +208,13 @@ export function gridPlan(
     yMax: sy.inverse(bounds.yMax),
   }
   const ticks = frameTicks({ bounds: world, ...size }, config)
-  const lx = axisLines('x', bounds, config, ticks.x, sx)
-  const ly = axisLines('y', bounds, config, ticks.y, sy)
+  const lx = axisLines('x', bounds, config, ticks.x, sx, ticks.step?.x ?? 0)
+  const ly = axisLines('y', bounds, config, ticks.y, sy, ticks.step?.y ?? 0)
 
   const labelsX: GridLabel[] = []
   const labelsY: GridLabel[] = []
   if (config.axes && config.labels !== 'none') {
-    const anchors = labelAnchors(ticks, { bounds, ...size }, margins, config.scales)
+    const anchors = labelAnchors(ticks, { bounds, ...size }, margins, { x: sx.kind, y: sy.kind })
     for (const a of anchors.x) {
       if (a.label === '') continue
       const onAxis = sy.kind === 'linear' && a.at.y === 0
@@ -227,9 +230,10 @@ export function gridPlan(
   // A title equal to its axis default ('x' / 'y') counts as not authored, so
   // plots without @titles do not change. An author who wants a title that is
   // literally "x" can write "x " or "x (m)".
+  const defaults = defaultSpaceConfig().titles
   const authored = {
-    x: config.space.titles.x === 'x' ? '' : config.space.titles.x,
-    y: config.space.titles.y === 'y' ? '' : config.space.titles.y,
+    x: config.space.titles.x === defaults.x ? '' : config.space.titles.x,
+    y: config.space.titles.y === defaults.y ? '' : config.space.titles.y,
   }
   const titles = config.axes
     ? titleLayout({
@@ -301,8 +305,8 @@ export class GridRenderer {
         bounds,
         config,
         size,
-        { x: pixelToWorld(20), y: pixelToWorld(14) },
-        { x: pixelToWorld(14), y: pixelToWorld(14) },
+        { x: pixelToWorld(LABEL_MARGIN_PX.x), y: pixelToWorld(LABEL_MARGIN_PX.y) },
+        { x: pixelToWorld(LABEL_OFFSET_PX.x), y: pixelToWorld(LABEL_OFFSET_PX.y) },
       )
 
       const positions: number[] = []
@@ -349,6 +353,7 @@ export class GridRenderer {
     }
 
     if (config.axes) {
+      // Axes sit at plane 0 (value 1 on a log axis), spanning the view; off-view they are simply not seen.
       const axisPositions = [bounds.xMin, 0, 0, bounds.xMax, 0, 0, 0, bounds.yMin, 0, 0, bounds.yMax, 0]
       updateGeometryPositions(this.axisLines.geometry, axisPositions)
       this.axisLines.visible = true

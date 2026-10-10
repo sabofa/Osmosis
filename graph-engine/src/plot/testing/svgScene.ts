@@ -13,6 +13,7 @@ import { clipLineToBounds } from '../../render/clipLine'
 import { type GridPlan, gridPlan } from '../../render/grid'
 import { DARK_PALETTE, LIGHT_PALETTE } from '../../render/palette'
 import type { Chain, Scene, Vec2 } from '../../scene/types'
+import { LABEL_MARGIN_PX, LABEL_OFFSET_PX } from '../frame/tuning'
 import type { CorpusView } from './corpus'
 
 export interface SvgOptions {
@@ -34,7 +35,7 @@ export function svgFrame(v: CorpusView, config: GraphConfig): SvgFrame {
   const perPxX = (v.bounds.xMax - v.bounds.xMin) / v.widthPx
   const perPxY = (v.bounds.yMax - v.bounds.yMin) / v.heightPx
   const size = { widthPx: v.widthPx, heightPx: v.heightPx }
-  const plan = gridPlan(v.bounds, config, size, { x: 20 * perPxX, y: 14 * perPxY }, { x: 14 * perPxX, y: 14 * perPxY })
+  const plan = gridPlan(v.bounds, config, size, { x: LABEL_MARGIN_PX.x * perPxX, y: LABEL_MARGIN_PX.y * perPxY }, { x: LABEL_OFFSET_PX.x * perPxX, y: LABEL_OFFSET_PX.y * perPxY })
   return { plan, axes: config.axes }
 }
 
@@ -92,6 +93,7 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
     for (const x of plan.strongX) grid.push(vertical(x, strong('x')))
     for (const y of plan.strongY) grid.push(horizontal(y, strong('y')))
     if (axes) {
+      // plane 0 (value 1 on a log axis): drawn only when the view holds it, never clamped to an edge
       if (bounds.xMin <= 0 && 0 <= bounds.xMax) grid.push(vertical(0, `${stroke(hex(palette.axis), 1.2)} data-grid="axis"`))
       if (bounds.yMin <= 0 && 0 <= bounds.yMax) grid.push(horizontal(0, `${stroke(hex(palette.axis), 1.2)} data-grid="axis"`))
     }

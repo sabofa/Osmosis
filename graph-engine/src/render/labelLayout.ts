@@ -97,6 +97,9 @@ export function titleLayout(opts: {
   labelBoxesPx: PxBox[]
 }): TitlePlacement[] {
   const { bounds, widthPx: W, heightPx: H, titles, labelBoxesPx: labels } = opts
+  // A view with no extent (zero or non-finite spans or size) has nowhere to put a title.
+  const ok = (v: number) => Number.isFinite(v) && v > 0
+  if (!ok(bounds.xMax - bounds.xMin) || !ok(bounds.yMax - bounds.yMin) || !ok(W) || !ok(H)) return []
   const perX = (bounds.xMax - bounds.xMin) / W
   const perY = (bounds.yMax - bounds.yMin) / H
   const m = TITLE.marginPx

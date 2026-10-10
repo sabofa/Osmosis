@@ -113,7 +113,7 @@ function axisTicks(
   config: GraphConfig,
 ): Axis {
   if (!sizeOk(max - min, px)) return { ticks: [], step: 0 }
-  if (config.scales[axis] === 'log') return logAxis(min, max, px, config)
+  if (config.scales?.[axis] === 'log') return logAxis(min, max, px, config)
   const pi = config.space.ticks[axis]?.pi ?? null
   return pi ? piAxis(min, max, pi, config) : linearAxis(min, max, fixed, config)
 }
