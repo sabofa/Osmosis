@@ -4,6 +4,8 @@ import type { Bounds } from './marchingSquares'
 import { AxisLabelPool } from './axisLabelPool'
 import { frameTicks, labelAnchors, type Tick } from '../plot/frame/ticks'
 import { scaleOf, type Scale } from '../plot/frame/scale'
+import { labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
+import { TITLE } from '../plot/frame/tuning'
 
 function hexToCss(color: number): string {
   return '#' + color.toString(16).padStart(6, '0')
@@ -133,6 +135,7 @@ export interface GridPlan {
   strongY: number[]
   labelsX: GridLabel[]
   labelsY: GridLabel[]
+  titles: TitlePlacement[]
 }
 
 interface AxisLines {
@@ -221,7 +224,16 @@ export function gridPlan(
       labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
     }
   }
-  return { faintX: lx.faint, faintY: ly.faint, strongX: lx.strong, strongY: ly.strong, labelsX, labelsY }
+  const titles = config.axes
+    ? titleLayout({
+        bounds,
+        widthPx: size.widthPx,
+        heightPx: size.heightPx,
+        titles: config.space.titles,
+        labelBoxesPx: labelBoxesPx([...labelsX, ...labelsY], bounds, size.widthPx, size.heightPx),
+      })
+    : []
+  return { faintX: lx.faint, faintY: ly.faint, strongX: lx.strong, strongY: ly.strong, labelsX, labelsY, titles }
 }
 
 // Owns the axis/grid line meshes and redraws them against the current camera
@@ -239,6 +251,7 @@ export class GridRenderer {
   private axisLines: THREE.LineSegments
   private xLabels: AxisLabelPool
   private yLabels: AxisLabelPool
+  private titleLabels: AxisLabelPool
 
   constructor(palette: GridPalette) {
     this.gridLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: palette.grid }))
@@ -246,7 +259,8 @@ export class GridRenderer {
     this.axisLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: palette.axis }))
     this.xLabels = new AxisLabelPool(hexToCss(palette.axis))
     this.yLabels = new AxisLabelPool(hexToCss(palette.axis))
-    this.group.add(this.gridLines, this.gridLinesMajor, this.axisLines, this.xLabels.group, this.yLabels.group)
+    this.titleLabels = new AxisLabelPool(hexToCss(palette.axis), true)
+    this.group.add(this.gridLines, this.gridLinesMajor, this.axisLines, this.xLabels.group, this.yLabels.group, this.titleLabels.group)
   }
 
   setPalette(palette: GridPalette) {
@@ -255,6 +269,7 @@ export class GridRenderer {
     ;(this.axisLines.material as THREE.LineBasicMaterial).color.setHex(palette.axis)
     this.xLabels.setColor(hexToCss(palette.axis))
     this.yLabels.setColor(hexToCss(palette.axis))
+    this.titleLabels.setColor(hexToCss(palette.axis))
   }
 
   // pixelToWorld converts a fixed on-screen pixel size to world units at the
@@ -311,11 +326,19 @@ export class GridRenderer {
         this.xLabels.hideFrom(0)
         this.yLabels.hideFrom(0)
       }
+
+      // Axis titles (@titles) are placed by gridPlan; this only draws them.
+      let titleIndex = 0
+      for (const t of plan.titles) {
+        this.titleLabels.placeAnchored(titleIndex++, t.text, t.at.x, t.at.y, pixelToWorld(TITLE.heightPx), t.align, t.baseline)
+      }
+      this.titleLabels.hideFrom(titleIndex)
     } else {
       this.gridLines.visible = false
       this.gridLinesMajor.visible = false
       this.xLabels.hideFrom(0)
       this.yLabels.hideFrom(0)
+      this.titleLabels.hideFrom(0)
     }
 
     if (config.axes) {
@@ -336,5 +359,6 @@ export class GridRenderer {
     ;(this.axisLines.material as THREE.Material).dispose()
     this.xLabels.dispose()
     this.yLabels.dispose()
+    this.titleLabels.dispose()
   }
 }

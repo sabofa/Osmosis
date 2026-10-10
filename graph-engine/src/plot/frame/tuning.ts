@@ -28,3 +28,10 @@ export const PI_LADDER: readonly { readonly num: number; readonly den: number }[
 
 /** Relative slack when comparing a ladder step with a rough step. */
 export const PI_STEP_EPS = 1e-9
+
+/** Axis titles: the estimated text box and the inset from the view edge / axis line. */
+export const TITLE = {
+  charPx: 7,
+  heightPx: 16,
+  marginPx: 8,
+} as const

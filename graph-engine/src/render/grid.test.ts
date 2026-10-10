@@ -189,3 +189,23 @@ describe('resolveStep defaults', () => {
     expect(resolveStep(0.25, 200, 6)).toBe(resolveStep(0.25, 200, 6, 'nice'))
   })
 })
+
+describe('gridPlan titles', () => {
+  const SIZE = { widthPx: 800, heightPx: 480 }
+  const view = { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }
+  const withTitles = (x: string, y: string) => {
+    const c = defaultConfig()
+    return { ...c, space: { ...c.space, titles: { x, y, z: '' } } }
+  }
+
+  it('carries the @titles of the space config as placements', () => {
+    const plan = gridPlan(view, withTitles('t (s)', 'v (m/s)'), SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 })
+    expect(plan.titles.map((t) => [t.axis, t.text])).toEqual([['x', 't (s)'], ['y', 'v (m/s)']])
+  })
+
+  it('has none for empty titles or with the axes off', () => {
+    expect(gridPlan(view, withTitles('', ''), SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
+    const off = { ...withTitles('t', 'v'), axes: false }
+    expect(gridPlan(view, off, SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
+  })
+})

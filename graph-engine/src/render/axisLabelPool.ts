@@ -22,9 +22,13 @@ export class AxisLabelPool {
   readonly group = new THREE.Group()
   private entries: LabelEntry[] = []
   private color: string
+  // fit: each label's canvas is sized to its text (axis titles vary in length)
+  // instead of the fixed tick-label canvas.
+  private fit: boolean
 
-  constructor(color: string) {
+  constructor(color: string, fit = false) {
     this.color = color
+    this.fit = fit
   }
 
   setColor(color: string) {
@@ -50,14 +54,46 @@ export class AxisLabelPool {
 
   private redraw(entry: LabelEntry, text: string) {
     const { ctx, canvas } = entry
+    const font = `${FONT_SIZE_PX}px ui-monospace, SFMono-Regular, Menlo, monospace`
+    if (this.fit) {
+      ctx.font = font
+      canvas.width = Math.max(CANVAS_H, Math.ceil(ctx.measureText(text).width) + 4) // resets the context state
+      const material = entry.sprite.material as THREE.SpriteMaterial
+      entry.texture.dispose()
+      entry.texture = new THREE.CanvasTexture(canvas)
+      entry.texture.minFilter = THREE.LinearFilter
+      material.map = entry.texture
+      material.needsUpdate = true
+    }
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.font = `${FONT_SIZE_PX}px ui-monospace, SFMono-Regular, Menlo, monospace`
+    ctx.font = font
     ctx.fillStyle = this.color
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'center'
     ctx.fillText(text, canvas.width / 2, canvas.height / 2)
     entry.texture.needsUpdate = true
     entry.text = text
+  }
+
+  // Fit-mode placement: the sprite is `heightWorld` tall, as wide as its text
+  // needs, and hangs off (x, y) the way `align` / `baseline` say.
+  placeAnchored(
+    index: number,
+    text: string,
+    x: number,
+    y: number,
+    heightWorld: number,
+    align: 'start' | 'end',
+    baseline: 'top' | 'bottom' | 'middle',
+  ) {
+    const entry = this.entries[index] ?? this.createEntry()
+    if (entry.text !== text) this.redraw(entry, text)
+    const width = (heightWorld * entry.canvas.width) / entry.canvas.height
+    const cx = align === 'end' ? x - width / 2 : x + width / 2
+    const cy = baseline === 'bottom' ? y + heightWorld / 2 : baseline === 'top' ? y - heightWorld / 2 : y
+    entry.sprite.position.set(cx, cy, 0.01)
+    entry.sprite.scale.set(width, heightWorld, 1)
+    entry.sprite.visible = true
   }
 
   // Places (creating/reusing as needed) label `index` at world position
