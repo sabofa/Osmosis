@@ -81,3 +81,16 @@ describe('Camera2D facade', () => {
     expect(e.worldPerPixelXY(800).x).toBeCloseTo(e.worldPerPixelXY(800).y)
   })
 })
+
+describe('Camera2D.setFrame', () => {
+  it("resets a panned view to the new authored frame (an unchanged frame never calls it: see frameChanged)", () => {
+    const c = new Camera2D(400, 400, { xMin: 0, xMax: 20, yMin: 0, yMax: 10 })
+    c.panByPixels(50, 0, 400)
+    const panned = c.getBounds()
+    expect(panned.xMin).not.toBeCloseTo(0)
+    c.setFrame({ xMin: -4, xMax: 4, yMin: -4, yMax: 4 }, null)
+    const b = c.getBounds()
+    expect(b.xMin).toBeCloseTo(-4)
+    expect(b.xMax).toBeCloseTo(4)
+  })
+})

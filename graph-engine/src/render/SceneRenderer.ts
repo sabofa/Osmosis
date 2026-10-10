@@ -3,6 +3,7 @@ import type { GraphConfig } from '../parser/config'
 import { Camera2D } from './camera2d'
 import { ViewController } from './viewController'
 import { authoredBounds } from '../plot/view/authored'
+import { frameChanged } from '../plot/view/frameChanged'
 import { keyReachesView, pointerKindOf } from '../view2d/dom/domInput'
 import type { Intent, PointerSample } from '../view2d'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
@@ -340,6 +341,14 @@ export class SceneRenderer {
   }
 
   setConfig(config: GraphConfig, palette?: Palette) {
+    // Only an edit to the authored frame moves the view; any other edit leaves the user's pan/zoom alone.
+    // The caller rebuilds the scene right after, which picks up the new camera bounds.
+    if (frameChanged(this.options.config, config)) {
+      const { width, height } = this.camera2d.screenSize()
+      this.camera2d.setFrame(authoredBounds(config, width / height), config.space.aspect)
+      this.controller.resized()
+      this.resizedSinceBuild = true
+    }
     this.options.config = config
     this.palette = palette ?? (config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
     this.renderer.setClearColor(this.palette.background, 1)

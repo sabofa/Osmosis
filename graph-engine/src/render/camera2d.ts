@@ -26,17 +26,30 @@ export class Camera2D {
   private win: PlotWindow
   private view: PlotView
   private screen: Size
-  private readonly aspectOf: PlotAspect | null
+  private aspectOf: PlotAspect | null
 
   constructor(width: number, height: number, initialBounds?: Bounds, aspect: PlotAspect | null = null) {
-    this.aspectOf = aspect
     this.screen = { width, height }
-    // Without a window, the old default: 12 units tall, the width follows the canvas.
-    this.win = initialBounds
-      ? { uMin: initialBounds.xMin, uMax: initialBounds.xMax, vMin: initialBounds.yMin, vMax: initialBounds.yMax }
-      : { uMin: (-6 * width) / height, uMax: (6 * width) / height, vMin: -6, vMax: 6 }
+    this.aspectOf = aspect
+    this.win = this.windowOf(initialBounds)
     this.view = startView(this.win, aspect, this.screen)
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 1000)
+    this.updateProjection()
+  }
+
+  // Without a window, the old default: 12 units tall, the width follows the canvas.
+  private windowOf(b?: Bounds): PlotWindow {
+    const { width, height } = this.screen
+    return b
+      ? { uMin: b.xMin, uMax: b.xMax, vMin: b.yMin, vMax: b.yMax }
+      : { uMin: (-6 * width) / height, uMax: (6 * width) / height, vMin: -6, vMax: 6 }
+  }
+
+  /** A new authored frame (@bounds / @aspect edited): the window and aspect change and the view goes to its start. */
+  setFrame(bounds: Bounds | undefined, aspect: PlotAspect | null) {
+    this.aspectOf = aspect
+    this.win = this.windowOf(bounds)
+    this.view = startView(this.win, aspect, this.screen)
     this.updateProjection()
   }
 
