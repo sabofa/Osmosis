@@ -67,6 +67,80 @@ const stubGraph: RenderGraph = (spec) => (
   </div>
 )
 
+// ?case=graphs: several graph fences with options and an instrumented stub.
+// window.__graphMounts = {mounts, unmounts}; window.__graphGestures = events
+// that reached a stub (wheel/pointerdown/dblclick, with the stub's index);
+// window.__graphCtx[i] = the ctx the stub at index i last received.
+const GRAPHS_MD = [
+  '# Graph embeds',
+  '',
+  'Intro paragraph before the graphs, long enough to be a real paragraph of prose for the document.',
+  '',
+  '```graph',
+  'y = x^2',
+  '```',
+  '',
+  'Between one and two.',
+  '',
+  '```graph size=s',
+  'y = x',
+  '```',
+  '',
+  'Between two and three.',
+  '',
+  '```graph size=l height=220',
+  'y = sin(x)',
+  '```',
+  '',
+  'Between three and four.',
+  '',
+  '```graph view=x:-5..5,y:-3..3 lock',
+  'y = cos(x)',
+  '```',
+  '',
+  'Closing paragraph after the graphs.',
+].join('\n')
+
+type GraphGlobals = {
+  __graphMounts: { mounts: number; unmounts: number }
+  __graphGestures: { type: string; index: number }[]
+  __graphCtx: Record<number, { view?: unknown; bounds?: string; lock?: boolean }>
+}
+const gg = (): GraphGlobals => window as unknown as GraphGlobals
+if (typeof window !== 'undefined') {
+  const w = gg()
+  w.__graphMounts ??= { mounts: 0, unmounts: 0 }
+  w.__graphGestures ??= []
+  w.__graphCtx ??= {}
+}
+
+function InstrumentedGraph({ index, spec, ctx }: { index: number; spec: string; ctx: Parameters<RenderGraph>[1] }): ReactNode {
+  useEffect(() => {
+    gg().__graphMounts.mounts++
+    return () => { gg().__graphMounts.unmounts++ }
+  }, [])
+  gg().__graphCtx[index] = { view: ctx.view, bounds: ctx.bounds, lock: ctx.lock }
+  const note = (type: string) => () => { gg().__graphGestures.push({ type, index }) }
+  return (
+    <div
+      data-testid={`graph-stub-${index}`}
+      onWheel={note('wheel')}
+      onPointerDown={note('pointerdown')}
+      onDoubleClick={note('dblclick')}
+      style={{ border: '2px solid currentColor', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}
+    >
+      graph stub {index}: {spec.split('\n')[0]}
+    </div>
+  )
+}
+
+// Index = order of first render per spec text (specs are distinct in GRAPHS_MD).
+const graphIndexBySpec = new Map<string, number>()
+const instrumentedGraph: RenderGraph = (spec, ctx) => {
+  if (!graphIndexBySpec.has(spec)) graphIndexBySpec.set(spec, graphIndexBySpec.size)
+  return <InstrumentedGraph index={graphIndexBySpec.get(spec)!} spec={spec} ctx={ctx} />
+}
+
 function tokensFor(mode: 'light' | 'dark'): DocumentTokens {
   const m = builtinById(DEFAULT_THEME_ID)
   if (!m) throw new Error('default theme missing')
@@ -89,7 +163,7 @@ function makeHost(onChange: (p: Published) => void): DocumentHost {
   return {
     icons: { kind: 'default' },
     toolbar: {
-      publishCommands: (cmds) => { state.cmds = cmds.map((c) => ({ id: c.id, enabled: c.enabled, active: c.active })); onChange({ ...state }) },
+      publishCommands: (cmds) => { (window as unknown as { __hostCmds: unknown }).__hostCmds = cmds; state.cmds = cmds.map((c) => ({ id: c.id, enabled: c.enabled, active: c.active })); onChange({ ...state }) },
       clear: () => { state.cmds = []; onChange({ ...state }) },
     },
     layers: (list) => { state.layers = list.map((l) => l.id); onChange({ ...state }) },
@@ -253,16 +327,16 @@ export default function ReviewPage(): ReactNode {
         )}
         <DocumentViewer
           host={host}
-          asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: MD, extractedText: MD }}
+          asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: kase === 'graphs' ? GRAPHS_MD : MD, extractedText: kase === 'graphs' ? GRAPHS_MD : MD }}
           initialZoom={initialZoom}
           tokens={tokens}
           interaction={kase === 'edit' ? 'edit' : 'annotate'}
           chrome={kase === 'embedded' ? 'embedded' : 'full'}
           gated={kase === 'gated'}
-          layers={[LAYER]}
-          highlights={hl}
+          layers={kase === 'graphs' ? [] : [LAYER]}
+          highlights={kase === 'graphs' ? [] : hl}
           onHighlightsChange={setHl}
-          renderGraph={stubGraph}
+          renderGraph={kase === 'graphs' ? instrumentedGraph : stubGraph}
         />
       </div>
     </div>
