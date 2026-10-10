@@ -35,3 +35,12 @@ export const TITLE = {
   heightPx: 16,
   marginPx: 8,
 } as const
+
+/** Tick count a linear or pi axis aims for. */
+export const TARGET_DIVISIONS = 6
+/** Fewest divisions a configured step may give before the axis picks its own. */
+export const MIN_DIVISIONS = 3
+/** Most divisions a configured step may give before the axis picks its own. */
+export const MAX_DIVISIONS = 14
+/** Hard cap on ticks per axis. */
+export const MAX_TICKS = 10000

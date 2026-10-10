@@ -69,6 +69,20 @@ describe('frameTicks pi', () => {
   })
 })
 
+describe('frameTicks huge pi span and resolved step', () => {
+  it('a pi axis over a huge span falls back to the nice step', () => {
+    const t = frameTicks(view(0, 1e5, -1, 1), withPi(1, 2))
+    expect(t.x.length).toBeLessThanOrEqual(15)
+    expect(t.step.x).toBe(10000)
+    expect(t.x[1].label).not.toMatch(/π/)
+  })
+  it('exposes the resolved step', () => {
+    const t = frameTicks(view(-10, 10, -6, 6), cfg())
+    expect(t.step).toEqual({ x: 1, y: 1 })
+    expect(frameTicks(view(0, 2 * Math.PI, -1, 1), withPi(1, 2)).step.x).toBeCloseTo(Math.PI / 2, 12)
+  })
+})
+
 describe('frameTicks log', () => {
   it('log y 1..1e4 has decade majors and minors', () => {
     const c = defaultConfig()
@@ -96,8 +110,8 @@ describe('frameTicks degenerate', () => {
       expect(t.y.length).toBeGreaterThan(0)
     }
     const t = frameTicks(view(0, 1, 0, 1, 0, 0), cfg())
-    expect(t).toEqual({ x: [], y: [] })
-    expect(frameTicks(view(Infinity, -Infinity, NaN, NaN), cfg())).toEqual({ x: [], y: [] })
+    expect(t).toMatchObject({ x: [], y: [] })
+    expect(frameTicks(view(Infinity, -Infinity, NaN, NaN), cfg())).toMatchObject({ x: [], y: [] })
   })
 })
 

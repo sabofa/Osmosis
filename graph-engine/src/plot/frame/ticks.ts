@@ -5,6 +5,7 @@ import { shouldLabel } from '../../render/grid'
 import { formatTicks } from './labels'
 import { piLabel, piStepFor } from './pi'
 import { logTicks } from './logTicks'
+import { MAX_DIVISIONS, MAX_TICKS, MIN_DIVISIONS, TARGET_DIVISIONS } from './tuning'
 
 export interface Tick {
   value: number
@@ -19,14 +20,15 @@ export interface FrameView {
 export interface FrameTicks {
   x: Tick[]
   y: Tick[]
+  /** The resolved step per axis in world units; 0 for a log axis or an empty one. */
+  step: { x: number; y: number }
+}
+interface Axis {
+  ticks: Tick[]
+  step: number
 }
 
 export { shouldLabel }
-
-const TARGET_DIVISIONS = 6
-const MIN_DIVISIONS = 3
-const MAX_DIVISIONS = 14
-const MAX_TICKS = 10000
 
 // The grid's "nice" step (1/2/5 x 10^n, thresholds 5 and 8), restated from first principles.
 function niceStepFor(span: number, target: number): number {
@@ -53,15 +55,16 @@ function blankUnlabelled(ticks: Tick[], config: GraphConfig): Tick[] {
   return ticks.map((t, i) => (t.label !== '' && !shouldLabel(i, config) ? { ...t, label: '' } : t))
 }
 
-function linearAxis(min: number, max: number, fixed: number | null, config: GraphConfig): Tick[] {
+function linearAxis(min: number, max: number, fixed: number | null, config: GraphConfig): Axis {
   const span = max - min
   const step = pickLinearStep(fixed, span, config)
   const values = linearTickValues(min, max, step)
   const labels = formatTicks(values, step)
-  return blankUnlabelled(
+  const ticks = blankUnlabelled(
     values.map((value, i) => ({ value, label: labels[i], kind: 'major' as const })),
     config,
   )
+  return { ticks, step }
 }
 
 function pickLinearStep(fixed: number | null, span: number, config: GraphConfig): number {
@@ -77,26 +80,28 @@ function pickLinearStep(fixed: number | null, span: number, config: GraphConfig)
   return divisions >= MIN_DIVISIONS && divisions <= MAX_DIVISIONS ? fixed : niceStepFor(span, TARGET_DIVISIONS)
 }
 
-function piAxis(min: number, max: number, configured: { num: number; den: number }, config: GraphConfig): Tick[] {
+function piAxis(min: number, max: number, configured: { num: number; den: number }, config: GraphConfig): Axis {
   const span = max - min
   const configuredValue = (configured.num / configured.den) * Math.PI
   const divisions = span / configuredValue
   const step =
     divisions >= MIN_DIVISIONS && divisions <= MAX_DIVISIONS ? configured : piStepFor(span, TARGET_DIVISIONS)
   const stepValue = (step.num / step.den) * Math.PI
+  // even the largest pi step would draw a crowd: use the nice step, labelled as plain numbers
+  if (span / stepValue > MAX_DIVISIONS) return linearAxis(min, max, null, config)
   const out: Tick[] = []
   const first = Math.ceil(min / stepValue - 1e-9)
   for (let k = first; k * stepValue <= max * (1 + 1e-12) + 1e-12 * stepValue && out.length < MAX_TICKS; k++) {
     out.push({ value: k * stepValue, label: piLabel(k, step), kind: 'major' })
   }
-  return blankUnlabelled(out, config)
+  return { ticks: blankUnlabelled(out, config), step: stepValue }
 }
 
-function logAxis(lo: number, hi: number, px: number, config: GraphConfig): Tick[] {
-  if (!(lo > 0) || !(hi > lo)) return []
+function logAxis(lo: number, hi: number, px: number, config: GraphConfig): Axis {
+  if (!(lo > 0) || !(hi > lo)) return { ticks: [], step: 0 }
   const decades = Math.log10(hi) - Math.log10(lo)
   const ticks = logTicks(lo, hi, px / decades)
-  return config.labels === 'none' ? ticks.map((t) => ({ ...t, label: '' })) : ticks
+  return { ticks: config.labels === 'none' ? ticks.map((t) => ({ ...t, label: '' })) : ticks, step: 0 }
 }
 
 function axisTicks(
@@ -106,8 +111,8 @@ function axisTicks(
   px: number,
   fixed: number | null,
   config: GraphConfig,
-): Tick[] {
-  if (!sizeOk(max - min, px)) return []
+): Axis {
+  if (!sizeOk(max - min, px)) return { ticks: [], step: 0 }
   if (config.scales[axis] === 'log') return logAxis(min, max, px, config)
   const pi = config.space.ticks[axis]?.pi ?? null
   return pi ? piAxis(min, max, pi, config) : linearAxis(min, max, fixed, config)
@@ -115,10 +120,9 @@ function axisTicks(
 
 export function frameTicks(view: FrameView, config: GraphConfig): FrameTicks {
   const b = view.bounds
-  return {
-    x: axisTicks('x', b.xMin, b.xMax, view.widthPx, config.xstep, config),
-    y: axisTicks('y', b.yMin, b.yMax, view.heightPx, config.ystep, config),
-  }
+  const x = axisTicks('x', b.xMin, b.xMax, view.widthPx, config.xstep, config)
+  const y = axisTicks('y', b.yMin, b.yMax, view.heightPx, config.ystep, config)
+  return { x: x.ticks, y: y.ticks, step: { x: x.step, y: y.step } }
 }
 
 export interface LabelAnchor {
