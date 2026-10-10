@@ -16,7 +16,7 @@ const SUPERSCRIPT: Record<string, string> = {
 }
 const MAX_DIGITS = 20
 
-function superscript(n: number): string {
+export function superscript(n: number): string {
   return String(n)
     .split('')
     .map((c) => SUPERSCRIPT[c] ?? c)
