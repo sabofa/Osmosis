@@ -154,7 +154,10 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
     return saturate(role, style.colour.saturation)
   }
 
-  // One primitive, as markup.
+  // One primitive, as markup. Opacity is the paint's own (`stroke-opacity` or
+  // `fill-opacity`), not the element's: a shape painted once looks the same,
+  // and an element opacity makes the browser draw the element in an offscreen
+  // layer of its own, which hundreds of hatch strokes pay for on every redraw.
   const write = (primitive: Primitive, paint: string, opacity: number, identity: SvgAttrs): string => {
     switch (primitive.kind) {
       case 'stroke':
@@ -166,14 +169,14 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
           'stroke-linecap': primitive.cap,
           'stroke-linejoin': primitive.join,
           'stroke-dasharray': primitive.dash ? primitive.dash.map(dp).join(' ') : null,
-          opacity: Math.min(1, primitive.opacity * opacity),
+          'stroke-opacity': Math.min(1, primitive.opacity * opacity),
           style: primitive.blend ? `mix-blend-mode:${primitive.blend}` : null,
           ...identity,
         })}/>`
       case 'shape':
-        return `<polygon${attributes({ points: points(primitive.outline), fill: paint, stroke: 'none', opacity: Math.min(1, primitive.opacity * opacity), ...identity })}/>`
+        return `<polygon${attributes({ points: points(primitive.outline), fill: paint, stroke: 'none', 'fill-opacity': Math.min(1, primitive.opacity * opacity), ...identity })}/>`
       case 'dots':
-        return `<path${attributes({ d: dotsData(primitive.dots), fill: paint, stroke: 'none', opacity: Math.min(1, primitive.opacity * opacity), ...identity })}/>`
+        return `<path${attributes({ d: dotsData(primitive.dots), fill: paint, stroke: 'none', 'fill-opacity': Math.min(1, primitive.opacity * opacity), ...identity })}/>`
     }
   }
 
@@ -289,7 +292,7 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
             })
             break
           case 'dots':
-            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', opacity, ...identity })}/>`)
+            if (mark.dots.length > 0) clipped.push(`<path${attributes({ d: dotsData(mark.dots), fill: shade, stroke: 'none', 'fill-opacity': opacity, ...identity })}/>`)
             break
           case 'edge': {
             const edgeMarkup = cleanFill(region, {

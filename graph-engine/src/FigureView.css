@@ -10,6 +10,9 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
+  /* `clip`, where there is one, also forbids scrolling it by script (focus,
+     find-in-page). */
+  overflow: clip;
   background: var(--surface, #fdf6ea);
 }
 
@@ -34,14 +37,26 @@
   cursor: grabbing;
 }
 
-/* "meet" on the svg's own preserveAspectRatio does the fitting; this just
-   stops the element from overflowing the box it was given. */
-.figure-view > .figure-view-surface > svg {
-  max-width: 100%;
-  max-height: 100%;
+/* The two parts of the figure, stacked: the painted tiles (a canvas, see
+   view2d/dom/svgTiles.ts) and, over them, the live svg of points and labels.
+   Both fill the surface; the live svg's "meet" on its own window does the
+   fitting. */
+.figure-view-tiles,
+.figure-view-live {
+  position: absolute;
+  inset: 0;
+}
+
+.figure-view-tiles > canvas {
+  display: block;
   width: 100%;
   height: 100%;
+}
+
+.figure-view-live > svg {
   display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* Stroke widths are written in view units, so they would thicken with the
@@ -82,4 +97,24 @@
 .figure-view-dark .figure-view-reset {
   border-color: var(--border, rgb(255 255 255 / 0.25));
   background: var(--surface, #201e15);
+}
+
+/* Hover and selection. The look (a clean line over the item, a halo for a
+   selection) is an overlay FigureView lays into the live <svg>; see
+   figure/highlight.ts. The classes on the elements that already carry the
+   figure's identity do only what the overlay cannot: a hovered or selected
+   label comes to full strength, and a selected one is set a little heavier.
+   Only the outermost element of an item carries the class (see the highlight
+   effect in FigureView.tsx), so the text is reached either as that element or
+   inside it. */
+text.figure-hovered,
+text.figure-selected,
+.figure-hovered text,
+.figure-selected text {
+  opacity: 1;
+}
+
+text.figure-selected,
+.figure-selected text {
+  font-weight: 600;
 }

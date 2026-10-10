@@ -21,6 +21,8 @@ exits clean regardless of what is broken.)
 *2026-09-30: the visual pass, part 1 (figure styles and the style lab) landed
 on this branch — see "Figure styles: `style/` and the pen" below; 2261 tests.*
 
+*2026-10-04: 2D handling (`view2d/`) landed on this branch — figures pan, zoom, point and focus; see "2D handling (view2d)" below; 2681 tests.*
+
 *Last updated 2026-09-27, after geometry phase 12 (shading and shaded
 regions — "find the area of the shaded region"). Phase 11 completed the
 solids build order of the spec's "Revised 2026-09-25" section; phase 12
@@ -1474,6 +1476,99 @@ overlap is normal, so this is correctness rather than style.
 track 1's work (`grid.ts` for steps and labels, `hover.ts` for snapping,
 `featureMarker.ts` for the per-kind marker shapes).
 
+### 2D handling (view2d)
+
+Figures move: drag to pan (with coasting), wheel or pinch to zoom about the
+cursor, `+`/`-`/arrows/`0`/`Esc`/`C` from the keyboard, double-click or
+double-tap to reset, hover and click to point at things, `@focus` to open
+somewhere, and a coordinate tool to find a focus by looking. Design:
+`docs/superpowers/specs/2026-10-04-2d-handling-design.md`; the build plan and
+per-task reports are under `.superpowers/sdd/2026-10-04-2d-handling/`.
+
+**The shape: a pure core and thin adapters.** `view2d/` is DOM-free, clockless
+and imports nothing from the rest of the engine, so tables, flowcharts and the
+2D plot can adopt it unchanged.
+
+```
+view2d/feel.ts       EVERY number that decides how it feels: zoom limits (0.1-64), pan margin,
+                     smoothing and coasting constants, wheel sensitivity, tolerances (8 px mouse,
+                     16 px touch). Tune the feel here and only here.
+view2d/types.ts      Camera {cx, cy, zoom}, Rect, Vec, Size. Zoom is relative to the FITTED view.
+view2d/camera.ts     content <-> screen, visible rect, anchored zoom and pan
+view2d/limits.ts     the limits policy (clampCamera)
+view2d/motion.ts     ViewMotion: drag, coast, smoothed zoom/pan, eased reset and focus
+view2d/input.ts      GestureRecognizer: pointer, wheel and key samples -> intents
+view2d/pointing.ts   HitItem shapes, hitTest (tolerance in px, point beats line beats area), selection
+view2d/focus.ts      parseFocus / formatFocus, AuthorMapping, focusCamera
+view2d/readout.ts    how numbers print (formatPoint, formatZoom, formatCoordinate)
+view2d/dom/          the browser layer: useView2d (one hook, a Controller class), appliers (SVG
+                     viewBox now, CSS transform for later views), startView (reset and "at start"
+                     decisions), domInput (key and tolerance decisions), CoordinateTool + css
+figure/frame.ts      FigureFrame: author coordinates <-> drawing units (plane: invertible;
+                     space: forward only). figure/hitItems.ts: items from renderFigure.
+figure/highlight.ts  hover and selection look (SVG filters, constant on screen)
+figure/focusLine.ts  the coordinate tool's text: cursor, centre, and the @focus: line Copy writes
+FigureView.tsx       the adapter: renderFigure's frame + items + useView2d + the tool
+```
+
+**Rules worth knowing.**
+- **Shift + click selects several** (2026-10-07): `PointerSelection` is an
+  ordered set, and `onSelect` (FigureView, GraphViewer) reports an array of ids.
+- **A moving view is not redrawn.** The drawn SVG is slid and scaled with a CSS
+  transform (`view2d/liveTransform.ts`) and the `viewBox` is committed when the
+  view has rested `SETTLE_MS`, or has drifted ×2, or left the 30% overscan
+  (never more than every 250 ms); highlights go on the outermost element only.
+  The constants (`OVERSCAN`, `SETTLE_MS`, `COMMIT_DRIFT`, `COMMIT_THROTTLE_MS`,
+  `COAST_TAU`, `COAST_STOP`) are in `feel.ts`. Spec: "Moving a heavy drawing".
+- **`renderFigure`'s SVG did not change.** It now also returns `frame` and
+  `items`; the markup is byte-identical (a sweep of every figure example, in
+  clean, ink, pencil and marker, light and dark, is the check). Hover and
+  selection are classes and filters applied to the live DOM, never markup.
+- **The view is the SVG's viewBox**, not a transform on the markup; labels and point dots are compensated so they keep their screen
+  size, and strokes use `vector-effect: non-scaling-stroke` (clean figures
+  only; a styled figure's lines are filled outlines and scale with the view,
+  keeping every mark in proportion).
+- **Reset has two stops.** Reset goes to the start view (the spec's `@focus`,
+  else fitted); already there, it fits everything.
+- **A new figure starts at its own start view; the same drawing rebuilt keeps
+  the reader where they were.** The key is by value (`startView.ts`).
+- **Keys act only with the surface focused**, and ctrl/meta/alt-modified keys
+  are never taken. `C` is taken only when the host turned the coordinate tool
+  on (`coordinates` prop); otherwise it is left to the page.
+- **No text selection in a figure**, by CSS, `selectstart`/`dragstart` and
+  `preventDefault` on pointerdown (which is why focus is given by hand).
+- **A solid figure cannot be inverted.** The cursor line shows the hovered
+  vertex's `(X, Y, Z)`, else `view (u, v)`; Copy writes the vertex within the
+  tolerance of the centre, else `view (u, v)`.
+- **A label shares its object's id** and comes after it in `items`, so an
+  id -> item map holds the label, which has no author coordinates. Use
+  `itemForId` (it prefers the item that has them).
+- **The pointer and the camera are published only while the tool is open**
+  (`trackPointer`, `trackCamera`); every mouse move or frame would otherwise
+  re-render the figure. The camera is rendered with `flushSync` from the frame
+  that drew it: a state update from a rAF callback is left to React's
+  scheduler, which can run after the paint (under a headless screenshot, never
+  before it), leaving the readout one camera behind the drawing.
+  The view keeps the latest camera and pointer in plain fields even while
+  untracked, and `publishOnTrack` hands them over the moment the tool opens, so
+  a tool opened after the view settled is right at once, not after the next move.
+- **The coordinate tool sits bottom-left** (panel opening upward), top-right
+  when `@givens` is `bottom-left` or `left` (`toolCorner`); the top-left is
+  the givens table's default corner and the bottom-right is the reset button's.
+
+**How tables and flowcharts adopt it.** Give the engine four things and call
+`useView2d`: a content frame (the table's pixel box, the flowchart's layout
+units), an applier (`applyCssTransform` for HTML, the viewBox for SVG), items
+with hit shapes in content units (cells by DOM hit test, nodes and edges), and
+an `AuthorMapping` (`(row, column)` for a table; layout units for a flowchart).
+Then render `CoordinateTool` with that engine's own lines. The 2D plotting
+engine gets a variant later (its camera changes the plotted window), shaped to
+extend this core rather than fork it.
+
+**Not covered by node tests (the DOM and the feel).** `useView2d`, the
+appliers' DOM calls, `FigureView` and the tool's CSS are checked by eye in the
+review harness (it has the coordinate tool on). Ben judges the feel live.
+
 ### Figure styles: `style/` and the pen (visual pass, part 1)
 
 A figure can be drawn in a look. Two halves, split so the graphing engine can
@@ -1642,7 +1737,7 @@ comment in a spec, so colours are written as names or bare hex.
 ### Running and verifying
 
 ```
-npm run test --workspace=graph-engine          # 4050 tests (after the Milestone A integration merge), node-only, no DOM
+npm run test --workspace=graph-engine          # 4380 tests (after the 2D handling merge, 2026-10-10), node-only, no DOM
 npx tsc -p tsconfig.app.json --noEmit          # from graph-engine/; NOT bare
 npx tsc -p tsconfig.node.json --noEmit         # `npx tsc --noEmit` — the root
                                                 # tsconfig.json is a solution
@@ -1822,10 +1917,12 @@ whenever it is wrong. Form set is `(p/q)·√r·πᵉ`; sums are out of scope.
    v1 `polygon:`/`circle:`/`angle:` specs render — bare figure instead of a
    plot with axes. Almost certainly better, but it is live content and the spec
    asks for a sweep. `@mode: graph` restores the old rendering.
-3. **`r = bisector of angle A-B-C` silently parses as a polar curve.** The
-   polar grammar claims any `r = <expr>`. Any construction bound to a name the
-   plotting grammar reserves is silently misread — no error, wrong figure.
-   Pre-existing; the grammar should disambiguate or reject.
+3. **FIXED — `r = bisector of angle A-B-C` was silently read as a polar curve.**
+   Ruling: reject, do not re-route. A construction bound to `r`, `x`, `y` or `z`
+   is refused with a message naming the reserved name, quoting the line and
+   suggesting a rename (`R = bisector of angle A-B-C`). The check is
+   `refuseReservedConstruction` in `parser/parseStatement.ts`; it asks
+   `parseConstructionBody`, so there is no second keyword list.
 4. ~~**Scientific notation fails silently.**~~ **Closed 2026-09-27** by the
    space integration pass (Task 3, `fix(graph-engine): the tokenizer reads
    scientific notation; …`). `y = 1e6 * x` used to lex `1e6` as `1 * e6` with
