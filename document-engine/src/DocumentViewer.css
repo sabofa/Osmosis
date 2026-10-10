@@ -342,8 +342,7 @@
 .document-viewer-settings-menu,
 .document-viewer-zoom-menu,
 .document-viewer-highlight-action {
-  /* Fallback fill follows the callout alpha; a host --menu-bg wins. */
-  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
+  background: var(--menu-bg, var(--de-chrome-bg));
   color: var(--color-text, var(--de-chrome-text));
   border: var(--border-width, 0px) solid var(--menu-border, var(--de-chrome-border));
   border-top: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);
@@ -351,6 +350,11 @@
   border-bottom: var(--bevel-depth, 0px) solid var(--bevel-dark, transparent);
   border-right: var(--bevel-depth, 0px) solid var(--bevel-dark, transparent);
   box-shadow: var(--menu-shadow, none);
+}
+
+/* The popover's fallback fill follows the callout alpha; a host --menu-bg wins. */
+.document-viewer-highlight-action {
+  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
 }
 
 .document-viewer-zoom-control button,

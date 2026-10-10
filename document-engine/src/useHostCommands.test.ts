@@ -95,6 +95,25 @@ describe('useHostCommands', () => {
     expect(first.onZoomIn).not.toHaveBeenCalled()
     expect(second.onZoomIn).toHaveBeenCalledTimes(1)
   })
+  it('swapping the toolbar identity clears the old one, then publishes on the new one', () => {
+    const a = makeHost()
+    const b = makeHost()
+    render(a.host, state())
+    render(b.host, state())
+    expect(a.toolbar.clear).toHaveBeenCalledTimes(1)
+    expect(a.toolbar.publishCommands).toHaveBeenCalledTimes(1)
+    expect(b.toolbar.publishCommands).toHaveBeenCalledTimes(1)
+    expect(b.toolbar.clear).not.toHaveBeenCalled()
+  })
+  it('a command-shape change clears the published list before republishing (effect cleanup runs first)', () => {
+    const { host, toolbar } = makeHost()
+    const order: string[] = []
+    toolbar.publishCommands.mockImplementation(() => order.push('publish'))
+    toolbar.clear.mockImplementation(() => order.push('clear'))
+    render(host, state())
+    render(host, state({ atMax: true }))
+    expect(order).toEqual(['publish', 'clear', 'publish'])
+  })
   it('no host => no calls', () => {
     expect(() => {
       render(undefined, state())
