@@ -13,4 +13,5 @@ export type {
   Chrome,
   DocumentHost,
   RenderGraph,
+  GraphView,
 } from './types'

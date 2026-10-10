@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { parseBlocks } from './markdown'
-import { isGraphFence, graphFenceModel, graphBlocks, graphErrorSummary } from './graphFence'
+import {
+  isGraphFence,
+  graphFenceModel,
+  graphBlocks,
+  graphErrorSummary,
+  parseGraphInfo,
+  graphFenceStyle,
+  graphOptionsSignature,
+} from './graphFence'
 
 describe('isGraphFence', () => {
   it('matches when the first word of the info string is graph', () => {
@@ -44,6 +52,103 @@ describe('graphBlocks', () => {
   it('finds each graph fence', () => {
     const text = '```graph\na\n```\n\n```graph k=1\nb\n```'
     expect(graphBlocks(text).map((g) => g.spec)).toEqual(['a', 'b'])
+  })
+})
+
+describe('parseGraphInfo', () => {
+  it('defaults when there are no options', () => {
+    expect(parseGraphInfo('graph')).toEqual({ lock: false })
+    expect(parseGraphInfo('')).toEqual({ lock: false })
+    expect(parseGraphInfo(undefined)).toEqual({ lock: false })
+    expect(parseGraphInfo(null)).toEqual({ lock: false })
+  })
+  it('parses size, height, view and lock in any order', () => {
+    const p = parseGraphInfo('graph lock height=300 view=x:-5..5,y:-3..3 size=m')
+    expect(p).toEqual({
+      size: 'm',
+      height: 300,
+      view: { x: [-5, 5], y: [-3, 3] },
+      bounds: '-5,5,-3,3',
+      lock: true,
+    })
+  })
+  it('accepts every size and rejects unknown ones', () => {
+    for (const s of ['s', 'm', 'l', 'full'] as const) expect(parseGraphInfo(`graph size=${s}`).size).toBe(s)
+    expect(parseGraphInfo('graph size=xl').size).toBeUndefined()
+    expect(parseGraphInfo('graph size=').size).toBeUndefined()
+    expect(parseGraphInfo('graph size=S').size).toBeUndefined()
+  })
+  it('clamps height and ignores invalid values', () => {
+    expect(parseGraphInfo('graph height=10').height).toBe(80)
+    expect(parseGraphInfo('graph height=99999').height).toBe(2000)
+    expect(parseGraphInfo('graph height=80').height).toBe(80)
+    expect(parseGraphInfo('graph height=abc').height).toBeUndefined()
+    expect(parseGraphInfo('graph height=-5').height).toBeUndefined()
+    expect(parseGraphInfo('graph height=12.5').height).toBeUndefined()
+    expect(parseGraphInfo('graph height=').height).toBeUndefined()
+  })
+  it('parses fractional views and either axis order', () => {
+    expect(parseGraphInfo('graph view=y:0.5..1.5,x:-.5..2').view).toEqual({ x: [-0.5, 2], y: [0.5, 1.5] })
+  })
+  it('ignores malformed views', () => {
+    for (const v of [
+      'x:-5..5',
+      'y:-3..3',
+      'x:5..-5,y:-3..3',
+      'x:1..1,y:-3..3',
+      'x:-5..5,y:-3..',
+      'x:a..b,y:1..2',
+      'x:-5..5,x:-1..1',
+      'x:-5..5,y:-3..3,z:1..2',
+      'x:1e999..2,y:1..2',
+      '',
+      'x:-5....5,y:1..2',
+    ]) {
+      const p = parseGraphInfo(`graph view=${v}`)
+      expect(p.view).toBeUndefined()
+      expect(p.bounds).toBeUndefined()
+    }
+  })
+  it('handles lock forms', () => {
+    expect(parseGraphInfo('graph lock').lock).toBe(true)
+    expect(parseGraphInfo('graph lock=true').lock).toBe(true)
+    expect(parseGraphInfo('graph lock=false').lock).toBe(false)
+    expect(parseGraphInfo('graph lock lock=false').lock).toBe(false)
+    expect(parseGraphInfo('graph lock=yes').lock).toBe(false)
+  })
+  it('ignores unknown tokens and never throws', () => {
+    expect(parseGraphInfo('graph foo bar=baz = == =x size=l ===')).toEqual({ size: 'l', lock: false })
+    expect(parseGraphInfo('   graph\t size=s \n lock ')).toEqual({ size: 's', lock: true })
+  })
+})
+
+describe('graphFenceStyle', () => {
+  it('maps size to width and defaults to full width', () => {
+    expect(graphFenceStyle(parseGraphInfo('graph'))).toEqual({ widthPct: 100 })
+    expect(graphFenceStyle(parseGraphInfo('graph size=s')).widthPct).toBe(40)
+    expect(graphFenceStyle(parseGraphInfo('graph size=m')).widthPct).toBe(60)
+    expect(graphFenceStyle(parseGraphInfo('graph size=l')).widthPct).toBe(80)
+    expect(graphFenceStyle(parseGraphInfo('graph size=full')).widthPct).toBe(100)
+  })
+  it('explicit height wins and is passed through', () => {
+    expect(graphFenceStyle(parseGraphInfo('graph size=s height=250'))).toEqual({ widthPct: 40, height: 250 })
+  })
+})
+
+describe('graphOptionsSignature', () => {
+  it('changes when any option changes', () => {
+    const sigs = ['graph', 'graph size=s', 'graph height=100', 'graph lock', 'graph view=x:0..1,y:0..1'].map((i) =>
+      graphOptionsSignature(parseGraphInfo(i)),
+    )
+    expect(new Set(sigs).size).toBe(sigs.length)
+  })
+})
+
+describe('graphFenceModel options', () => {
+  it('carries parsed options from the fence info', () => {
+    const text = '```graph size=l lock\ny = x\n```'
+    const model = graphFenceModel(parseBlocks(text)[0], text)!
+    expect(model.options).toEqual({ size: 'l', lock: true })
   })
 })
 

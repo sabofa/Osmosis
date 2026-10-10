@@ -88,4 +88,12 @@ export interface DocumentLayer {
 // Host-supplied renderer for ```graph fences (the engine does not depend on
 // the graph engine). Called with the fence body; report parse/render errors
 // through ctx.onErrors.
-export type RenderGraph = (spec: string, ctx: { onErrors(messages: string[]): void }) => ReactNode
+export interface GraphView {
+  x: [number, number]
+  y: [number, number]
+}
+
+export type RenderGraph = (
+  spec: string,
+  ctx: { onErrors(messages: string[]): void; view?: GraphView; bounds?: string; lock?: boolean },
+) => ReactNode

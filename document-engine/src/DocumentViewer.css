@@ -656,6 +656,16 @@
   background: transparent;
 }
 
+.document-viewer-markdown .document-viewer-graph-plot-fixed {
+  aspect-ratio: auto;
+  height: var(--graph-height);
+}
+
+.document-viewer-markdown .document-viewer-graph-locked,
+.document-viewer-markdown .document-viewer-graph-locked * {
+  cursor: default !important;
+}
+
 .document-viewer-markdown .document-viewer-graph-plot > * {
   flex: 1;
   min-width: 0;

@@ -1,22 +1,55 @@
-import { useRef, useState, type ElementType, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ElementType, type ReactNode } from 'react'
 import type { ResolvedMarker } from './viewerModel'
 import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
 import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
 import { renderMath } from './mathRender'
-import { graphFenceModel, graphErrorSummary } from './graphFence'
+import {
+  graphFenceModel,
+  graphErrorSummary,
+  graphFenceStyle,
+  graphOptionsSignature,
+  type GraphFenceOptions,
+} from './graphFence'
 import type { DocumentAnchor, DocumentHighlight, RenderGraph } from './types'
+
+// Interim lock until the graph DSL `@lock` ships: swallow every pan/zoom/reset
+// gesture in the capture phase so the live plot underneath never sees it.
+const LOCK_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'touchmove', 'dblclick', 'keydown'] as const
+
+function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
+  useEffect(() => {
+    const el = ref.current
+    if (!locked || !el) return
+    const block = (e: Event) => {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    const blockMove = (e: Event) => {
+      if ((e as PointerEvent).buttons) block(e)
+    }
+    const opts = { capture: true, passive: false } as const
+    for (const t of LOCK_EVENTS) el.addEventListener(t, block, opts)
+    el.addEventListener('pointermove', blockMove, opts)
+    return () => {
+      for (const t of LOCK_EVENTS) el.removeEventListener(t, block, opts)
+      el.removeEventListener('pointermove', blockMove, opts)
+    }
+  }, [ref, locked])
+}
 
 // One inline graph. Owns its error state; forwards each distinct message set
 // to the viewer once. Not selectable text: no data-start anywhere inside.
 function GraphFence({
   spec,
   startOffset,
+  options,
   renderGraph,
   onErrors,
 }: {
   spec: string
   startOffset: number
+  options: GraphFenceOptions
   renderGraph: RenderGraph
   onErrors?: (messages: string[]) => void
 }) {
@@ -24,11 +57,30 @@ function GraphFence({
   const lastKey = useRef('')
   const onErrorsRef = useRef(onErrors)
   onErrorsRef.current = onErrors
+  const plotRef = useRef<HTMLDivElement | null>(null)
+  useGraphLock(plotRef, options.lock)
   const summary = graphErrorSummary(messages)
+  const { widthPct, height } = graphFenceStyle(options)
+  const style: CSSProperties = { width: `${widthPct}%`, maxWidth: '100%' }
+  const plotStyle: CSSProperties | undefined =
+    height !== undefined ? ({ '--graph-height': `${height}px` } as CSSProperties) : undefined
   return (
-    <div className="document-viewer-graph" data-graph-start={startOffset} contentEditable={false}>
-      <div className="document-viewer-graph-plot">
+    <div
+      className={`document-viewer-graph${options.lock ? ' document-viewer-graph-locked' : ''}`}
+      data-graph-start={startOffset}
+      data-graph-locked={options.lock ? 'true' : undefined}
+      style={style}
+      contentEditable={false}
+    >
+      <div
+        ref={plotRef}
+        className={`document-viewer-graph-plot${height !== undefined ? ' document-viewer-graph-plot-fixed' : ''}`}
+        style={plotStyle}
+      >
         {renderGraph(spec, {
+          view: options.view,
+          bounds: options.bounds,
+          lock: options.lock || undefined,
           onErrors(msgs) {
             const key = msgs.join('\u0000')
             if (key === lastKey.current) return
@@ -174,11 +226,12 @@ export default function TextContent({
             // Keyed by ordinal among graph fences (so edits elsewhere keep the
             // plot mounted) plus the spec (so a new spec remounts, which resets
             // the fence's error state without an effect racing the child's).
-            const key = `graph-${graphOrdinal++}:${graph.spec}`
+            const key = `graph-${graphOrdinal++}:${graphOptionsSignature(graph.options)}:${graph.spec}`
             return (
               <GraphFence
                 key={key}
                 spec={graph.spec}
+                options={graph.options}
                 startOffset={graph.startOffset}
                 renderGraph={renderGraph}
                 onErrors={onGraphErrors}
