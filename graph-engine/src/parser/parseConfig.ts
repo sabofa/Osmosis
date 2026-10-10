@@ -12,6 +12,17 @@ function parseBoolean(value: string): boolean | null {
   return null
 }
 
+// A log axis cannot show a range that reaches zero or below. Run from both
+// @bounds and @xscale/@yscale, so the directive order does not matter.
+function checkLogBounds(scales: GraphConfig['scales'], b: { xMin: number; xMax: number; yMin: number; yMax: number }): void {
+  if (scales.x === 'log' && b.xMin <= 0) {
+    throw new Error(`@xscale: log needs a positive x range in @bounds, got "${b.xMin}, ${b.xMax}"`)
+  }
+  if (scales.y === 'log' && b.yMin <= 0) {
+    throw new Error(`@yscale: log needs a positive y range in @bounds, got "${b.yMin}, ${b.yMax}"`)
+  }
+}
+
 // Mutates `config` in place with the directive on one "@key: value" line.
 // Throws with a human-readable message on an unknown key or a bad value —
 // caught by the caller (parseSpec) the same way a bad statement line is.
@@ -71,7 +82,9 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
       }
       const [xMin, xMax, yMin, yMax] = parts
       if (xMin >= xMax || yMin >= yMax) throw new Error(`@bounds min must be less than max, got "${value}"`)
-      config.bounds = { xMin, xMax, yMin, yMax }
+      const next = { xMin, xMax, yMin, yMax }
+      checkLogBounds(config.scales, next)
+      config.bounds = next
       return
     }
     case 'grid':
@@ -207,7 +220,9 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
       if (value !== 'linear' && value !== 'log') {
         throw new Error(`@${key} must be "linear" or "log", got "${value}"`)
       }
-      config.scales[key === 'xscale' ? 'x' : 'y'] = value
+      const next = { ...config.scales, [key === 'xscale' ? 'x' : 'y']: value }
+      if (config.bounds) checkLogBounds(next, config.bounds)
+      config.scales = next
       return
     }
     case 'point-labels': {

@@ -97,6 +97,49 @@ describe('@xscale and @yscale', () => {
   })
 })
 
+describe('log axes need a positive @bounds range', () => {
+  function parseAll(...lines: string[]) {
+    const config = defaultConfig()
+    for (const l of lines) parseConfigLine(l, config)
+    return config
+  }
+
+  it('refuses a log x axis whose range reaches zero or below', () => {
+    const msg = '@xscale: log needs a positive x range in @bounds, got "0, 10"'
+    expect(() => parseAll('@bounds: 0,10,1,5', '@xscale: log')).toThrow(msg)
+    expect(() => parseAll('@xscale: log', '@bounds: 0,10,1,5')).toThrow(msg)
+    expect(() => parseAll('@xscale: log', '@bounds: -3,10,1,5')).toThrow(/@xscale: log needs a positive x range/)
+  })
+
+  it('refuses a log y axis the same way', () => {
+    const msg = '@yscale: log needs a positive y range in @bounds, got "-1, 5"'
+    expect(() => parseAll('@bounds: 1,10,-1,5', '@yscale: log')).toThrow(msg)
+    expect(() => parseAll('@yscale: log', '@bounds: 1,10,-1,5')).toThrow(msg)
+  })
+
+  it('accepts a positive range, in either directive order', () => {
+    expect(parseAll('@bounds: 0.1,10,1,5', '@xscale: log').scales.x).toBe('log')
+    expect(parseAll('@xscale: log', '@bounds: 0.1,10,1,5').bounds).toEqual({ xMin: 0.1, xMax: 10, yMin: 1, yMax: 5 })
+    expect(parseAll('@bounds: 1,10,0.1,5', '@yscale: log').scales.y).toBe('log')
+    expect(parseAll('@yscale: log', '@bounds: 1,10,0.1,5').scales.y).toBe('log')
+  })
+
+  it('only checks the log axis: the other stays free to cross zero', () => {
+    expect(() => parseAll('@xscale: log', '@bounds: 0.1,10,-5,5')).not.toThrow()
+    expect(() => parseAll('@yscale: log', '@bounds: -5,5,0.1,10')).not.toThrow()
+  })
+
+  it('leaves linear axes alone with zero or negative bounds', () => {
+    expect(() => parseAll('@bounds: -10,0,-5,0')).not.toThrow()
+    expect(() => parseAll('@xscale: linear', '@yscale: linear', '@bounds: -10,10,-5,5')).not.toThrow()
+  })
+
+  it('a log axis with no @bounds is fine', () => {
+    const config = parseAll('@xscale: log')
+    expect(config.bounds).toBeNull()
+  })
+})
+
 describe('@point-labels', () => {
   it('parses off and coords', () => {
     expect(parse('@point-labels: coords').pointLabels).toBe('coords')
