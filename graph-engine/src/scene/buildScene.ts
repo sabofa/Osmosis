@@ -301,7 +301,11 @@ function sayImplicit(sampled: Sampled, what: 'curve' | 'region', line: number, c
 }
 
 function sampleImplicitStatement(statement: Statement & { kind: 'implicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
-  const sampled = sampleImplicit(statement.left, statement.right, statement.where ?? null, ctx.view, ctx.scope, optionsOf(statement.color, statementIndex, ctx))
+  // On a log axis the view is (u, v) and the sampler reads H(10^u, 10^v): every free x or y is rewritten (calc P4 4.4).
+  const scales = ctx.config.scales ?? LINEAR_SCALES
+  const through = (e: Expr): Expr => throughScales(e, scales)
+  const where = statement.where ? through(statement.where) : null
+  const sampled = sampleImplicit(through(statement.left), through(statement.right), where, ctx.view, ctx.scope, optionsOf(statement.color, statementIndex, ctx))
   return sayImplicit(sampled, 'curve', line, ctx)
 }
 
@@ -309,8 +313,10 @@ function optionsOf(color: string | null, statement: number, ctx: CurveContext): 
   return { statement, color, quality: ctx.quality, budget: ctx.budget }
 }
 
-function sampleRegionStatement(condition: Expr, color: string | null, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
-  const sampled = sampleRegion(condition, comparisonsOf(condition), ctx.view, ctx.scope, optionsOf(color, statementIndex, ctx))
+function sampleRegionStatement(written: Expr, color: string | null, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  // the whole condition, its if clause included, is read at (10^u, 10^v) on a log axis (calc P4 4.4)
+  const condition = throughScales(written, ctx.config.scales ?? LINEAR_SCALES)
+  const sampled = sampleRegion(condition, comparisonsOf(condition),ctx.view, ctx.scope, optionsOf(color, statementIndex, ctx))
   const objects = sayImplicit(sampled, 'region', line, ctx)
   // A region with an empty outline (x^2 + y^2 < 0) is nothing to fill, and has no boundary to stroke.
   return objects.filter((o) => o.kind !== 'region' || o.outline.length > 0)

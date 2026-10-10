@@ -1815,3 +1815,127 @@ describe('log axes (P4 4.3)', () => {
     expect(a).toEqual(b)
   })
 })
+
+describe('log axes: implicit curves and regions (P4 4.4)', () => {
+  type Curve = Extract<SceneObject, { kind: 'curve' }>
+  type Box = { xMin: number; xMax: number; yMin: number; yMax: number }
+  const SQUARE: Box = { xMin: -2, xMax: 2, yMin: -2, yMax: 2 }
+  const sceneIn = (spec: string, b: Box, scales?: { x: 'linear' | 'log'; y: 'linear' | 'log' }) => {
+    const parsed = parseSpec(spec)
+    const config = scales ? { ...parsed.config, scales } : parsed.config
+    return buildScene(parsed.statements, b, config, 140, parsed.statementLines)
+  }
+  const curvesOf = (scene: { objects: SceneObject[] }) => scene.objects.filter((o): o is Curve => o.kind === 'curve')
+  const regionIn = (scene: { objects: SceneObject[] }): Region => {
+    const r = regionsOf(scene)
+    if (r.length === 0) throw new Error('no region object')
+    return r[0]
+  }
+  // Sutherland-Hodgman against the view: the outline runs on into the overscan, the area asked for is the view's
+  const clipTo = (pts: Vec2[], b: Box): Vec2[] => {
+    const edges: { inside: (p: Vec2) => boolean; cut: (p: Vec2, q: Vec2) => Vec2 }[] = [
+      { inside: (p) => p.x >= b.xMin, cut: (p, q) => ({ x: b.xMin, y: p.y + ((q.y - p.y) * (b.xMin - p.x)) / (q.x - p.x) }) },
+      { inside: (p) => p.x <= b.xMax, cut: (p, q) => ({ x: b.xMax, y: p.y + ((q.y - p.y) * (b.xMax - p.x)) / (q.x - p.x) }) },
+      { inside: (p) => p.y >= b.yMin, cut: (p, q) => ({ y: b.yMin, x: p.x + ((q.x - p.x) * (b.yMin - p.y)) / (q.y - p.y) }) },
+      { inside: (p) => p.y <= b.yMax, cut: (p, q) => ({ y: b.yMax, x: p.x + ((q.x - p.x) * (b.yMax - p.y)) / (q.y - p.y) }) },
+    ]
+    let ring = pts
+    for (const e of edges) {
+      const next: Vec2[] = []
+      for (let i = 0; i < ring.length; i++) {
+        const p = ring[i]
+        const q = ring[(i + 1) % ring.length]
+        if (e.inside(q)) {
+          if (!e.inside(p)) next.push(e.cut(p, q))
+          next.push(q)
+        } else if (e.inside(p)) next.push(e.cut(p, q))
+      }
+      ring = next
+    }
+    return ring
+  }
+  // even-odd area of nested rings inside the view, in whatever units the outline is in
+  const areaOf = (region: Region, view: Box): number => {
+    const areas = region.outline
+      .map((chain) => {
+        const pts = clipTo(chainPoints(chain), view)
+        let a = 0
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i]
+          const q = pts[(i + 1) % pts.length]
+          a += p.x * q.y - q.x * p.y
+        }
+        return Math.abs(a) / 2
+      })
+      .sort((a, b) => b - a)
+    return areas.reduce((sum, a, i) => sum + (i % 2 === 0 ? a : -a), 0)
+  }
+
+  it('x*y = 1 on log-log is the straight line u + v = 0', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\nx*y = 1', SQUARE)
+    expect(scene.errors).toEqual([])
+    const pts = curvesOf(scene).flatMap(vertices)
+    expect(pts.length).toBeGreaterThan(10)
+    const worst = Math.max(...pts.map((p) => Math.abs(p.x + p.y)))
+    expect(worst).toBeLessThan(0.00125)
+  })
+
+  it('1 < x*y < 10 on log-log is the strip 0 < u + v < 1 with straight dashed edges', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\n1 < x*y < 10', SQUARE)
+    expect(scene.errors).toEqual([])
+    expect(Math.abs(areaOf(regionIn(scene), SQUARE) - 3.5) / 3.5).toBeLessThan(0.005)
+    const edges = boundaries(scene)
+    expect(edges.length).toBeGreaterThan(0)
+    for (const c of edges) {
+      expect(c.dashed).toBe(true)
+      const pts = vertices(c)
+      const sums = pts.map((p) => p.x + p.y)
+      const near = (k: number) => sums.every((s) => Math.abs(s - k) < 0.00125)
+      expect(near(0) || near(1)).toBe(true)
+    }
+  })
+
+  it('y < ln(x) with a log x axis fills y < u ln 10', () => {
+    const b = { xMin: -1, xMax: 2, yMin: -4, yMax: 4 }
+    const scene = sceneIn('@xscale: log\ny < ln(x)', b)
+    expect(scene.errors).toEqual([])
+    const steps = 20000
+    let expected = 0
+    for (let i = 0; i < steps; i++) {
+      const u = b.xMin + ((i + 0.5) * (b.xMax - b.xMin)) / steps
+      expected += Math.min(8, Math.max(0, u * Math.LN10 + 4)) * ((b.xMax - b.xMin) / steps)
+    }
+    expect(Math.abs(areaOf(regionIn(scene), b) - expected) / expected).toBeLessThan(0.005)
+  })
+
+  it('an if clause is read at 10^u: x^2 + y^2 < 100 if x > 1 starts at u = 0', () => {
+    const scene = sceneIn('@xscale: log\nx^2 + y^2 < 100 if x > 1', { xMin: -1, xMax: 2, yMin: -12, yMax: 12 })
+    expect(scene.errors).toEqual([])
+    const regions = regionsOf(scene)
+    expect(regions.length).toBeGreaterThan(0)
+    const us = regions.flatMap((r) => r.outline.flatMap(chainPoints)).map((p) => p.x)
+    expect(Math.abs(Math.min(...us))).toBeLessThan(0.02)
+    expect(fineProbes(regions, -0.95, -0.001, -9, 9)).toEqual([])
+    expect(fineProbes(regions, 0.02, 0.5, -1, 1).length).toBeGreaterThan(0)
+  })
+
+  it('x^2 + y^2 = 4 on log-log satisfies the equation at every vertex', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\nx^2 + y^2 = 4', SQUARE)
+    expect(scene.errors).toEqual([])
+    const pts = curvesOf(scene).flatMap(vertices)
+    expect(pts.length).toBeGreaterThan(10)
+    for (const p of pts) expect(Math.abs((10 ** p.x) ** 2 + (10 ** p.y) ** 2 - 4) / 4).toBeLessThan(1e-3)
+  })
+
+  it('is deterministic', () => {
+    const spec = '@xscale: log\n@yscale: log\n1 < x*y < 10\nx^2 + y^2 = 4'
+    expect(sceneIn(spec, SQUARE)).toEqual(sceneIn(spec, SQUARE))
+  })
+
+  it('linear scales build the same scene as no scales', () => {
+    const spec = '1 < x^2 + y^2 < 4\nx*y = 1\nx^2 + y^2 < 9 if x > 1'
+    const a = sceneIn(spec, bounds)
+    const b = sceneIn(spec, bounds, { x: 'linear', y: 'linear' })
+    expect(a).toEqual(b)
+  })
+})
