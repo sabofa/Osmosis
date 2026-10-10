@@ -49,3 +49,6 @@ export const MIN_DIVISIONS = 3
 export const MAX_DIVISIONS = 14
 /** Hard cap on ticks per axis. */
 export const MAX_TICKS = 10000
+
+/** How far a plot view may zoom, relative to the fitted @bounds window (zoom 1). Wide on purpose. */
+export const PLOT_ZOOM = { min: 1e-4, max: 1e6 } as const
