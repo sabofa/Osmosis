@@ -37,6 +37,8 @@ interface Plane {
   place(p: Vec2): Vec2
   forwardX(x: number): number
   forwardY(y: number): number
+  inverseX(u: number): number
+  inverseY(v: number): number
 }
 
 function planeOf(config: GraphConfig): Plane {
@@ -52,7 +54,7 @@ function planeOf(config: GraphConfig): Plane {
     if (Number.isNaN(q.y)) throw new Error("a point at y ≤ 0 can't be drawn on a log axis")
     return q
   }
-  return { log, scales: { x: scales.x, y: scales.y }, toPlane, place, forwardX: sx.forward, forwardY: sy.forward }
+  return { log, scales: { x: scales.x, y: scales.y }, toPlane, place, forwardX: sx.forward, forwardY: sy.forward, inverseX: sx.inverse, inverseY: sy.inverse }
 }
 // The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
 // works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
@@ -269,9 +271,14 @@ function buildFeaturePoints(
   statements: Statement[],
   bounds: Bounds,
   config: GraphConfig,
-  scope: MathScope
+  scope: MathScope,
+  plane: Plane
 ): SceneObject[] {
   if (config.points.size === 0) return []
+  // The features are found numerically in WORLD coordinates: on a log axis `bounds` is the (u, v) plane,
+  // so the search window is its image under the inverse scale, and the results are mapped back onto the plane.
+  const worldX0 = plane.inverseX(bounds.xMin)
+  const worldX1 = plane.inverseX(bounds.xMax)
 
   const callables: ((x: number) => number)[] = []
   const found: FeaturePoint[] = []
@@ -293,20 +300,24 @@ function buildFeaturePoints(
       continue
     }
     callables.push(f)
-    found.push(...explicitFeatures(f, bounds.xMin, bounds.xMax, config.points))
+    found.push(...explicitFeatures(f, worldX0, worldX1, config.points))
   }
 
   if (config.points.has('intersection')) {
-    found.push(...intersectionFeatures(callables, bounds.xMin, bounds.xMax))
+    found.push(...intersectionFeatures(callables, worldX0, worldX1))
   }
 
   // No `style` here on purpose: a feature point's appearance is chosen from
   // its kind by the renderer (see render/featureMarker.ts), not set here. The
   // scene layer must not import from render/.
-  return found.map((feature) => ({
+  // (the label keeps the world coordinates; a feature a log axis cannot place, such as the y-intercept at x = 0, is left out)
+  return found.flatMap((feature) => {
+    const position = plane.toPlane(feature.position)
+    return plane.log && (Number.isNaN(position.x) || Number.isNaN(position.y)) ? [] : [{ feature, position }]
+  }).map(({ feature, position }) => ({
     kind: 'point' as const,
     label: featureLabel(feature, config),
-    position: feature.position,
+    position,
     feature: feature.kind,
     exact: feature.exact,
   }))
@@ -360,7 +371,10 @@ function withWhere(condition: Expr, where: Expr | undefined): Expr {
 
 // One short tick per grid point, angled by the local slope — a direction
 // field for dy/dx = f(x,y).
-function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, scope: MathScope): SceneObject[] {
+// On a log axis the lattice is in the plane (u, v) and the slope is read at the world point (10^u, 10^v); the
+// tick's direction in the plane is dv/du, by the chain rule: s (linear), s x ln10 (log x), s / (y ln10) (log y),
+// s x / y (log-log).
+function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, scope: MathScope, plane: Plane): SceneObject[] {
   const dx = (bounds.xMax - bounds.xMin) / FIELD_DIVISIONS
   const dy = (bounds.yMax - bounds.yMin) / FIELD_DIVISIONS
   const tickLen = Math.min(dx, dy) * 0.7
@@ -374,7 +388,14 @@ function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, sc
     const y = bounds.yMin + j * dy
     for (let i = -extra; i <= FIELD_DIVISIONS + extra; i++) {
       const x = bounds.xMin + i * dx
-      const slope = body(x, y)
+      let slope: number
+      if (plane.log) {
+        const wx = plane.inverseX(x)
+        const wy = plane.inverseY(y)
+        slope = body(wx, wy)
+        if (plane.scales.x === 'log') slope *= plane.scales.y === 'log' ? wx / wy : wx * Math.LN10
+        else slope /= wy * Math.LN10
+      } else slope = body(x, y)
       // An undefined slope (NaN) has no direction to draw; an infinite one is
       // a vertical tick, as it always was.
       if (Number.isNaN(slope)) continue
@@ -612,8 +633,9 @@ export function buildScene(
         const chain = and(compare(statement.lowOp, statement.low, statement.mid), compare(statement.highOp, statement.mid, statement.high))
         objects.push(...sampleRegionStatement(withWhere(chain, statement.where), statement.color, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'field') {
-        objects.push(...buildField(statement, bounds, scope))
+        objects.push(...buildField(statement, bounds, scope, plane))
       } else if (statement.kind === 'tangent') {
+        if (plane.log) throw new Error('tangent lines need linear axes')
         objects.push(...buildTangent(statement, statementIndex, bounds, scope))
       } else if (statement.kind === 'scatter') {
         const built = buildScatter(statement, statementIndex, bounds, scope, plane, (message) => errors.push({ line: lineOf(statementIndex), message }))
@@ -669,6 +691,7 @@ export function buildScene(
         const magnitude = Math.hypot(to.x - from.x, to.y - from.y)
         objects.push({ kind: 'ray', from: plane.place(from), to: plane.place(to), label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
       } else if (statement.kind === 'circle') {
+        if (plane.log) throw new Error('circles need linear axes')
         objects.push(...buildCircle(statement, statementIndex, scope))
       } else if (statement.kind === 'polygon') {
         objects.push(...buildPolygon(statement, scope, plane))
@@ -723,7 +746,7 @@ export function buildScene(
     }
   }
 
-  objects.push(...buildFeaturePoints(statements, bounds, config, scope))
+  objects.push(...buildFeaturePoints(statements, bounds, config, scope, plane))
 
   return plane.log ? { objects, errors, regression, stats, scales: plane.scales } : { objects, errors, regression, stats }
 }

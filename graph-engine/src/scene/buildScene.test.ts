@@ -1990,3 +1990,54 @@ describe('log axes: the remaining objects (P4 4.5a)', () => {
     expect(sceneIn('(100, 10)').objects[0]).toMatchObject({ position: { x: 100, y: 10 } })
   })
 })
+
+describe('log axes: fields, features, tangents, circles (P4 4.5b)', () => {
+  const sceneIn = (spec: string, b: { xMin: number; xMax: number; yMin: number; yMax: number }) => {
+    const parsed = parseSpec(spec)
+    return buildScene(parsed.statements, b, parsed.config, 140, parsed.statementLines)
+  }
+  const LOGB = { xMin: -1, xMax: 2, yMin: -1, yMax: 2 }
+  const angles = (scene: ReturnType<typeof sceneIn>) =>
+    scene.objects.flatMap((o) => (o.kind === 'segments' ? o.pairs.map(([a, b]) => Math.atan2(b.y - a.y, b.x - a.x)) : []))
+
+  it('a slope field of dy/dx = y/x on log-log has every tick at 45 degrees', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\nfield: dy/dx = y/x', LOGB)
+    expect(scene.errors).toEqual([])
+    const as = angles(scene)
+    expect(as.length).toBeGreaterThan(100)
+    for (const a of as) expect(Math.abs(a - Math.PI / 4)).toBeLessThan(0.01)
+  })
+
+  it('a slope field on a log x axis slopes by s * x * ln 10, on a log y axis by s / (y ln 10)', () => {
+    // dy/dx = 1/(x ln 10) is dy/du = 1 on log x: 45 degrees
+    const x = sceneIn('@xscale: log\nfield: dy/dx = 1/(x*ln(10))', { xMin: -1, xMax: 2, yMin: -1, yMax: 2 })
+    for (const a of angles(x)) expect(Math.abs(a - Math.PI / 4)).toBeLessThan(0.01)
+    // dy/dx = y ln 10 is dv/dx = 1 on log y: 45 degrees
+    const y = sceneIn('@yscale: log\nfield: dy/dx = y*ln(10)', { xMin: -1, xMax: 2, yMin: -1, yMax: 2 })
+    for (const a of angles(y)) expect(Math.abs(a - Math.PI / 4)).toBeLessThan(0.01)
+  })
+
+  it('a root marker on a log x axis sits at u = log10(root) and is labelled in world coordinates', () => {
+    const scene = sceneIn('@xscale: log\n@points: roots\n@point-labels: coords\ny = x^2 - 4', { xMin: -1, xMax: 2, yMin: -6, yMax: 6 })
+    expect(scene.errors).toEqual([])
+    const roots = scene.objects.filter((o) => o.kind === 'point' && o.feature === 'x-intercept')
+    expect(roots).toHaveLength(1)
+    const root = roots[0]
+    if (root.kind !== 'point') throw new Error('unreachable')
+    expect(Math.abs(root.position.x - Math.log10(2))).toBeLessThan(1e-6)
+    expect(Math.abs(root.position.y)).toBeLessThan(1e-6)
+    expect(root.label).toBe('(2, 0)')
+  })
+
+  it('a tangent and a circle are refused on a log axis, and unchanged on linear ones', () => {
+    const t = sceneIn('@xscale: log\nf(x) = x^2\ntangent: f(x) at x = 1', LOGB)
+    expect(t.errors).toEqual([{ line: 3, message: 'tangent lines need linear axes' }])
+    expect(t.objects.filter((o) => o.kind === 'point' || (o.kind === 'curve' && o.id.object === 'tangent'))).toEqual([])
+    const c = sceneIn('@yscale: log\ncircle: (2, 3), 1', LOGB)
+    expect(c.errors).toEqual([{ line: 2, message: 'circles need linear axes' }])
+    expect(c.objects).toEqual([])
+    const lin = sceneIn('f(x) = x^2\ntangent: f(x) at x = 1\ncircle: (2, 3), 1', { xMin: -5, xMax: 5, yMin: -5, yMax: 5 })
+    expect(lin.errors).toEqual([])
+    expect(lin.objects.length).toBeGreaterThan(1)
+  })
+})
