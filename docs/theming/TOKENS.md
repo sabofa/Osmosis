@@ -153,6 +153,7 @@ Every token is a CSS custom property `--<name>`. There are two tiers: semantic t
 | --- | --- | --- | --- | --- | --- | --- |
 | `surface-alpha` | semantic | number | same | Opacity of translucent surfaces (1 is solid); falls as the theme gets glassier. | `1` | `1` |
 | `surface-blur` | semantic | length | same | Backdrop blur behind translucent surfaces; 0 for solid themes. | `0px` | `0px` |
+| `callout-alpha` | semantic | number | same | Opacity of callouts and note boxes that sit over content. | `0.92` | `0.92` |
 
 ## graph
 
@@ -176,6 +177,8 @@ Every token is a CSS custom property `--<name>`. There are two tiers: semantic t
 | `graph-marker-conic-vertex` | semantic | color | both | Marker colour for conic vertex features on a graph (data colour 8). | `#8479ca` | `#a995e8` |
 | `graph-marker-intersection` | semantic | color | both | Marker colour for intersection features on a graph (data colour 1). | `#c06d44` | `#e08e5b` |
 | `graph-region-alpha` | semantic | number | same | Opacity of shaded regions (inequalities, areas under curves). | `0.18` | `0.18` |
+| `graph-paper-alpha` | semantic | number | same | Opacity of the graph paper background. Chalk and whiteboard papers keep a higher floor so curves stay legible. | `1` | `1` |
+| `graph-grid-alpha` | semantic | number | same | Opacity of the graph gridlines. | `1` | `1` |
 
 ## document
 
@@ -190,6 +193,9 @@ Every token is a CSS custom property `--<name>`. There are two tiers: semantic t
 | `doc-table-stripe` | semantic | color | both | Background of alternate (striped) table rows in documents. | `#f7f7f7` | `#25231a` |
 | `doc-measure` | semantic | length | same | Maximum line length of document text, for comfortable reading. | `68ch` | `68ch` |
 | `doc-font-body` | semantic | font | same | Font stack for document body text. Defaults to the UI body font; the document engine's reading themes override it without touching UI fonts. | `'Inter', system-ui, sans-serif` | `'Inter', system-ui, sans-serif` |
+| `doc-sheet-alpha` | semantic | number | same | Opacity of the document sheet (the page the text sits on). 1 is solid paper; lower lets the ambience show through behind the text. Never below its floor, so text stays readable. | `1` | `1` |
+| `doc-surface-alpha` | semantic | number | same | Opacity of surfaces inside a document: tables, code blocks, quotes and boxes drawn over the sheet. | `0.9` | `0.9` |
+| `doc-media-alpha` | semantic | number | same | Opacity of pictures and PDFs placed in a document. Never less opaque than the document sheet. | `0.95` | `0.95` |
 
 ## component
 

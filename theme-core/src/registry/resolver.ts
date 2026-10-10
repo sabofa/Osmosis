@@ -1,6 +1,7 @@
 import type { Oklch } from '../colour.js'
 import { parseColour } from '../colour.js'
 import type { Dials, FontRef, FontRole, Mode } from '../manifest.js'
+import { formatAlpha } from '../layerTokens.js'
 import { isValidTokenValue, type DeriveCtx, type SeedKey, type TokenDef } from './types.js'
 
 export interface ModeSeeds {
@@ -77,6 +78,10 @@ export function createResolver(i: ResolverInput): {
     else {
       stack.push(name)
       try { v = d.derive(ctx) } finally { stack.pop() }
+    }
+    if (d.type === 'number' && (d.min !== undefined || d.max !== undefined)) {
+      const n = Number(v)
+      if (Number.isFinite(n)) v = formatAlpha(Math.min(d.max ?? n, Math.max(d.min ?? n, n)))
     }
     memo.set(name, v)
     return v

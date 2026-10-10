@@ -53,7 +53,7 @@ if [[ "$REPO_DIR" != "$INSTALL_DIR" ]]; then
     # tar cannot delete: a source file removed from the repo would otherwise
     # linger in the copy and break the next build. Drop every workspace's
     # src/ first; dist/ and node_modules/ are rebuilt or reused as before.
-    for ws in server web graph-engine document-engine cli cli-core theme-core scripts/mcp-batch; do
+    for ws in server web graph-engine document-engine cli cli-core theme-core engine-host scripts/mcp-batch; do
       rm -rf "$INSTALL_DIR/$ws/src"
     done
     (cd "$REPO_DIR" && tar --exclude=node_modules --exclude=.git --exclude='*/dist' -cf - .) | (cd "$INSTALL_DIR" && tar -xf -)
@@ -64,12 +64,15 @@ cd "$INSTALL_DIR"
 log "Installing dependencies"
 npm ci --no-audit --no-fund
 
+log "Building theme-core and engine-host"
+npm run build --workspace=theme-core
+npm run build --workspace=engine-host
+
 log "Building graph-engine and document-engine libraries"
 npm run build:lib --workspace=graph-engine
 npm run build:lib --workspace=document-engine
 
 log "Building web app"
-npm run build --workspace=theme-core
 npm run build --workspace=cli-core
 npm run build --workspace=cli
 npm run build --workspace=web

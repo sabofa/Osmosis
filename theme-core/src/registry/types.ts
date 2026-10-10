@@ -35,6 +35,9 @@ export interface TokenDef {
   pattern?: RegExp
   /** Short human description of the pattern, used in error messages. */
   patternHint?: string
+  /** Inclusive numeric range for number tokens; the resolver clamps into it (never throws for range). */
+  min?: number
+  max?: number
   derive(ctx: DeriveCtx): string
 }
 
@@ -44,7 +47,7 @@ export function def(
   type: TokenType,
   meaning: string,
   derive: (ctx: DeriveCtx) => string,
-  opts: { tier?: Tier; modeDependent?: boolean; allowed?: readonly string[]; pattern?: RegExp; patternHint?: string } = {},
+  opts: { tier?: Tier; modeDependent?: boolean; allowed?: readonly string[]; pattern?: RegExp; patternHint?: string; min?: number; max?: number } = {},
 ): TokenDef {
   const d: TokenDef = {
     name, group, type, meaning, derive,
@@ -54,6 +57,8 @@ export function def(
   if (opts.allowed) d.allowed = opts.allowed
   if (opts.pattern) d.pattern = opts.pattern
   if (opts.patternHint) d.patternHint = opts.patternHint
+  if (opts.min !== undefined) d.min = opts.min
+  if (opts.max !== undefined) d.max = opts.max
   return d
 }
 

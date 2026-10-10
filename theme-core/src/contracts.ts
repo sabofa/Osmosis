@@ -1,11 +1,15 @@
 import { DEFAULT_DIALS, type Mode, type ThemeManifest } from './manifest.js'
 import type { ResolvedTheme, TokenMap } from './resolve.js'
+import { resolveLayerAlphas } from './layerTokens.js'
 
 export type BoardName = 'blackboard' | 'greenboard' | 'whiteboard'
 export interface GraphColours {
   surface: string; paper: string; ink: string; muted: string; line: string; lineStrong: string
   accent: string; accentWash: string; good: string; bad: string; series: string[]
 }
+export interface DocumentAlphas { sheet: number; surface: number; callout: number; media: number }
+export interface GraphAlphas { paper: number; grid: number; region: number; callout: number; docSurface: number }
+
 export interface GraphThemeSource {
   mode: Mode
   colours: GraphColours
@@ -15,6 +19,8 @@ export interface GraphThemeSource {
   media?: Record<string, unknown>
   styles?: unknown
   lettering?: { family?: string }
+  /** Theme-only layer opacities (before device overrides). Optional: older engines ignore it. */
+  alphas?: GraphAlphas
 }
 
 export interface DocumentTokens {
@@ -29,6 +35,8 @@ export interface DocumentTokens {
   fonts: { body: string; display: string; mono: string; math: string; cjk: string }
   scale: { base: string; ratio: number; leading: string; measure: string }
   key: string
+  /** Theme-only layer opacities (before device overrides); media is already max(media, sheet). */
+  alphas: DocumentAlphas
 }
 
 const tok = (m: TokenMap, name: string): string => {
@@ -37,12 +45,19 @@ const tok = (m: TokenMap, name: string): string => {
   return v
 }
 
+const themeAlphas = (m: TokenMap): Record<string, number> => resolveLayerAlphas(m)
+
 const graphColours = (m: TokenMap): GraphColours => ({
   surface: tok(m, 'color-surface'), paper: tok(m, 'graph-paper'), ink: tok(m, 'graph-ink'),
   muted: tok(m, 'color-text-muted'), line: tok(m, 'graph-grid'), lineStrong: tok(m, 'graph-grid-strong'),
   accent: tok(m, 'color-accent'), accentWash: tok(m, 'color-accent-wash'), good: tok(m, 'color-good'), bad: tok(m, 'color-bad'),
   series: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => tok(m, `color-series-${i}`)),
 })
+
+const graphAlphas = (m: TokenMap): GraphAlphas => {
+  const a = themeAlphas(m)
+  return { paper: a['graph-paper-alpha']!, grid: a['graph-grid-alpha']!, region: a['graph-region-alpha']!, callout: a['callout-alpha']!, docSurface: a['doc-surface-alpha']! }
+}
 
 export function toGraphThemeSource(r: ResolvedTheme, manifest: ThemeManifest, mode: Mode): GraphThemeSource {
   const other: Mode = mode === 'light' ? 'dark' : 'light'
@@ -55,6 +70,7 @@ export function toGraphThemeSource(r: ResolvedTheme, manifest: ThemeManifest, mo
     media: g?.media,
     styles: g?.styles,
     lettering: { family: tok(r[mode], 'font-display') },
+    alphas: graphAlphas(r[mode]),
   }
 }
 
@@ -84,5 +100,6 @@ export function toDocumentTokens(r: ResolvedTheme, manifest: ThemeManifest, mode
       leading: tok(m, 'leading-normal'), measure: tok(m, 'doc-measure'),
     },
     key: r.key,
+    alphas: ((a) => ({ sheet: a['doc-sheet-alpha']!, surface: a['doc-surface-alpha']!, callout: a['callout-alpha']!, media: a['doc-media-alpha']! }))(themeAlphas(m)),
   }
 }

@@ -27,7 +27,9 @@ describe('contracts', () => {
     })
     it(`${m.id}/${mode} document complete`, () => {
       const d = toDocumentTokens(r, m, mode)
-      expect(allStrings({ ...d, scale: { ...d.scale, ratio: 'x' } })).toBe(true)
+      expect(allStrings({ ...d, scale: { ...d.scale, ratio: 'x' }, alphas: {} })).toBe(true)
+      for (const v of Object.values(d.alphas)) expect(typeof v).toBe('number')
+      for (const v of Object.values(toGraphThemeSource(r, m, mode).alphas!)) expect(typeof v).toBe('number')
       expect(d.colors.highlight).toHaveLength(4)
       expect(d.key).toBe(r.key)
       expect(d.mode).toBe(mode)
@@ -62,10 +64,46 @@ describe('contracts', () => {
     const g = toGraphThemeSource(r, a, 'light')
     const d = toDocumentTokens(r, a, 'light')
     expect(Object.keys(g.colours)).toEqual(['surface', 'paper', 'ink', 'muted', 'line', 'lineStrong', 'accent', 'accentWash', 'good', 'bad', 'series'])
-    expect(Object.keys(d)).toEqual(['mode', 'colors', 'fonts', 'scale', 'key'])
+    expect(Object.keys(d)).toEqual(['mode', 'colors', 'fonts', 'scale', 'key', 'alphas'])
+    expect(Object.keys(d.alphas)).toEqual(['sheet', 'surface', 'callout', 'media'])
+    expect(Object.keys(g.alphas!)).toEqual(['paper', 'grid', 'region', 'callout', 'docSurface'])
     expect(Object.keys(d.colors)).toEqual(['page', 'text', 'textMuted', 'link', 'rule', 'selection', 'highlight', 'codeBg', 'codeText', 'syntax', 'tableHeader', 'tableStripe', 'accent'])
     expect(Object.keys(d.colors.syntax)).toEqual(['keyword', 'string', 'number', 'comment', 'function', 'type', 'operator', 'punctuation'])
     expect(Object.keys(d.fonts)).toEqual(['body', 'display', 'mono', 'math', 'cjk'])
     expect(Object.keys(d.scale)).toEqual(['base', 'ratio', 'leading', 'measure'])
+  })
+
+  describe('alphas', () => {
+    const mk = (dials: Record<string, number> = {}, any: Record<string, string> = {}) =>
+      normalise({ id: 'z', name: 'Z', dials, overrides: { any } } as never)
+    const docA = (m: ReturnType<typeof mk>, mode: Mode = 'light') => toDocumentTokens(resolve(m), m, mode).alphas
+    it('default theme', () => {
+      expect(docA(a)).toEqual({ sheet: 1, surface: 0.9, callout: 0.92, media: 1 })
+      const g = toGraphThemeSource(resolve(a), a, 'light').alphas!
+      expect(g).toEqual({ paper: 1, grid: 1, region: 0.18, callout: 0.92, docSurface: 0.9 })
+    })
+    it('dial 1 gives the floors', () => {
+      expect(docA(mk({ translucency: 1 }))).toEqual({ sheet: 0.55, surface: 0.6, callout: 0.7, media: 0.7 })
+      const g = toGraphThemeSource(resolve(mk({ translucency: 1 })), mk({ translucency: 1 }), 'dark').alphas!
+      expect(g).toEqual({ paper: 0.25, grid: 0.15, region: 0.18, callout: 0.7, docSurface: 0.6 })
+    })
+    it('media is never below the sheet', () => {
+      expect(docA(mk({}, { 'doc-sheet-alpha': '0.6' })).media).toBe(0.95)
+      expect(docA(mk({}, { 'doc-sheet-alpha': '0.6', 'doc-media-alpha': '0.65' })).media).toBe(0.7)
+      expect(docA(mk({}, { 'doc-sheet-alpha': '0.8', 'doc-media-alpha': '0.75' })).media).toBe(0.8)
+    })
+    it('the document key changes when an alpha changes', () => {
+      const k = (any: Record<string, string>) => { const m = mk({}, any); return toDocumentTokens(resolve(m), m, 'light').key }
+      expect(k({ 'callout-alpha': '0.8' })).not.toBe(k({}))
+      expect(k({ 'callout-alpha': '0.8' })).not.toBe(k({ 'callout-alpha': '0.9' }))
+      expect(k({})).toBe(k({}))
+    })
+    it('finite numbers in [0,1], both modes', () => {
+      for (const m of [a, b, mk({ translucency: 0.5 })]) for (const mode of modes) {
+        const vals = [...Object.values(docA(m, mode)), ...Object.values(toGraphThemeSource(resolve(m), m, mode).alphas!)]
+        for (const v of vals) { expect(Number.isFinite(v)).toBe(true); expect(v).toBeGreaterThanOrEqual(0); expect(v).toBeLessThanOrEqual(1) }
+        expect(docA(m, 'light')).toEqual(docA(m, 'dark'))
+      }
+    })
   })
 })
