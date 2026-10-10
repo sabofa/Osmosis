@@ -199,9 +199,28 @@
   align-items: center;
   gap: 12px;
   padding: 16px;
+  /* Grow with the widest page (zoomed in) so it scrolls instead of being
+     clipped at the left by the centring. */
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* The engine's per-page wrapper: holds the canvas and text layer at the
+   scale they were drawn at, CSS-stretched to the current zoom meanwhile. */
+.document-viewer-pdf-inner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.document-viewer-pdf-inner canvas {
+  display: block;
 }
 
 .document-viewer-pdf-page {
+  flex-shrink: 0;
   position: relative;
   border-radius: var(--de-radius-sm);
   overflow: hidden;

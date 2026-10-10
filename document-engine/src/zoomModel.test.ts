@@ -125,7 +125,7 @@ describe('wheelZoomFactor', () => {
     expect(wheelZoomFactor(0)).toBe(1)
   })
   it('caps a huge delta', () => {
-    expect(wheelZoomFactor(100000)).toBeCloseTo(Math.exp(-1))
+    expect(wheelZoomFactor(100000)).toBeCloseTo(Math.exp(-0.25))
   })
 })
 

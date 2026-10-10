@@ -54,6 +54,10 @@ export interface DocumentViewerProps {
   // reopening picks up where the reader was. The viewer does not know why.
   gated?: boolean
   gatedLabel?: string
+  // Zoom the document opens at. Default: 'fit-width' for PDFs and images, 1
+  // for text. Fit modes are ignored for text; numbers are clamped to the
+  // asset's range.
+  initialZoom?: ZoomMode
 }
 
 // Plain text/markdown keeps a narrower numeric range and no fit modes.
@@ -115,7 +119,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const paged = (isPdf && !!asset.url) || (isImage && !!asset.url)
   const zoomMin = paged ? ZOOM_MIN : TEXT_ZOOM_MIN
   const zoomMax = paged ? ZOOM_MAX : TEXT_ZOOM_MAX
-  const defaultZoom: ZoomMode = paged ? 'fit-width' : 1
+  const defaultZoom: ZoomMode = props.initialZoom !== undefined && (paged || !isFitMode(props.initialZoom)) ? props.initialZoom : paged ? 'fit-width' : 1
   const [zoom, setZoomState] = useState<ZoomMode>(defaultZoom)
   const [pageSizes, setPageSizes] = useState<Size[]>([])
   const [container, setContainer] = useState<Size>({ w: 0, h: 0 })

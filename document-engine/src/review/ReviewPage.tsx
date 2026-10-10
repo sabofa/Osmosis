@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-core'
 import type { DocumentTokens } from 'theme-core'
 import DocumentViewer from '../DocumentViewer'
+import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentLayer, RenderGraph } from '../types'
 
 // Dev-only harness: the viewer over a gaudy blurred scene, inside a "sheet"
@@ -81,7 +82,43 @@ export default function ReviewPage(): ReactNode {
   const mode = q.get('mode') === 'dark' ? 'dark' : 'light'
   const kase = q.get('case') ?? 'normal'
   const tokens = useMemo(() => tokensFor(mode), [mode])
-  const [hl, setHl] = useState(HIGHLIGHTS)
+  const hlQuote = q.get('hl')
+  const [hl, setHl] = useState<DocumentHighlight[]>(hlQuote ? [{ id: 'pq', color: 'yellow', start: 0, end: [...hlQuote].length, quote: hlQuote }] : HIGHLIGHTS)
+  // ?case=pdf&pdf=/review-shots/sample.pdf&zoom=fit-page|0.25|5&steps=in,in,out&bench=1
+  const pdf = kase === 'pdf'
+  const zoomParam = q.get('zoom')
+  const initialZoom: ZoomMode | undefined = !zoomParam ? undefined : zoomParam.startsWith('fit-') ? (zoomParam as ZoomMode) : Number(zoomParam)
+  useEffect(() => {
+    if (!pdf) return
+    const steps = (q.get('steps') ?? '').split(',').filter(Boolean)
+    const bench = q.has('bench')
+    const click = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click()
+    const timers: ReturnType<typeof setTimeout>[] = []
+    steps.forEach((s, i) => timers.push(setTimeout(() => click(s === 'in' ? 'Zoom in' : 'Zoom out'), 2500 + i * 1500)))
+    if (bench) {
+      // Cost of a zoom step as the reader feels it: click -> next two frames
+      // (layout + paint of the stretched pages), then click -> sharp redraw.
+      timers.push(
+        setTimeout(async () => {
+          const out: string[] = []
+          const frames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+          for (let i = 0; i < 6; i++) {
+            const t0 = performance.now()
+            click(i % 2 === 0 ? 'Zoom in' : 'Zoom out')
+            const tSync = performance.now() - t0
+            await frames()
+            out.push(`step${i}: sync=${tSync.toFixed(1)}ms frames=${(performance.now() - t0).toFixed(1)}ms`)
+            await new Promise((r) => setTimeout(r, 700))
+          }
+          const pre = document.createElement('pre')
+          pre.id = 'bench'
+          pre.textContent = 'BENCH ' + out.join(' | ') + ` | pages=${document.querySelectorAll('.document-viewer-pdf-page').length} canvases=${document.querySelectorAll('.document-viewer-pdf-page canvas').length}`
+          document.body.appendChild(pre)
+        }, 3000)
+      )
+    }
+    return () => timers.forEach(clearTimeout)
+  }, [pdf, q])
   useEffect(() => { document.body.style.margin = '0' }, [])
   const sheetBg = `color-mix(in srgb, ${tokens.colors.page} ${opacity * 100}%, transparent)`
 
@@ -101,7 +138,8 @@ export default function ReviewPage(): ReactNode {
         }}
       >
         <DocumentViewer
-          asset={{ type: 'text', mime: 'text/markdown', content: MD, extractedText: MD }}
+          asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: MD, extractedText: MD }}
+          initialZoom={initialZoom}
           tokens={tokens}
           interaction={kase === 'edit' ? 'edit' : 'annotate'}
           chrome={kase === 'embedded' ? 'embedded' : 'full'}

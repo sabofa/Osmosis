@@ -1,4 +1,5 @@
 // Dev-only visual review harness entry (review.html). Not exported from index.ts.
+import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import 'katex/dist/katex.min.css'
 import '../index.css'
@@ -11,7 +12,11 @@ window.addEventListener('unhandledrejection', (e) => w.__errors.push(String(e.re
 const origErr = console.error
 console.error = (...a: unknown[]) => { w.__errors.push(a.map(String).join(' ')); origErr(...a) }
 
-createRoot(document.getElementById('root')!).render(<ReviewPage />)
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ReviewPage />
+  </StrictMode>
+)
 
 // ?errs=1 -> dump collected errors into the DOM (for --dump-dom checks).
 if (new URLSearchParams(location.search).has('errs')) {

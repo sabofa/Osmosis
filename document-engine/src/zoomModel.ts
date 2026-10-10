@@ -71,7 +71,7 @@ export function zoomAround(
 
 // Ctrl+wheel / pinch: a smooth multiplicative factor from the wheel delta.
 export function wheelZoomFactor(deltaY: number): number {
-  return Math.exp(-Math.max(-100, Math.min(100, deltaY)) * 0.01)
+  return Math.exp(-Math.max(-100, Math.min(100, deltaY)) * 0.0025)
 }
 
 // The page size a fit mode measures against. Fit-width uses the widest page so
