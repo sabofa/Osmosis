@@ -92,6 +92,14 @@ export interface CorpusCase {
     // an expression H(x, y): every curve vertex of the main view is within 1 px of its zero set, by |H| / |grad H| with
     // central differences
     curvesOn?: string
+    // ---- P4 (the frame) ----
+    // the labelled ticks frameTicks gives the MAIN view, per axis, in order (unlabelled ticks, and a log axis's minors, are not
+    // listed), asked of the view's bounds (a log axis's are exponents of ten, and are raised). A declared axis must list at least one and frameTicks must return as many: nothing passes vacuously.
+    ticks?: { x?: string[]; y?: string[] }
+    // every chain of the main view is a straight line in the plane the scene draws in ((x, v) or (u, v) on a log axis): no vertex
+    // is more than 0.25 px from the chord through its ends, and the chord's slope (rise over run, in world units of the plane) is
+    // `slope`, to a half degree on the screen. Set onCurve and dense false with it: they compare against the world curve.
+    straight?: { slope: number }
   }
   // pinned: about 1.5x the measured count (the most over the case's views), rounded up
   ceiling: { points: number; intervals: number }
@@ -122,6 +130,9 @@ const E10 = Math.exp(-10)
 const NOTE_COARSE = 'drawn coarsely: '
 const NOTE_BLANK = 'not drawn: '
 const NOTE_STEEP = 'too steep to draw here: '
+
+// P4: a view of the plane a log axis draws in, 800 px wide, 100 px a unit of x
+const LOG_WIDE = view(-2, 6, -4, 2, 800, 600)
 
 // The pairs of marks floor(x) leaves at each integer from -4 to 4: open at the bottom of a step, filled at the top.
 const FLOOR_ENDS = Array.from({ length: 9 }, (_, i) => i - 4).flatMap((k) => [
@@ -883,5 +894,30 @@ export const CORPUS: readonly CorpusCase[] = [
     views: [view(-0.01, 0.01, -0.01, 0.01)],
     expect: { notes: [NOTE_COARSE], drawn: [{ x: 0, y: 0 }, { x: 0.005, y: 0.005 }] },
     ceiling: { points: 320600, intervals: 65900 }, // measured 213715 / 43901
+  },
+  // ---- the frame (P4): ticks and log scales -------------------------------------------------------------------
+  {
+    // one period fills the view; the x axis is labelled in multiples of pi (frameTicks, a configured step of pi/2)
+    name: 'P4: sin x over [0, 2pi] with pi ticks',
+    spec: '@bounds: 0, 2pi, -1.2, 1.2\n@xstep: pi/2\ny = sin(x)',
+    views: [view(0, 2 * Math.PI, -1.2, 1.2, 800, 300)],
+    expect: { ticks: { x: ['0', 'π/2', 'π', '3π/2', '2π'] }, drawn: [{ x: HALF_PI, y: 1 }, { x: Math.PI, y: 0 }, { x: 3 * HALF_PI, y: -1 }] },
+    ceiling: { points: 910, intervals: 460 }, // measured 601 / 302
+  },
+  {
+    // a log y axis draws e^-x as v = -x log10(e), a straight line; the decades label the axis
+    name: 'P4: y = e^(-x) on a log y axis is a straight line',
+    spec: '@yscale: log\ny = e^(-x)',
+    views: [LOG_WIDE],
+    expect: { straight: { slope: -Math.LOG10E }, ticks: { y: ['10⁻⁴', '10⁻³', '10⁻²', '10⁻¹', '1', '10', '10²'] }, onCurve: false, dense: false },
+    ceiling: { points: 910, intervals: 460 }, // measured 601 / 302
+  },
+  {
+    // log-log: x^3 is u -> 3u, a straight line of slope 3
+    name: 'P4: y = x^3 on log-log is a straight line of slope 3',
+    spec: '@xscale: log\n@yscale: log\ny = x^3',
+    views: [view(-1, 2, -3, 6, 800, 600)],
+    expect: { straight: { slope: 3 }, ticks: { x: ['10⁻¹', '1', '10', '10²'] }, onCurve: false, dense: false },
+    ceiling: { points: 910, intervals: 460 }, // measured 601 / 302
   },
 ]

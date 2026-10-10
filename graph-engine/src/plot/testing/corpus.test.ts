@@ -8,6 +8,7 @@ import type { Statement } from '../../parser/types'
 import { buildScene } from '../../scene/buildScene'
 import { chainPoints } from '../../scene/chains'
 import type { Break, BreakKind, Chain, Scene, SceneObject, Vec2 } from '../../scene/types'
+import { frameTicks } from '../frame/ticks'
 import { FULL } from '../sample/tuning'
 import { buildPlotScope } from '../scope'
 import { CORPUS, type CorpusCase, type CorpusView } from './corpus'
@@ -565,6 +566,50 @@ describe('the torture corpus', () => {
           }
           expect(checked, 'vertices checked (nothing drawn passes vacuously)').toBeGreaterThan(0)
           expect(worst, `the worst vertex is ${worst} px off`).toBeLessThanOrEqual(CHORD_PX)
+        }, TIMEOUT)
+      }
+
+      if (want.ticks) {
+        it('labels its axes: frameTicks gives the labelled major ticks the case names, and not none', () => {
+          const v = c.views[0]
+          // (a log axis is asked in world values: the view's bounds are exponents of ten there)
+          const log = run.parsed.config.scales
+          const b = v.bounds
+          const world = {
+            xMin: log?.x === 'log' ? 10 ** b.xMin : b.xMin,
+            xMax: log?.x === 'log' ? 10 ** b.xMax : b.xMax,
+            yMin: log?.y === 'log' ? 10 ** b.yMin : b.yMin,
+            yMax: log?.y === 'log' ? 10 ** b.yMax : b.yMax,
+          }
+          const got = frameTicks({ bounds: world, widthPx: v.widthPx, heightPx: v.heightPx }, run.parsed.config)
+          for (const axis of ['x', 'y'] as const) {
+            const wanted = want.ticks![axis]
+            if (wanted === undefined) continue
+            expect(wanted.length, `the case names no ${axis} ticks (nothing passes vacuously)`).toBeGreaterThan(0)
+            const labels = got[axis].filter((t) => t.kind === 'major' && t.label !== '').map((t) => t.label)
+            expect(labels.length, `frameTicks returned no labelled ${axis} ticks`).toBeGreaterThan(0)
+            expect(labels).toEqual(wanted)
+          }
+        }, TIMEOUT)
+      }
+
+      if (want.straight) {
+        it('draws a straight line in the plane of the scene: within a quarter pixel of its chord, at the slope asked', () => {
+          const px = pxPerUnit(c.views[0])
+          const chains = run.scenes()[0].objects.flatMap((o) => (o.kind === 'curve' ? o.chains.map(chainPoints) : []))
+          expect(chains.length, 'a chain (nothing drawn passes vacuously)').toBeGreaterThan(0)
+          for (const pts of chains) {
+            expect(pts.length, 'a chain of more than two vertices').toBeGreaterThan(2)
+            const a = pts[0]
+            const b = pts[pts.length - 1]
+            const len = Math.hypot((b.x - a.x) * px.x, (b.y - a.y) * px.y)
+            let worst = 0
+            for (const p of pts) worst = Math.max(worst, Math.abs((b.x - a.x) * px.x * ((a.y - p.y) * px.y) - ((a.x - p.x) * px.x) * ((b.y - a.y) * px.y)) / len)
+            expect(worst, `a vertex is ${worst} px off the chord`).toBeLessThan(0.25)
+            const angle = Math.atan2((b.y - a.y) * px.y, (b.x - a.x) * px.x)
+            const want0 = Math.atan2(want.straight!.slope * px.y, px.x)
+            expect((Math.abs(angle - want0) * 180) / Math.PI, 'the chord is off the slope asked').toBeLessThan(0.5)
+          }
         }, TIMEOUT)
       }
 
