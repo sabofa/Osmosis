@@ -21,6 +21,13 @@ export function useHostCommands(host: DocumentHost | undefined, latest: CommandS
       onToggleOverlays: () => latestRef.current.onToggleOverlays(),
       onRemoveHighlight: () => latestRef.current.onRemoveHighlight(),
       onDownload: () => latestRef.current.onDownload(),
+      graph: latestRef.current.graph
+        ? {
+            ...latestRef.current.graph,
+            onExpand: () => latestRef.current.graph?.onExpand(),
+            onCollapse: () => latestRef.current.graph?.onCollapse(),
+          }
+        : null,
     })
     toolbar.publishCommands(cmds)
     return () => toolbar.clear()

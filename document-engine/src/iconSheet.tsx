@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { IconSheetRef } from 'theme-core'
-import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon } from './icons'
+import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon, GraphExpandIcon, GraphCollapseIcon } from './icons'
 
 export type IconComponent = ComponentType<{ size?: number }>
 
@@ -16,6 +16,8 @@ export const ICON_NAMES = [
   'doc-eye',
   'doc-eye-off',
   'doc-close',
+  'graph-expand',
+  'graph-collapse',
 ] as const
 
 export type IconName = (typeof ICON_NAMES)[number]
@@ -34,6 +36,8 @@ const DEFAULT_SHEET: Record<IconName, IconComponent> = {
   'doc-eye': EyeOnIcon,
   'doc-eye-off': EyeOffIcon,
   'doc-close': CloseIcon,
+  'graph-expand': GraphExpandIcon,
+  'graph-collapse': GraphCollapseIcon,
 }
 
 // Harmless placeholder for a name nobody knows: an empty square.

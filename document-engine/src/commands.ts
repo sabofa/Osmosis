@@ -20,6 +20,16 @@ export interface CommandState {
   onToggleOverlays: () => void
   onRemoveHighlight: () => void
   onDownload: () => void
+  // Graph expand commands; absent/null when the text has no graph fences or
+  // there is no renderGraph.
+  graph?: GraphCommandState | null
+}
+
+export interface GraphCommandState {
+  canExpand: boolean
+  canCollapse: boolean
+  onExpand: () => void
+  onCollapse: () => void
 }
 
 // What the viewer offers the host's toolbar. 'view' and embedded viewers
@@ -52,6 +62,12 @@ export function buildCommands(s: CommandState): ToolbarCommand[] {
         run: s.onToggleOverlays,
       },
       { id: 'highlight-remove', label: 'Remove highlight', icon: 'doc-highlight-remove', group: 'annotate', enabled: s.canRemoveHighlight, active: false, run: s.onRemoveHighlight }
+    )
+  }
+  if (s.graph) {
+    cmds.push(
+      { id: 'graph-expand', label: 'Graph: Expand', icon: 'graph-expand', group: 'graph', enabled: s.graph.canExpand, active: false, run: s.graph.onExpand },
+      { id: 'graph-collapse', label: 'Graph: Collapse', icon: 'graph-collapse', group: 'graph', enabled: s.graph.canCollapse, active: false, run: s.graph.onCollapse }
     )
   }
   if (s.canDownload) {

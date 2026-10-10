@@ -91,3 +91,32 @@ describe('commandsShape', () => {
     expect(commandsShape(buildCommands(state()))).not.toBe(commandsShape(buildCommands(state({ canRemoveHighlight: true }))))
   })
 })
+
+describe('graph commands', () => {
+  const graph = (over = {}) => ({ canExpand: true, canCollapse: false, onExpand: vi.fn(), onCollapse: vi.fn(), ...over })
+  const get = (s: CommandState, id: string) => buildCommands(s).find((c) => c.id === id)
+  it('published in annotate and edit when graph state exists, with known icons', () => {
+    for (const interaction of ['annotate', 'edit'] as const) {
+      const cmds = buildCommands(state({ interaction, graph: graph() }))
+      expect(cmds.map((c) => c.id)).toContain('graph-expand')
+      expect(cmds.map((c) => c.id)).toContain('graph-collapse')
+      for (const c of cmds) expect(ICON_NAMES as readonly string[]).toContain(c.icon)
+      expect(get(state({ interaction, graph: graph() }), 'graph-expand')).toMatchObject({ label: 'Graph: Expand', icon: 'graph-expand', group: 'graph' })
+      expect(get(state({ interaction, graph: graph() }), 'graph-collapse')).toMatchObject({ label: 'Graph: Collapse', icon: 'graph-collapse', group: 'graph' })
+    }
+  })
+  it('absent without graph state, in view, and embedded', () => {
+    expect(ids(state())).not.toContain('graph-expand')
+    expect(ids(state({ graph: null }))).not.toContain('graph-collapse')
+    expect(buildCommands(state({ interaction: 'view', graph: graph() }))).toEqual([])
+    expect(buildCommands(state({ chrome: 'embedded', graph: graph() }))).toEqual([])
+  })
+  it('enabled flags follow the state and run calls through', () => {
+    const g = graph({ canExpand: false, canCollapse: true })
+    const s = state({ graph: g })
+    expect(get(s, 'graph-expand')!.enabled).toBe(false)
+    expect(get(s, 'graph-collapse')!.enabled).toBe(true)
+    get(s, 'graph-collapse')!.run()
+    expect(g.onCollapse).toHaveBeenCalled()
+  })
+})

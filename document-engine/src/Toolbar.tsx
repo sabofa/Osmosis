@@ -69,6 +69,8 @@ export function ZoomControl({
     const current = itemRefs.current.findIndex((el) => el === document.activeElement)
     const action = menuKeyAction(e.key, current, items.length)
     if (!action) return
+    // Escape belongs to this menu alone: nothing above it may also react.
+    if (e.key === 'Escape') e.stopPropagation()
     // Tab keeps its default so focus moves on from the trigger.
     if (e.key !== 'Tab') e.preventDefault()
     if (action.kind === 'focus') itemRefs.current[action.index]?.focus()

@@ -23,6 +23,18 @@ import {
   type ZoomMode,
 } from './zoomModel'
 import { resolveIcon } from './iconSheet'
+import { graphBlocks } from './graphFence'
+import {
+  INITIAL_EXPAND,
+  clampExpand,
+  expandGraph,
+  collapseGraph,
+  setActiveGraph,
+  commandTarget,
+  canExpandCommand,
+  canCollapseCommand,
+  escapeDecision,
+} from './expandModel'
 import { useHostCommands } from './useHostCommands'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
@@ -426,6 +438,33 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     }
   }
 
+  // Graph expand. Ordinals count graph fences in document order.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const graphCount = useMemo(() => (isText && renderGraph ? graphBlocks(text).length : 0), [isText, renderGraph, text])
+  const [expandState, setExpandState] = useState(INITIAL_EXPAND)
+  const expand = clampExpand(expandState, graphCount)
+  const expandRef = useRef(expand)
+  expandRef.current = expand
+  const expandable = !embedded && graphCount > 0
+  const expandedGraph = expandable ? expand.expanded : null
+  const onExpandGraph = (ordinal: number | null) =>
+    setExpandState((s) => (ordinal === null ? collapseGraph(s) : expandGraph(s, ordinal)))
+  const onActiveGraph = (ordinal: number) => setExpandState((s) => setActiveGraph(s, ordinal))
+  // Esc collapses an expanded graph before anything else (shell included) sees it.
+  const anyExpanded = expandedGraph !== null
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || !anyExpanded) return
+    const onKey = (e: KeyboardEvent) => {
+      if (escapeDecision(e.key, expandRef.current) !== 'collapse') return
+      e.stopPropagation()
+      e.preventDefault()
+      setExpandState((s) => collapseGraph(s))
+    }
+    root.addEventListener('keydown', onKey, true)
+    return () => root.removeEventListener('keydown', onKey, true)
+  }, [anyExpanded])
+
   const onGraphErrors = (msgs: string[]) => onErrorsRef.current?.(msgs.map((message) => ({ message })))
 
   const imageSize = pageSizes[0]
@@ -451,7 +490,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       // every interactive feature switched off — embedded chrome's whole
       // point is no anchors/markers/highlighting/click-handling, but there
       // is no reason its formatting should look worse than full chrome's.
-      body = <TextContent text={text} anchors={[]} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} renderGraph={renderGraph} onGraphErrors={onGraphErrors} />
+      body = <TextContent text={text} anchors={[]} markers={[]} highlights={[]} showOverlays={false} groupPrefix={groupPrefix} renderGraph={renderGraph} onGraphErrors={onGraphErrors} icons={iconRef} />
     }
     else body = <div className="document-viewer-placeholder">Preview not available for this file type.</div>
   } else if (isPdf && asset.url) {
@@ -482,6 +521,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           groupPrefix={groupPrefix}
           renderGraph={renderGraph}
           onGraphErrors={onGraphErrors}
+          expandedGraph={expandedGraph}
+          onExpandGraph={onExpandGraph}
+          onActiveGraph={onActiveGraph}
+          icons={iconRef}
         />
       )
     }
@@ -496,6 +539,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         groupPrefix={groupPrefix}
         renderGraph={renderGraph}
         onGraphErrors={onGraphErrors}
+        expandedGraph={expandedGraph}
+        onExpandGraph={onExpandGraph}
+        onActiveGraph={onActiveGraph}
+        icons={iconRef}
       />
     )
   } else {
@@ -525,11 +572,23 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     onToggleOverlays: () => setShowOverlays((v) => !v),
     onRemoveHighlight: removeHighlight,
     onDownload: handleDownload,
+    graph: expandable
+      ? {
+          canExpand: canExpandCommand(expand, graphCount),
+          canCollapse: canCollapseCommand(expand),
+          onExpand: () => {
+            const target = commandTarget(expandRef.current, graphCount)
+            if (target !== null) onExpandGraph(target)
+          },
+          onCollapse: () => onExpandGraph(null),
+        }
+      : null,
   }
   useHostCommands(host, latest)
 
   return (
     <div
+      ref={rootRef}
       className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}`}
       data-mode={tokens.mode}
       style={cssVars as CSSProperties}

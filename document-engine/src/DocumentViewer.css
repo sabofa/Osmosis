@@ -649,6 +649,63 @@
   user-select: none;
 }
 
+/* Holds the flow height while the graph is expanded out of it. */
+.document-viewer-markdown .document-viewer-graph-slot {
+  display: flow-root;
+}
+
+.document-viewer-markdown .document-viewer-graph {
+  position: relative;
+}
+
+.document-viewer-markdown .document-viewer-graph-expand {
+  position: absolute;
+  top: 0.5em;
+  right: 0.5em;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+
+.document-viewer-markdown .document-viewer-graph:hover .document-viewer-graph-expand,
+.document-viewer-markdown .document-viewer-graph-expand:focus-visible {
+  opacity: 1;
+}
+
+/* Expanded: the same element fills .document-viewer (the nearest positioned
+   ancestor). z-index 1 sits above the content but under the toolbar (2), so
+   the collapse button moves to the left corner clear of the toolbar. */
+.document-viewer-markdown .document-viewer-graph-expanded {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  max-width: none;
+  padding: 0.6em;
+  border-radius: 0;
+  background: var(--de-page);
+}
+
+.document-viewer-markdown .document-viewer-graph-expanded .document-viewer-graph-expand {
+  right: auto;
+  left: 0.9em;
+  top: 0.9em;
+  opacity: 1;
+}
+
+.document-viewer-markdown .document-viewer-graph-expanded .document-viewer-graph-plot {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+  height: auto;
+  max-width: none;
+}
+
 .document-viewer-markdown .document-viewer-graph-plot {
   aspect-ratio: 16 / 10;
   max-width: 100%;

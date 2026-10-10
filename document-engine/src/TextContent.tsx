@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ElementType, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ElementType, type ReactNode } from 'react'
 import type { ResolvedMarker } from './viewerModel'
 import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
@@ -11,6 +11,9 @@ import {
   graphOptionsSignature,
   type GraphFenceOptions,
 } from './graphFence'
+import { dblClickExpands } from './expandModel'
+import { resolveIcon } from './iconSheet'
+import type { IconSheetRef } from 'theme-core'
 import type { DocumentAnchor, DocumentHighlight, RenderGraph } from './types'
 
 // Interim lock until the graph DSL `@lock` ships: swallow every pan/zoom/reset
@@ -40,13 +43,33 @@ function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
 
 // One inline graph. Owns its error state; forwards each distinct message set
 // to the viewer once. Not selectable text: no data-start anywhere inside.
+//
+// Expand: the SAME mounted graph element is switched to the
+// `document-viewer-graph-expanded` class (position:absolute; inset:0) and so
+// fills the nearest positioned ancestor, `.document-viewer` (the scroll box
+// and content box are not positioned and have no transform, and an absolutely
+// positioned box is not clipped by a scroll container that is not in its
+// containing-block chain). Nothing is re-keyed or remounted, so the live graph
+// and its layer alphas persist; the graph's own ResizeObserver re-measures.
+// The slot wrapper keeps the flow height in the document while it is out.
 function GraphFence({
+  ordinal,
+  expanded,
+  onExpand,
+  onActive,
+  icons,
   spec,
   startOffset,
   options,
   renderGraph,
   onErrors,
 }: {
+  ordinal: number
+  expanded: boolean
+  // Absent: not expandable (embedded chrome) — no button, no double-click.
+  onExpand?: (ordinal: number | null) => void
+  onActive?: (ordinal: number) => void
+  icons?: IconSheetRef
   spec: string
   startOffset: number
   options: GraphFenceOptions
@@ -59,19 +82,62 @@ function GraphFence({
   onErrorsRef.current = onErrors
   const plotRef = useRef<HTMLDivElement | null>(null)
   useGraphLock(plotRef, options.lock)
+  const slotRef = useRef<HTMLDivElement | null>(null)
+  const slotHeight = useRef(0)
+  // Remember the in-flow height so the slot can hold it while expanded.
+  useLayoutEffect(() => {
+    const slot = slotRef.current
+    if (!slot || expanded) return
+    slotHeight.current = slot.offsetHeight
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      slotHeight.current = slot.offsetHeight
+    })
+    ro.observe(slot)
+    return () => ro.disconnect()
+  }, [expanded])
   const summary = graphErrorSummary(messages)
+  const ExpandIcon = resolveIcon(expanded ? 'graph-collapse' : 'graph-expand', icons ?? { kind: 'default' })
   const { widthPct, height } = graphFenceStyle(options)
-  const style: CSSProperties = { width: `${widthPct}%`, maxWidth: '100%' }
+  const style: CSSProperties | undefined = expanded ? undefined : { width: `${widthPct}%`, maxWidth: '100%' }
   const plotStyle: CSSProperties | undefined =
     height !== undefined ? ({ '--graph-height': `${height}px` } as CSSProperties) : undefined
   return (
     <div
-      className={`document-viewer-graph${options.lock ? ' document-viewer-graph-locked' : ''}`}
+      ref={slotRef}
+      className="document-viewer-graph-slot"
+      style={expanded ? { height: slotHeight.current } : undefined}
+    >
+    <div
+      className={`document-viewer-graph${options.lock ? ' document-viewer-graph-locked' : ''}${expanded ? ' document-viewer-graph-expanded' : ''}`}
       data-graph-start={startOffset}
       data-graph-locked={options.lock ? 'true' : undefined}
+      data-graph-expanded={expanded ? 'true' : undefined}
       style={style}
       contentEditable={false}
+      onPointerEnter={onActive ? () => onActive(ordinal) : undefined}
+      onFocusCapture={onActive ? () => onActive(ordinal) : undefined}
+      onDoubleClickCapture={
+        onExpand
+          ? (e) => {
+              const inside = !!plotRef.current && plotRef.current.contains(e.target as Node)
+              if (dblClickExpands(inside, options.lock, expanded)) onExpand(ordinal)
+            }
+          : undefined
+      }
     >
+      {onExpand && (
+        <button
+          type="button"
+          data-component="pill"
+          className="document-viewer-graph-expand"
+          aria-label={expanded ? 'Collapse graph' : 'Expand graph'}
+          title={expanded ? 'Collapse graph' : 'Expand graph'}
+          onClick={() => onExpand(expanded ? null : ordinal)}
+        >
+          <ExpandIcon size={14} />
+        </button>
+      )}
       <div
         ref={plotRef}
         className={`document-viewer-graph-plot${height !== undefined ? ' document-viewer-graph-plot-fixed' : ''}`}
@@ -92,6 +158,7 @@ function GraphFence({
       </div>
       {summary && <div className="document-viewer-graph-error" role="alert">{summary}</div>}
     </div>
+    </div>
   )
 }
 
@@ -108,7 +175,15 @@ export default function TextContent({
   groupPrefix,
   renderGraph,
   onGraphErrors,
+  expandedGraph = null,
+  onExpandGraph,
+  onActiveGraph,
+  icons,
 }: {
+  expandedGraph?: number | null
+  onExpandGraph?: (ordinal: number | null) => void
+  onActiveGraph?: (ordinal: number) => void
+  icons?: IconSheetRef
   text: string
   anchors: DocumentAnchor[]
   markers: ResolvedMarker[]
@@ -226,10 +301,16 @@ export default function TextContent({
             // Keyed by ordinal among graph fences (so edits elsewhere keep the
             // plot mounted) plus the spec (so a new spec remounts, which resets
             // the fence's error state without an effect racing the child's).
-            const key = `graph-${graphOrdinal++}:${graphOptionsSignature(graph.options)}:${graph.spec}`
+            const ordinal = graphOrdinal++
+            const key = `graph-${ordinal}:${graphOptionsSignature(graph.options)}:${graph.spec}`
             return (
               <GraphFence
                 key={key}
+                ordinal={ordinal}
+                expanded={expandedGraph === ordinal}
+                onExpand={onExpandGraph}
+                onActive={onActiveGraph}
+                icons={icons}
                 spec={graph.spec}
                 options={graph.options}
                 startOffset={graph.startOffset}
