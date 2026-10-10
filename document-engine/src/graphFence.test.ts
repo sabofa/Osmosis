@@ -76,7 +76,7 @@ describe('parseGraphInfo', () => {
     for (const s of ['s', 'm', 'l', 'full'] as const) expect(parseGraphInfo(`graph size=${s}`).size).toBe(s)
     expect(parseGraphInfo('graph size=xl').size).toBeUndefined()
     expect(parseGraphInfo('graph size=').size).toBeUndefined()
-    expect(parseGraphInfo('graph size=S').size).toBeUndefined()
+    expect(parseGraphInfo('graph size=S').size).toBe('s')
   })
   it('clamps height and ignores invalid values', () => {
     expect(parseGraphInfo('graph height=10').height).toBe(80)
@@ -136,11 +136,36 @@ describe('graphFenceStyle', () => {
 })
 
 describe('graphOptionsSignature', () => {
-  it('changes when any option changes', () => {
-    const sigs = ['graph', 'graph size=s', 'graph height=100', 'graph lock', 'graph view=x:0..1,y:0..1'].map((i) =>
+  it('changes only with bounds and lock', () => {
+    const sigs = ['graph', 'graph lock', 'graph view=x:0..1,y:0..1', 'graph view=x:0..2,y:0..1'].map((i) =>
       graphOptionsSignature(parseGraphInfo(i)),
     )
     expect(new Set(sigs).size).toBe(sigs.length)
+  })
+  it('size and height do not remount', () => {
+    const base = graphOptionsSignature(parseGraphInfo('graph'))
+    expect(graphOptionsSignature(parseGraphInfo('graph size=s'))).toBe(base)
+    expect(graphOptionsSignature(parseGraphInfo('graph height=300 size=l'))).toBe(base)
+  })
+})
+
+describe('lenient option syntax', () => {
+  it('accepts px heights', () => {
+    expect(parseGraphInfo('graph height=300px').height).toBe(300)
+    expect(parseGraphInfo('graph height=300PX').height).toBe(300)
+    expect(parseGraphInfo('graph height=3em').height).toBeUndefined()
+  })
+  it('option keys and values are case-insensitive', () => {
+    expect(parseGraphInfo('graph SIZE=L Lock')).toEqual({ size: 'l', lock: true })
+    expect(parseGraphInfo('graph LOCK=False').lock).toBe(false)
+  })
+  it('allows spaces after commas in view', () => {
+    expect(parseGraphInfo('graph view=x:0..1, y:0..1 lock')).toEqual({
+      view: { x: [0, 1], y: [0, 1] },
+      bounds: '0,1,0,1',
+      lock: true,
+    })
+    expect(parseGraphInfo('graph view=x:0..1,').view).toBeUndefined()
   })
 })
 

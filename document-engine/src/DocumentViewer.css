@@ -656,6 +656,9 @@
 
 .document-viewer-markdown .document-viewer-graph {
   position: relative;
+  /* Own stacking context: the expand button's z-index cannot leak above an
+     expanded sibling graph. */
+  isolation: isolate;
 }
 
 .document-viewer-markdown .document-viewer-graph-expand {
@@ -698,7 +701,8 @@
   opacity: 1;
 }
 
-.document-viewer-markdown .document-viewer-graph-expanded .document-viewer-graph-plot {
+.document-viewer-markdown .document-viewer-graph-expanded .document-viewer-graph-plot,
+.document-viewer-markdown .document-viewer-graph-expanded .document-viewer-graph-plot-fixed {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;

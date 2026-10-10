@@ -11,19 +11,23 @@ import {
   graphOptionsSignature,
   type GraphFenceOptions,
 } from './graphFence'
-import { dblClickExpands } from './expandModel'
+import { dblClickExpands, restoreFocusOnCollapse } from './expandModel'
 import { resolveIcon } from './iconSheet'
 import type { IconSheetRef } from 'theme-core'
 import type { DocumentAnchor, DocumentHighlight, RenderGraph } from './types'
 
 // Interim lock until the graph DSL `@lock` ships: swallow every pan/zoom/reset
 // gesture in the capture phase so the live plot underneath never sees it.
-const LOCK_EVENTS = ['pointerdown', 'wheel', 'touchstart', 'touchmove', 'dblclick', 'keydown'] as const
+const LOCK_BLOCK = ['pointerdown', 'dblclick'] as const
+const LOCK_SWALLOW = ['wheel', 'touchstart', 'touchmove', 'keydown'] as const
 
 function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
   useEffect(() => {
     const el = ref.current
     if (!locked || !el) return
+    // Wheel, touch and keys only stop propagation: the page must still scroll
+    // and Tab/arrows must still move focus over a locked plot.
+    const swallow = (e: Event) => e.stopPropagation()
     const block = (e: Event) => {
       e.preventDefault()
       e.stopPropagation()
@@ -32,10 +36,12 @@ function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
       if ((e as PointerEvent).buttons) block(e)
     }
     const opts = { capture: true, passive: false } as const
-    for (const t of LOCK_EVENTS) el.addEventListener(t, block, opts)
+    for (const t of LOCK_BLOCK) el.addEventListener(t, block, opts)
+    for (const t of LOCK_SWALLOW) el.addEventListener(t, swallow, opts)
     el.addEventListener('pointermove', blockMove, opts)
     return () => {
-      for (const t of LOCK_EVENTS) el.removeEventListener(t, block, opts)
+      for (const t of LOCK_BLOCK) el.removeEventListener(t, block, opts)
+      for (const t of LOCK_SWALLOW) el.removeEventListener(t, swallow, opts)
       el.removeEventListener('pointermove', blockMove, opts)
     }
   }, [ref, locked])
@@ -63,9 +69,12 @@ function GraphFence({
   options,
   renderGraph,
   onErrors,
+  inert,
 }: {
   ordinal: number
   expanded: boolean
+  // Another graph is expanded: this one is not reachable.
+  inert?: boolean
   // Absent: not expandable (embedded chrome) — no button, no double-click.
   onExpand?: (ordinal: number | null) => void
   onActive?: (ordinal: number) => void
@@ -83,6 +92,20 @@ function GraphFence({
   const plotRef = useRef<HTMLDivElement | null>(null)
   useGraphLock(plotRef, options.lock)
   const slotRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+  const wasExpanded = useRef(false)
+  // Focus the collapse button on expand; on collapse hand focus back to the
+  // expand button when it was in the viewer or had fallen to the body.
+  useEffect(() => {
+    const btn = buttonRef.current
+    if (expanded && !wasExpanded.current) btn?.focus()
+    else if (!expanded && wasExpanded.current && btn) {
+      const active = document.activeElement
+      const viewer = btn.closest('.document-viewer')
+      if (restoreFocusOnCollapse(!!viewer && !!active && viewer.contains(active), !active || active === document.body)) btn.focus()
+    }
+    wasExpanded.current = expanded
+  }, [expanded])
   const slotHeight = useRef(0)
   // Remember the in-flow height so the slot can hold it while expanded.
   useLayoutEffect(() => {
@@ -106,6 +129,7 @@ function GraphFence({
     <div
       ref={slotRef}
       className="document-viewer-graph-slot"
+      inert={inert}
       style={expanded ? { height: slotHeight.current } : undefined}
     >
     <div
@@ -121,13 +145,15 @@ function GraphFence({
         onExpand
           ? (e) => {
               const inside = !!plotRef.current && plotRef.current.contains(e.target as Node)
-              if (dblClickExpands(inside, options.lock, expanded)) onExpand(ordinal)
+              const onButton = !!(e.target as Element).closest?.('button')
+              if (dblClickExpands(inside, options.lock, expanded, onButton)) onExpand(ordinal)
             }
           : undefined
       }
     >
       {onExpand && (
         <button
+          ref={buttonRef}
           type="button"
           data-component="pill"
           className="document-viewer-graph-expand"
@@ -201,6 +227,8 @@ export default function TextContent({
   // they can never fragment a word into multiple padded/rounded pieces with
   // visible gaps between them — only markdown formatting and marker
   // boundaries split the DOM into separate elements here.
+  // While a graph is expanded the rest of the document is out of reach.
+  const inertOthers = expandedGraph !== null
   const markerSpans = markers
     .map((marker) => ({ marker, span: markerSpanInternal(text, marker.offset) }))
     .filter((m): m is { marker: ResolvedMarker; span: { start: number; end: number } } => m.span !== null)
@@ -231,11 +259,13 @@ export default function TextContent({
   }
 
   function renderMathNode(start: number, end: number, display: boolean, Wrap: 'span' | 'div'): ReactNode {
+    const inertAttr = inertOthers ? { inert: true } : {}
     const result = renderMath(text.slice(start, end), display)
     const attrs = {
       'data-start': start,
       'data-math': '1',
       'data-math-end': end,
+      ...inertAttr,
       className: display ? 'document-viewer-math-display' : 'document-viewer-math-inline',
     }
     if ('error' in result) return <Wrap key={start} {...attrs}><code>{result.error}</code></Wrap>
@@ -316,11 +346,12 @@ export default function TextContent({
                 startOffset={graph.startOffset}
                 renderGraph={renderGraph}
                 onErrors={onGraphErrors}
+                inert={expandedGraph !== null && expandedGraph !== ordinal ? true : undefined}
               />
             )
           }
           return (
-            <pre key={block.start} className={BLOCK_CLASS.fence} data-info={block.info || undefined}>
+            <pre key={block.start} className={BLOCK_CLASS.fence} data-info={block.info || undefined} inert={inertOthers || undefined}>
               {renderFence(block.start, block.end)}
             </pre>
           )
@@ -328,7 +359,7 @@ export default function TextContent({
         const Tag = BLOCK_TAG[block.type] as ElementType
         const runs = parseInline(text.slice(block.start, block.end), block.start)
         return (
-          <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined}>
+          <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined} inert={inertOthers || undefined}>
             {leavesFor(runs).map(renderLeaf)}
           </Tag>
         )

@@ -34,6 +34,7 @@ import {
   canExpandCommand,
   canCollapseCommand,
   escapeDecision,
+  targetInMenu,
 } from './expandModel'
 import { useHostCommands } from './useHostCommands'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
@@ -452,17 +453,18 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const onActiveGraph = (ordinal: number) => setExpandState((s) => setActiveGraph(s, ordinal))
   // Esc collapses an expanded graph before anything else (shell included) sees it.
   const anyExpanded = expandedGraph !== null
+  // Listens on the document in the capture phase so Esc works wherever focus
+  // is (body after a frame double-click or a host-driven expand included).
   useEffect(() => {
-    const root = rootRef.current
-    if (!root || !anyExpanded) return
+    if (!anyExpanded) return
     const onKey = (e: KeyboardEvent) => {
-      if (escapeDecision(e.key, expandRef.current) !== 'collapse') return
+      if (escapeDecision(e.key, expandRef.current, targetInMenu(e.target)) !== 'collapse') return
       e.stopPropagation()
       e.preventDefault()
       setExpandState((s) => collapseGraph(s))
     }
-    root.addEventListener('keydown', onKey, true)
-    return () => root.removeEventListener('keydown', onKey, true)
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
   }, [anyExpanded])
 
   const onGraphErrors = (msgs: string[]) => onErrorsRef.current?.(msgs.map((message) => ({ message })))

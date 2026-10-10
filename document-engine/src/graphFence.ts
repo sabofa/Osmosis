@@ -41,26 +41,39 @@ function parseView(raw: string): GraphView | null {
   return axes.x && axes.y ? { x: axes.x, y: axes.y } : null
 }
 
+// `view=x:0..1, y:0..1`: a token ending in a comma continues into the next
+// token (a trailing comma is otherwise never valid, so this is unambiguous).
+function mergeCommaTokens(tokens: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    let t = tokens[i]
+    while (t.endsWith(',') && i + 1 < tokens.length) t += tokens[++i]
+    out.push(t)
+  }
+  return out
+}
+
 // Parses the options after `graph` in the fence info string. Never throws;
 // unknown or malformed tokens are ignored.
 export function parseGraphInfo(info: string | undefined | null): GraphFenceOptions {
   const out: GraphFenceOptions = { lock: false }
   if (!info) return out
-  const tokens = info.trim().split(/\s+/).slice(1)
+  const tokens = mergeCommaTokens(info.trim().split(/\s+/).slice(1))
   for (const tok of tokens) {
-    if (tok === 'lock') {
+    if (tok.toLowerCase() === 'lock') {
       out.lock = true
       continue
     }
     const eq = tok.indexOf('=')
     if (eq < 0) continue
-    const key = tok.slice(0, eq)
+    const key = tok.slice(0, eq).toLowerCase()
     const val = tok.slice(eq + 1)
     if (key === 'size') {
-      if (val === 's' || val === 'm' || val === 'l' || val === 'full') out.size = val
+      const sv = val.toLowerCase()
+      if (sv === 's' || sv === 'm' || sv === 'l' || sv === 'full') out.size = sv
     } else if (key === 'height') {
-      if (/^\d+$/.test(val)) {
-        const n = Number(val)
+      if (/^\d+(?:px)?$/i.test(val)) {
+        const n = Number(val.replace(/px$/i, ''))
         if (Number.isFinite(n)) out.height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, n))
       }
     } else if (key === 'view') {
@@ -70,8 +83,9 @@ export function parseGraphInfo(info: string | undefined | null): GraphFenceOptio
         out.bounds = `${v.x[0]},${v.x[1]},${v.y[0]},${v.y[1]}`
       }
     } else if (key === 'lock') {
-      if (val === 'true') out.lock = true
-      else if (val === 'false') out.lock = false
+      const lv = val.toLowerCase()
+      if (lv === 'true') out.lock = true
+      else if (lv === 'false') out.lock = false
     }
   }
   return out
@@ -84,9 +98,11 @@ export function graphFenceStyle(parsed: GraphFenceOptions): { widthPct: number; 
   return parsed.height !== undefined ? { widthPct, height: parsed.height } : { widthPct }
 }
 
-// Stable signature of the options, for remount keys.
+// Stable signature for remount keys. Only what the plot itself consumes
+// (bounds, lock) belongs here; size and height are style-only and must not
+// remount the live plot.
 export function graphOptionsSignature(o: GraphFenceOptions): string {
-  return [o.size ?? '', o.height ?? '', o.bounds ?? '', o.lock ? 'L' : ''].join('|')
+  return [o.bounds ?? '', o.lock ? 'L' : ''].join('|')
 }
 
 export interface GraphFenceModel {
