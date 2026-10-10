@@ -12,7 +12,8 @@ import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
 import { HoverResolver, type HoverInfo } from './hover'
 import { createInteraction, overscanBox, viewChangeAction } from './interaction'
-import { clampedLabelPlacement } from './labelLayout'
+import { clampedLabelPlacementXY } from './labelLayout'
+import { pixelSizeXY } from './pixelSize'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
 import { toRenderItems } from './renderItems'
@@ -323,11 +324,19 @@ export class SceneRenderer {
   // un-hides the canvas hasn't committed to the DOM yet), which reports a
   // 0-height rect. Dividing by that produced Infinity/NaN ribbon vertices
   // for every curve/segment built during that window.
-  private pixelToWorld(px: number): number {
+  //
+  // Per axis: x and y px-per-unit differ under an authored aspect or a one-axis zoom, so a round on-screen
+  // size is an ellipse in world units. pixelToWorld (the x value) is for the sizes still built as one
+  // number along a line (ribbon widths, dashes, arcs, ticks); round things use pixelToWorldXY.
+  private pixelToWorldXY(px: number): Vec2 {
     const rect = this.canvas.getBoundingClientRect()
     const height = Math.max(rect.height, 1)
     const sizeScale = Math.min(1, Math.max(MIN_SIZE_SCALE, Math.min(rect.width, rect.height) / SIZE_REFERENCE_PX))
-    return px * sizeScale * this.camera2d.worldPerPixel(height)
+    return pixelSizeXY(px * sizeScale, this.camera2d.worldPerPixelXY(height))
+  }
+
+  private pixelToWorld(px: number): number {
+    return this.pixelToWorldXY(px).x
   }
 
   setConfig(config: GraphConfig, palette?: Palette) {
@@ -583,7 +592,8 @@ export class SceneRenderer {
       rect.height,
       this.palette.hover,
       this.palette.background,
-      (px) => this.pixelToWorld(px)
+      (px) => this.pixelToWorld(px),
+      (px) => this.pixelToWorldXY(px)
     )
     this.needsRender = true
     this.options.onHover?.(info)
@@ -594,7 +604,7 @@ export class SceneRenderer {
     this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px), {
       widthPx: Math.max(rect.width, 1),
       heightPx: Math.max(rect.height, 1),
-    })
+    }, (px) => this.pixelToWorldXY(px))
     this.needsRender = true
   }
 
@@ -710,7 +720,8 @@ export class SceneRenderer {
   // any kind not listed here (point/animatedPoint), which just means "this
   // kind doesn't use the cache-key path" — see updateMiscGroup.
   private contentKey(obj: SceneObject): string | null {
-    const zoom = this.pixelToWorld(1)
+    const per = this.pixelToWorldXY(1)
+    const zoom = `${per.x}|${per.y}`
     if (obj.kind === 'ray') {
       return ['ray', obj.from.x, obj.from.y, obj.to.x, obj.to.y, obj.color ?? '', obj.label ?? '', zoom].join('|')
     }
@@ -792,12 +803,14 @@ export class SceneRenderer {
       // The ring's inner/outer ratio is baked into its RingGeometry, not
       // into this scale — both the backing disc and the ring share the same
       // outer radius so the disc exactly fills (and sits behind) the ring.
-      const outer = this.pixelToWorld(POINT_OUTLINE_OUTER_PX)
-      backgroundMesh.scale.setScalar(outer)
-      coloredMesh.scale.setScalar(outer)
+      const outer = this.pixelToWorldXY(POINT_OUTLINE_OUTER_PX)
+      backgroundMesh.scale.set(outer.x, outer.y, 1)
+      coloredMesh.scale.set(outer.x, outer.y, 1)
     } else {
-      backgroundMesh.scale.setScalar(this.pixelToWorld(POINT_HALO_PX))
-      coloredMesh.scale.setScalar(this.pixelToWorld(POINT_FILL_PX))
+      const halo = this.pixelToWorldXY(POINT_HALO_PX)
+      const fill = this.pixelToWorldXY(POINT_FILL_PX)
+      backgroundMesh.scale.set(halo.x, halo.y, 1)
+      coloredMesh.scale.set(fill.x, fill.y, 1)
     }
   }
 
@@ -839,7 +852,8 @@ export class SceneRenderer {
   private updateLabelSprite(sprite: THREE.Sprite, worldPos: Vec2, direction: Vec2 = DEFAULT_LABEL_DIRECTION, maxOffset?: number | null) {
     // Remembered so a skipped gesture frame can re-lay the label out at the new zoom (refreshPixelSizes).
     sprite.userData.layout = { worldPos, direction, maxOffset }
-    const placement = clampedLabelPlacement(worldPos, direction, this.pixelToWorld(LABEL_OFFSET_PX), this.pixelToWorld(60), this.pixelToWorld(30), maxOffset)
+    const offset = this.pixelToWorldXY(LABEL_OFFSET_PX)
+    const placement = clampedLabelPlacementXY(worldPos, direction, offset, this.pixelToWorldXY(60).x, this.pixelToWorldXY(30).y, maxOffset)
     sprite.scale.set(placement.width, placement.height, 1)
     sprite.position.set(placement.position.x, placement.position.y, 0)
   }
@@ -960,7 +974,9 @@ export class SceneRenderer {
 
     if (obj.kind === 'animatedPoint') {
       const color = this.colorOr(obj.color, this.palette.point)
-      const mesh = new THREE.Mesh(new THREE.CircleGeometry(this.pixelToWorld(7), 24), new THREE.MeshBasicMaterial({ color }))
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color }))
+      const r = this.pixelToWorldXY(7)
+      mesh.scale.set(r.x, r.y, 1)
       this.animated.push({ mesh, fx: obj.fx, fy: obj.fy, from: obj.from, to: obj.to })
       return mesh
     }

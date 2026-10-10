@@ -4,6 +4,7 @@ import { anchoredCamera, basePxPerUnit, panByScreen } from '../view2d'
 import type { Size } from '../view2d'
 import {
   boundsOf,
+  frameAxes,
   frameRect,
   plotCameraOf,
   plotToScreen,
@@ -87,6 +88,14 @@ export class Camera2D {
   // The canvas height stays the same number of world units, as it always has.
   resize(width: number, height: number) {
     const next = { width, height }
+    if (this.aspectOf?.kind === 'auto') {
+      // Auto: the frame is the screen's own shape, so a, b follow the new size (zoom and centre hold).
+      const { a, b } = frameAxes(this.win, this.aspectOf, next)
+      this.view = { ...this.view, a, b }
+      this.screen = next
+      this.updateProjection()
+      return
+    }
     const keep = this.screen.height > 0 && height > 0 ? height / this.screen.height : 1
     this.view = { ...this.view, zoom: (this.view.zoom * this.base() * keep) / this.base(next) }
     this.screen = next
@@ -126,8 +135,15 @@ export class Camera2D {
 
   // World units per screen pixel — for converting a pixel hit-radius into a
   // world-space distance for hover hit-testing.
+  // Only for a consumer that genuinely needs one number (density); sizes use worldPerPixelXY.
   worldPerPixel(canvasHeightPx: number): number {
-    return 1 / pxPerUnitXY(this.view, this.win, { width: this.screen.width, height: canvasHeightPx }).x
+    return this.worldPerPixelXY(canvasHeightPx).x
+  }
+
+  // World units per screen pixel along each axis; they differ when the plot's x and y px-per-unit do.
+  worldPerPixelXY(canvasHeightPx: number): { x: number; y: number } {
+    const ppu = pxPerUnitXY(this.view, this.win, { width: this.screen.width, height: canvasHeightPx })
+    return { x: 1 / ppu.x, y: 1 / ppu.y }
   }
 
   getBounds(): Bounds {

@@ -85,10 +85,12 @@ export class AxisLabelPool {
     heightWorld: number,
     align: 'start' | 'end',
     baseline: 'top' | 'bottom' | 'middle',
+    // World-per-pixel along x over along y: a text's width in px becomes world units on x, its height on y.
+    xPerY = 1,
   ) {
     const entry = this.entries[index] ?? this.createEntry()
     if (entry.text !== text) this.redraw(entry, text)
-    const width = (heightWorld * entry.canvas.width) / entry.canvas.height
+    const width = (heightWorld * xPerY * entry.canvas.width) / entry.canvas.height
     const cx = align === 'end' ? x - width / 2 : x + width / 2
     const cy = baseline === 'bottom' ? y + heightWorld / 2 : baseline === 'top' ? y - heightWorld / 2 : y
     entry.sprite.position.set(cx, cy, 0.01)

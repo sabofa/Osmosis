@@ -40,6 +40,27 @@ export function clampedLabelPlacement(
   }
 }
 
+// The same clamp for an anisotropic view: the fixed-pixel offset is a world vector (direction scaled per axis
+// by world-per-pixel), and the box is its own width/height in world units along x and y.
+export function clampedLabelPlacementXY(
+  worldPos: Vec2,
+  direction: Vec2,
+  offsetWorld: Vec2,
+  rawWidth: number,
+  rawHeight: number,
+  maxOffset: number | null | undefined
+): LabelPlacement {
+  const dx = direction.x * offsetWorld.x
+  const dy = direction.y * offsetWorld.y
+  const rawOffset = Math.hypot(dx, dy)
+  const clampRatio = maxOffset != null && rawOffset > 0 ? Math.min(1, maxOffset / rawOffset) : 1
+  return {
+    position: { x: worldPos.x + dx * clampRatio, y: worldPos.y + dy * clampRatio },
+    width: rawWidth * clampRatio,
+    height: rawHeight * clampRatio,
+  }
+}
+
 export interface PxBox {
   x: number
   y: number

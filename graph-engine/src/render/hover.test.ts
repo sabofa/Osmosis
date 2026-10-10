@@ -77,6 +77,25 @@ describe('HoverResolver', () => {
   })
 })
 
+describe('hover dot on an anisotropic view', () => {
+  it('sizes the dot and halo as an ellipse per axis', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [{ kind: 'point', label: null, position: { x: 0, y: 0 } }],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const s = camera.worldToScreen(0, 0, CANVAS, CANVAS)
+    resolver.resolve(scene, 'all', s, { x: 0, y: 0 }, camera, CANVAS, CANVAS, HOVER_COLOR, BG_COLOR, pixelToWorld, (px) => ({ x: px * 0.01, y: px * 0.02 }))
+    const [halo, dot] = resolver.group.children as THREE.Mesh[]
+    expect(halo.scale.x).toBeCloseTo(0.07)
+    expect(halo.scale.y).toBeCloseTo(0.14)
+    expect(dot.scale.x).toBeCloseTo(0.06)
+    expect(dot.scale.y).toBeCloseTo(0.12)
+  })
+})
+
 describe('feature snapping', () => {
   // The bug: hovering near a parabola's vertex reports the nearest *sampled*
   // point, so you read 1.9993 instead of 2. A feature carries its exact

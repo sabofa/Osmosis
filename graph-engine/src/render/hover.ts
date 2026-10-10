@@ -60,7 +60,9 @@ export class HoverResolver {
     rectHeight: number,
     hoverColor: number,
     backgroundColor: number,
-    pixelToWorld: (px: number) => number
+    pixelToWorld: (px: number) => number,
+    // Per-axis world size of a px length; without it the view is taken as isotropic.
+    pixelToWorldXY: (px: number) => Vec2 = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) })
   ): HoverInfo | null {
     let best: {
       point: Vec2
@@ -155,10 +157,15 @@ export class HoverResolver {
     // Background-colored halo behind the dot, matching the point markers'
     // "stroke cut into the paper" treatment (see SceneRenderer.ts's point
     // builder) so the hover indicator reads as the same family of marker.
-    const halo = new THREE.Mesh(new THREE.CircleGeometry(pixelToWorld(7), 24), new THREE.MeshBasicMaterial({ color: backgroundColor }))
+    // Unit circles scaled per axis, so a round dot stays round on screen when px-per-unit differ in x and y.
+    const haloR = pixelToWorldXY(7)
+    const halo = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: backgroundColor }))
+    halo.scale.set(haloR.x, haloR.y, 1)
     halo.position.set(target.point.x, target.point.y, 0.1)
     this.group.add(halo)
-    const dot = new THREE.Mesh(new THREE.CircleGeometry(pixelToWorld(6), 24), new THREE.MeshBasicMaterial({ color: hoverColor }))
+    const dotR = pixelToWorldXY(6)
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: hoverColor }))
+    dot.scale.set(dotR.x, dotR.y, 1)
     dot.position.set(target.point.x, target.point.y, 0.11)
     this.group.add(dot)
 

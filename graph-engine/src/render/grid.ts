@@ -294,6 +294,8 @@ export class GridRenderer {
     config: GraphConfig,
     pixelToWorld: (px: number) => number,
     sizePx?: { widthPx: number; heightPx: number },
+    // Per-axis world size of a px length (x and y px-per-unit differ under an authored aspect or one-axis zoom).
+    pixelToWorldXY: (px: number) => { x: number; y: number } = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) }),
   ) {
     if (config.grid) {
       const perPx = pixelToWorld(1)
@@ -305,8 +307,8 @@ export class GridRenderer {
         bounds,
         config,
         size,
-        { x: pixelToWorld(LABEL_MARGIN_PX.x), y: pixelToWorld(LABEL_MARGIN_PX.y) },
-        { x: pixelToWorld(LABEL_OFFSET_PX.x), y: pixelToWorld(LABEL_OFFSET_PX.y) },
+        { x: pixelToWorldXY(LABEL_MARGIN_PX.x).x, y: pixelToWorldXY(LABEL_MARGIN_PX.y).y },
+        { x: pixelToWorldXY(LABEL_OFFSET_PX.x).x, y: pixelToWorldXY(LABEL_OFFSET_PX.y).y },
       )
 
       const positions: number[] = []
@@ -325,8 +327,8 @@ export class GridRenderer {
       // the same ticks as the grid lines, sit by the x=0/y=0 axes when those are
       // in view and pin to the nearest edge when not. Only drawn when axes are on.
       if (config.axes && config.labels !== 'none') {
-        const labelScaleX = pixelToWorld(34)
-        const labelScaleY = pixelToWorld(16)
+        const labelScaleX = pixelToWorldXY(34).x
+        const labelScaleY = pixelToWorldXY(16).y
         let xIndex = 0
         for (const l of plan.labelsX) this.xLabels.place(xIndex++, l.label, l.at.x, l.at.y, labelScaleX, labelScaleY)
         this.xLabels.hideFrom(xIndex)
@@ -339,9 +341,10 @@ export class GridRenderer {
       }
 
       // Axis titles (@titles) are placed by gridPlan; this only draws them.
+      const perPxXY = pixelToWorldXY(1)
       let titleIndex = 0
       for (const t of plan.titles) {
-        this.titleLabels.placeAnchored(titleIndex++, t.text, t.at.x, t.at.y, pixelToWorld(TITLE.heightPx), t.align, t.baseline)
+        this.titleLabels.placeAnchored(titleIndex++, t.text, t.at.x, t.at.y, pixelToWorldXY(TITLE.heightPx).y, t.align, t.baseline, perPxXY.x / perPxXY.y)
       }
       this.titleLabels.hideFrom(titleIndex)
     } else {
