@@ -4,6 +4,7 @@ import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './f
 import { figureMapping, type FigureFrame } from './figure/frame'
 import { highlightAccent, highlightOf, highlightOverlay, outermostMatches, selectedItems } from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
+import { splitFigureSvg, type LayerSpec } from './figure/layers'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
 import { applyOverscan, applySvgViewBox } from './view2d/dom/appliers'
@@ -13,9 +14,9 @@ import { startCamera } from './view2d/dom/startView'
 import { useView2d } from './view2d/dom/useView2d'
 import { focusCamera, formatFocus, type FocusSpec } from './view2d/focus'
 import { OVERSCAN } from './view2d/feel'
-import { growRect, liveTransformValue, type LiveTransform } from './view2d/liveTransform'
+import { growRect, liveTransform, liveTransformValue, type LiveTransform } from './view2d/liveTransform'
 import { formatZoom } from './view2d/readout'
-import type { Camera, Rect } from './view2d/types'
+import type { Camera, Rect, Size } from './view2d/types'
 import './FigureView.css'
 
 // What a click on the figure reports: the item picked, and what it names.
@@ -108,20 +109,24 @@ const queryFlag = (name: string): string | null => {
 }
 const LIVE = queryFlag('live') !== '0'
 const WILL_CHANGE = queryFlag('wc') !== '0'
-const OVERSCAN_USED = LIVE ? (Number.isFinite(Number(queryFlag('overscan') ?? NaN)) && queryFlag('overscan') !== null ? Number(queryFlag('overscan')) : OVERSCAN) : 0
+const OVERSCAN_OVERRIDE = queryFlag('overscan') !== null && Number.isFinite(Number(queryFlag('overscan'))) ? Number(queryFlag('overscan')) : null
 
 const NONE: readonly string[] = []
 
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
+  // The renderer's one svg, split into stacked layers (figure/layers.ts): each
+  // is its own <svg>, moved, and redrawn, on its own terms.
+  const parts = useMemo(() => splitFigureSvg(svg), [svg])
+
   // Stable across renders, and that identity is load-bearing rather than a
   // micro-optimisation: React compares the dangerouslySetInnerHTML *object*,
   // not the string inside it, so a fresh literal re-writes the container's
-  // innerHTML on every render. That replaces the <svg> element — throwing
+  // innerHTML on every render. That replaces the <svg> elements — throwing
   // away the compensated label sizes and detaching every node this component
   // is holding — on every single frame of a pan.
-  const markup = useMemo(() => ({ __html: svg }), [svg])
+  const markup = useMemo(() => ({ __html: parts.map((part) => part.svg).join('') }), [parts])
 
   // The content frame: the view the renderer fitted, in drawing coordinates.
   // Everything else is relative to it: the zoom, the limits, and what "reset"
@@ -144,55 +149,90 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
 
   // Apply the camera: the window itself, and the compensation that keeps text
   // and dots the size they were drawn at. The last one applied is remembered
-  // so that a new <svg> with the same view (a rebuilt spec) can be put back
-  // where the reader was.
-  // `window`: what the svg was committed over, the visible window and its overscan.
-  const applied = useRef<{ zoom: number; visible: Rect; window: Rect; pxPerUnit: number } | null>(null)
-  // How far the live view is scaled from the committed drawing (1 at a commit),
-  // for what is measured against the live camera, not the drawing.
+  // so that a new set of <svg>s with the same view (a rebuilt spec) can be put
+  // back where the reader was.
+  const applied = useRef<{ zoom: number; visible: Rect; pxPerUnit: number } | null>(null)
+  // How far the live view is scaled from the drawing layer's last redraw (1 at
+  // a redraw), for what is measured against the live camera, not the drawing.
   const liveScale = useRef(1)
   // The elements the look is on now, so a change touches only those.
   const lit = useRef<Element[]>([])
-  const compensation = useRef<Compensation | null>(null)
+  // Per layer svg: the window it was last drawn for (the screen's own aspect,
+  // without its overscan) and the label sizes written into it.
+  const layerState = useRef(new Map<SVGSVGElement, { committed: Rect | null; compensation: Compensation | null }>())
 
-  // A commit: the svg is (re)drawn over `visible` and its overscan, clearing
-  // the live transform; the label sizes follow. The only
-  // place any of it is rewritten, so a move costs one of these every so often
-  // (see view2d/liveTransform.ts's commitDue) and not one a frame.
-  const paint = useCallback(
-    (visible: Rect, zoom: number) => {
-      const root = containerRef.current?.querySelector('svg')
-      if (!root) return
-      const window = growRect(visible, OVERSCAN_USED)
-      applyOverscan(root, OVERSCAN_USED)
-      applySvgViewBox(root, window)
-      root.style.transform = ''
-      root.style.willChange = ''
-      liveScale.current = 1
-      compensation.current = compensate(root, zoom, compensation.current)
-    },
-    [],
-  )
+  // The layer svgs, bottom first, each with the policy of its layer.
+  const layerRoots = useCallback((): { root: SVGSVGElement; spec: LayerSpec; top: boolean }[] => {
+    const roots = [...(containerRef.current?.querySelectorAll<SVGSVGElement>('svg[data-figure-layer]') ?? [])]
+    return roots.flatMap((root, i) => {
+      const spec = parts.find((part) => part.name === root.getAttribute('data-figure-layer'))?.spec
+      return spec ? [{ root, spec, top: i === roots.length - 1 }] : []
+    })
+  }, [parts])
 
-  // Between commits: the committed drawing is moved on the compositor.
-  const paintLive = useCallback((transform: LiveTransform) => {
-    const root = containerRef.current?.querySelector('svg')
-    if (!root) return
+  const stateOf = (root: SVGSVGElement) => {
+    let state = layerState.current.get(root)
+    if (!state) layerState.current.set(root, (state = { committed: null, compensation: null }))
+    return state
+  }
+
+  // A redraw of one layer: its svg is (re)drawn over `visible` and its
+  // overscan, clearing its live transform; its label sizes follow.
+  const commitLayer = (root: SVGSVGElement, spec: LayerSpec, visible: Rect, zoom: number, top: boolean) => {
+    const state = stateOf(root)
+    const overscan = LIVE ? (OVERSCAN_OVERRIDE ?? spec.overscan) : 0
+    applyOverscan(root, overscan)
+    applySvgViewBox(root, growRect(visible, overscan))
+    root.style.transform = ''
+    root.style.willChange = ''
+    state.committed = visible
+    state.compensation = compensate(root, zoom, state.compensation)
+    if (top) liveScale.current = 1
+  }
+
+  // Between redraws: the layer's drawing is moved on the compositor, from where
+  // it was last drawn to where the view is now.
+  const moveLayer = (root: SVGSVGElement, live: Rect, screen: Size, top: boolean) => {
+    const state = stateOf(root)
+    if (!state.committed) return
+    const transform = liveTransform(state.committed, live, screen)
     root.style.willChange = WILL_CHANGE ? 'transform' : ''
     root.style.transform = liveTransformValue(transform)
-    liveScale.current = transform.scale
-  }, [])
+    if (top) liveScale.current = transform.scale
+  }
+
+  // A commit of the view. A layer that is dear to redraw (its policy is 'rest')
+  // is redrawn only once the view has come to rest, and moved in between.
+  const paint = useCallback(
+    (visible: Rect, zoom: number, settled = true) => {
+      const box = containerRef.current
+      const screen = box ? { width: box.clientWidth, height: box.clientHeight } : null
+      for (const { root, spec, top } of layerRoots()) {
+        if (spec.commit === 'motion' || settled || !stateOf(root).committed || !screen) commitLayer(root, spec, visible, zoom, top)
+        else moveLayer(root, visible, screen, top)
+      }
+    },
+    [layerRoots],
+  )
+
+  // Between commits of the view: every layer is moved from where it was last drawn.
+  const paintLive = useCallback(
+    (_transform: LiveTransform, live: Rect, screen: Size) => {
+      for (const { root, top } of layerRoots()) moveLayer(root, live, screen, top)
+    },
+    [layerRoots],
+  )
 
   const view = useView2d({
     frame: content,
     start,
     items,
-    onApply: (camera, visible, pxPerUnit) => {
-      applied.current = { zoom: camera.zoom, visible, window: growRect(visible, OVERSCAN_USED), pxPerUnit }
-      paint(visible, camera.zoom)
+    onApply: (camera, visible, pxPerUnit, settled) => {
+      applied.current = { zoom: camera.zoom, visible, pxPerUnit }
+      paint(visible, camera.zoom, settled)
     },
     onLive: LIVE ? paintLive : undefined,
-    overscan: OVERSCAN_USED,
+    overscan: LIVE ? (OVERSCAN_OVERRIDE ?? OVERSCAN) : 0,
     onHover: setHovered,
     onSelect: (ids) => {
       setSelected(ids)
@@ -221,32 +261,35 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // Outermost only: a styled figure puts the identity on a group and on every
   // path inside it. Every selected item shows the selection look.
   useLayoutEffect(() => {
-    const root = containerRef.current?.querySelector('svg')
-    if (!root) return
-    root.querySelectorAll('[data-figure-highlight]').forEach((overlay) => overlay.remove())
+    const roots = layerRoots().map((layer) => layer.root)
+    const top = roots[roots.length - 1]
+    if (!top) return
+    roots.forEach((root) => root.querySelectorAll('[data-figure-highlight]').forEach((overlay) => overlay.remove()))
     const clear = (element: Element) => element.classList.remove('figure-hovered', 'figure-selected')
     if (hovered === null && selected.length === 0) {
       lit.current.forEach(clear)
       lit.current = []
       return
     }
-    const accent = highlightAccent(getComputedStyle(root).getPropertyValue('--accent'))
-    root.insertAdjacentHTML('beforeend', highlightOverlay(items ?? [], hovered, selected, accent))
+    const accent = highlightAccent(getComputedStyle(top).getPropertyValue('--accent'))
+    top.insertAdjacentHTML('beforeend', highlightOverlay(items ?? [], hovered, selected, accent))
     const hot = hovered === null ? [] : (itemsById.get(hovered)?.targets ?? [])
     const picked = selected.flatMap((id) => itemsById.get(id)?.targets ?? [])
     const hoveredMatches: Element[] = []
     const selectedMatches: Element[] = []
-    root.querySelectorAll('[data-statement], [data-object="givens"]').forEach((element) => {
-      const match = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked, {
-        hovered,
-        selected,
+    for (const root of roots) {
+      root.querySelectorAll('[data-statement], [data-object="givens"]').forEach((element) => {
+        const match = highlightOf(element.getAttribute('data-statement'), element.getAttribute('data-object'), hot, picked, {
+          hovered,
+          selected,
+        })
+        if (match.hovered) hoveredMatches.push(element)
+        if (match.selected) selectedMatches.push(element)
       })
-      if (match.hovered) hoveredMatches.push(element)
-      if (match.selected) selectedMatches.push(element)
-    })
+    }
     const parent = (element: Element): Element | null => {
       const up = element.parentElement
-      return up === (root as Element) ? null : up
+      return up === null || up.tagName.toLowerCase() === 'svg' ? null : up
     }
     const looks = new Map<Element, { hovered: boolean; selected: boolean }>()
     for (const element of outermostMatches(hoveredMatches, parent)) looks.set(element, { hovered: true, selected: false })
@@ -262,7 +305,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       element.classList.toggle('figure-selected', look.selected)
     }
     lit.current = [...looks.keys()]
-  }, [hovered, selected, items, itemsById, markup])
+  }, [hovered, selected, items, itemsById, markup, layerRoots])
 
   // The runtime focus: a change of the spec moves the view there, animated.
   // Compared by value, so a parent that rebuilds an identical spec each render

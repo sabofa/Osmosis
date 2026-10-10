@@ -40,7 +40,9 @@ export interface View2dOptions {
   // ../liveTransform). `onApply` is then called to commit, when the motion
   // has stopped or has drifted far enough (see commitDue); the engine clears
   // its transform there.
-  onLive?(transform: LiveTransform): void
+  // `live` is the window now, and `screen` its size, for an engine that keeps
+  // several drawings, each committed at its own time, and moves each on its own.
+  onLive?(transform: LiveTransform, live: Rect, screen: Size): void
   // With `onLive`: how much larger than the screen the committed drawing is on
   // each side, as a fraction of the screen (0: exactly the screen). The
   // engine draws `visible` grown by this in `onApply`; the hook needs it to
@@ -100,6 +102,8 @@ class Controller {
   // The live view is not the committed one yet; the frame loop must go on
   // until it is.
   private uncommitted = false
+  // The last commit was made at rest (see draw).
+  private restCommitted = true
   private lastAtStart = true
   // The pointer as last published, to publish only a change.
   private lastPointer: Vec | null = null
@@ -137,6 +141,7 @@ class Controller {
       this.lastDrawn = null
       this.committed = null
       this.uncommitted = false
+      this.restCommitted = true
       this.pointerScreen = null
       this.clearPointing()
       return
@@ -151,6 +156,7 @@ class Controller {
       this.key = key
       this.lastDrawn = null
       this.committed = null
+      this.restCommitted = true
       this.clearPointing()
     }
     this.draw()
@@ -477,24 +483,32 @@ class Controller {
     } else {
       // The drawing is committed now and then; between, it is moved.
       const prior = this.committed
-      const due = commitDue({
-        committed: prior ? prior.visible : null,
-        live: visible,
-        overscan: overscan ?? 0,
-        moving: m.moving,
-        idleMs: now - this.lastChangeAt,
-        sinceCommitMs: prior ? now - prior.at : Infinity,
-        reduced: this.reduced,
-        screenChanged: prior !== null && (prior.screen.width !== this.screen.width || prior.screen.height !== this.screen.height),
-      })
+      // At rest: still, and for long enough (a first draw has nothing to wait for).
+      const atRest = !m.moving && (prior === null || now - this.lastChangeAt >= SETTLE_MS)
+      const due =
+        commitDue({
+          committed: prior ? prior.visible : null,
+          live: visible,
+          overscan: overscan ?? 0,
+          moving: m.moving,
+          idleMs: now - this.lastChangeAt,
+          sinceCommitMs: prior ? now - prior.at : Infinity,
+          reduced: this.reduced,
+          screenChanged: prior !== null && (prior.screen.width !== this.screen.width || prior.screen.height !== this.screen.height),
+        }) ||
+        // A move always ends in a commit made at rest, even when its last
+        // commit already shows the window the view stopped at: an engine that
+        // redraws its dear layers only at rest (FigureView) is waiting for it.
+        (prior !== null && atRest && !this.restCommitted)
       if (due) {
         this.committed = { visible, screen: { ...this.screen }, at: now }
-        onApply(camera, visible, ppu, !m.moving && now - this.lastChangeAt >= SETTLE_MS)
+        this.restCommitted = atRest
+        onApply(camera, visible, ppu, atRest)
       } else if (changed && prior) {
-        onLive(liveTransform(prior.visible, visible, this.screen))
+        onLive(liveTransform(prior.visible, visible, this.screen), visible, this.screen)
       }
       const base = this.committed
-      this.uncommitted = base !== null && !sameRect(base.visible, visible)
+      this.uncommitted = base !== null && (!sameRect(base.visible, visible) || !this.restCommitted)
       // A commit with the camera unchanged (the view settled) has nothing new
       // to publish.
       if (!changed) return
