@@ -8,7 +8,9 @@
 // It does not sanitise. A number that is not finite in the scene is written as NaN or Infinity, which is
 // what the contact-sheet script looks for: a sampler that let one through should be seen to.
 import { resolveColor } from '../../parser/colors'
+import type { GraphConfig } from '../../parser/config'
 import { clipLineToBounds } from '../../render/clipLine'
+import { type GridPlan, gridPlan } from '../../render/grid'
 import { DARK_PALETTE, LIGHT_PALETTE } from '../../render/palette'
 import type { Chain, Scene, Vec2 } from '../../scene/types'
 import type { CorpusView } from './corpus'
@@ -17,10 +19,32 @@ export interface SvgOptions {
   theme?: 'light' | 'dark'
   // the radius of a mark, in the px of the view (the sheet is scaled down to a cell, so it asks for more than the viewer's 5)
   markRadius?: number
+  // the plot's frame (gridlines, axes, tick labels, axis titles) as the renderer plans it; absent, the drawer's own plain grid
+  frame?: SvgFrame
 }
+
+export interface SvgFrame {
+  plan: GridPlan
+  // whether the axes at 0 are drawn (the spec's @axes); default true
+  axes?: boolean
+}
+
+// The frame the renderer would plan for a view and a config, with the renderer's label margins and offsets (px).
+export function svgFrame(v: CorpusView, config: GraphConfig): SvgFrame {
+  const perPxX = (v.bounds.xMax - v.bounds.xMin) / v.widthPx
+  const perPxY = (v.bounds.yMax - v.bounds.yMin) / v.heightPx
+  const size = { widthPx: v.widthPx, heightPx: v.heightPx }
+  const plan = gridPlan(v.bounds, config, size, { x: 20 * perPxX, y: 14 * perPxY }, { x: 14 * perPxX, y: 14 * perPxY })
+  return { plan, axes: config.axes }
+}
+
+const TICK_FONT_PX = 12
+const TITLE_FONT_PX = 14
 
 const hex = (rgb: number) => `#${rgb.toString(16).padStart(6, '0')}`
 const n = (v: number) => v.toFixed(2)
+const escapeXml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const BASELINE = { top: 'hanging', bottom: 'text-after-edge', middle: 'central' } as const
 
 // A gridline step of 1, 2 or 5 times a power of ten that gives about eight divisions across a span.
 function niceStep(span: number): number {
@@ -56,11 +80,38 @@ export function sceneToSvg(scene: Scene, view: CorpusView, options: SvgOptions =
 
   // the grid, and the axes where the view holds them
   const grid: string[] = []
-  const stepX = niceStep(bounds.xMax - bounds.xMin)
-  const stepY = niceStep(bounds.yMax - bounds.yMin)
-  for (let k = Math.ceil(bounds.xMin / stepX); k * stepX <= bounds.xMax && grid.length < 400; k++) grid.push(line({ x: k * stepX, y: bounds.yMin }, { x: k * stepX, y: bounds.yMax }, stroke(hex(k === 0 ? palette.axis : palette.grid), k === 0 ? 1.2 : 1)))
-  for (let k = Math.ceil(bounds.yMin / stepY); k * stepY <= bounds.yMax && grid.length < 800; k++) grid.push(line({ x: bounds.xMin, y: k * stepY }, { x: bounds.xMax, y: k * stepY }, stroke(hex(k === 0 ? palette.axis : palette.grid), k === 0 ? 1.2 : 1)))
-  parts.push(`<g class="grid">${grid.join('')}</g>`)
+  if (options.frame) {
+    // the renderer's plan: faint lines, strong lines, the axes at 0, then labels and titles
+    const { plan, axes = true } = options.frame
+    const vertical = (x: number, attrs: string) => line({ x, y: bounds.yMin }, { x, y: bounds.yMax }, attrs)
+    const horizontal = (y: number, attrs: string) => line({ x: bounds.xMin, y }, { x: bounds.xMax, y }, attrs)
+    const faint = (axis: string) => `${stroke(hex(palette.grid), 1)} data-grid="faint" data-axis="${axis}"`
+    const strong = (axis: string) => `${stroke(hex(palette.gridStrong), 1)} data-grid="strong" data-axis="${axis}"`
+    for (const x of plan.faintX) grid.push(vertical(x, faint('x')))
+    for (const y of plan.faintY) grid.push(horizontal(y, faint('y')))
+    for (const x of plan.strongX) grid.push(vertical(x, strong('x')))
+    for (const y of plan.strongY) grid.push(horizontal(y, strong('y')))
+    if (axes) {
+      if (bounds.xMin <= 0 && 0 <= bounds.xMax) grid.push(vertical(0, `${stroke(hex(palette.axis), 1.2)} data-grid="axis"`))
+      if (bounds.yMin <= 0 && 0 <= bounds.yMax) grid.push(horizontal(0, `${stroke(hex(palette.axis), 1.2)} data-grid="axis"`))
+    }
+    parts.push(`<g class="grid">${grid.join('')}</g>`)
+    const text = (x: number, y: number, s: string, attrs: string) => `<text x="${n(px(x))}" y="${n(py(y))}" ${attrs} fill="${hex(palette.axis)}">${escapeXml(s)}</text>`
+    const tickAttrs = `font-size="${TICK_FONT_PX}" font-family="sans-serif" text-anchor="middle" dominant-baseline="central"`
+    const labels = [...plan.labelsX, ...plan.labelsY].map((l) => text(l.at.x, l.at.y, l.label, tickAttrs))
+    const titles = plan.titles.map((t) => {
+      const attrs = `font-size="${TITLE_FONT_PX}" font-family="sans-serif" text-anchor="${t.align}" dominant-baseline="${BASELINE[t.baseline]}"`
+      const out = text(t.at.x, t.at.y, t.text, attrs)
+      return t.rotate ? out.replace('<text ', `<text transform="rotate(-90 ${n(px(t.at.x))} ${n(py(t.at.y))})" `) : out
+    })
+    parts.push(`<g class="labels">${labels.join('')}${titles.join('')}</g>`)
+  } else {
+    const stepX = niceStep(bounds.xMax - bounds.xMin)
+    const stepY = niceStep(bounds.yMax - bounds.yMin)
+    for (let k = Math.ceil(bounds.xMin / stepX); k * stepX <= bounds.xMax && grid.length < 400; k++) grid.push(line({ x: k * stepX, y: bounds.yMin }, { x: k * stepX, y: bounds.yMax }, stroke(hex(k === 0 ? palette.axis : palette.grid), k === 0 ? 1.2 : 1)))
+    for (let k = Math.ceil(bounds.yMin / stepY); k * stepY <= bounds.yMax && grid.length < 800; k++) grid.push(line({ x: bounds.xMin, y: k * stepY }, { x: bounds.xMax, y: k * stepY }, stroke(hex(k === 0 ? palette.axis : palette.grid), k === 0 ? 1.2 : 1)))
+    parts.push(`<g class="grid">${grid.join('')}</g>`)
+  }
 
   // regions, bands and guides under, curves over, marks on top
   for (const o of scene.objects) {

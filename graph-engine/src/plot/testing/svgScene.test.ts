@@ -4,7 +4,7 @@ import { buildScene } from '../../scene/buildScene'
 import { chainOf } from '../../scene/chains'
 import type { Chain, Scene } from '../../scene/types'
 import { type CorpusView, view } from './corpus'
-import { sceneToSvg } from './svgScene'
+import { sceneToSvg, svgFrame } from './svgScene'
 
 const STD: CorpusView = view(-10, 10, -10, 10)
 
@@ -118,6 +118,70 @@ describe('sceneToSvg', () => {
   it('takes a dark theme', () => {
     expect(sceneToSvg(scene, STD, { theme: 'dark' })).toContain('fill="#201e15"')
     expect(svg).toContain('fill="#fdf6ea"')
+  })
+
+  it('is byte-identical to the unframed drawer without a frame', () => {
+    const fnv = (s: string) => {
+      let h = 0x811c9dc5
+      for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0
+      return h.toString(16)
+    }
+    const small = sceneOf('y = x^2')
+    const wide = view(0, 6.28, -1.2, 1.2)
+    expect([fnv(sceneToSvg(scene, STD)), fnv(sceneToSvg(small, STD)), fnv(sceneToSvg(sceneOf('y = sin(x)', wide), wide, { theme: 'dark' }))]).toEqual(['59efa1d5', '4b48d86e', '1b6ff8e5'])
+  })
+
+  describe('with a frame', () => {
+    const framed = (spec: string, v: CorpusView, theme?: 'light' | 'dark') => {
+      const parsed = parseSpec(spec)
+      const sc = buildScene(parsed.statements, v.bounds, parsed.config, undefined, parsed.statementLines, { widthPx: v.widthPx, heightPx: v.heightPx })
+      return sceneToSvg(sc, v, { theme, frame: svgFrame(v, parsed.config) })
+    }
+    const texts = (svg: string) => [...svg.matchAll(/<text [^>]*x="([^"]+)" y="([^"]+)"[^>]*>([^<]*)<\/text>/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), s: m[3] }))
+    const PI_VIEW = view(0, 2 * Math.PI, -1.2, 1.2)
+
+    it('puts pi labels at the pixel x of their values', () => {
+      const out = framed('y = sin(x)\n@xstep: pi/2', PI_VIEW)
+      const ts = texts(out)
+      for (const [s, k] of [['π/2', 1], ['π', 2], ['3π/2', 3], ['2π', 4]] as const) {
+        const t = ts.find((q) => q.s === s)
+        expect(t, s).toBeDefined()
+        expect(Math.abs(t!.x - ((k * Math.PI) / 2) * (800 / (2 * Math.PI)))).toBeLessThan(0.5)
+      }
+    })
+
+    it('labels log decades and draws faint minor lines', () => {
+      const v = view(0, 4, 0, 4, 800, 800)
+      const out = framed('y = x\n@yscale: log\n@bounds: 0,4,1,10000', v)
+      const ts = texts(out).map((q) => q.s)
+      for (const s of ['1', '10', '10²', '10³', '10⁴']) expect(ts).toContain(s)
+      expect(count(out, /<line [^>]*data-grid="faint" data-axis="y"/g)).toBe(8 * 4)
+    })
+
+    it('pins y labels to the left edge when the y axis is off screen', () => {
+      const out = framed('y = x', view(20, 30, -5, 5))
+      const ys = texts(out).filter((q) => /^[−-]?[0-4]$/.test(q.s))
+      expect(ys.length).toBeGreaterThan(3)
+      for (const q of ys) expect(q.x).toBeLessThan(60)
+    })
+
+    it('renders an authored title as text, escaped', () => {
+      const out = framed('y = x\n@titles: x "t (s) & <u>"', STD)
+      expect(out).toContain('>t (s) &amp; &lt;u&gt;</text>')
+    })
+
+    it('holds no NaN and no Infinity, and is deterministic', () => {
+      const spec = 'y = sin(x)\n@xstep: pi/2\n@titles: x "t (s)"'
+      const a = framed(spec, PI_VIEW, 'dark')
+      expect(a).not.toMatch(/NaN|Infinity/)
+      expect(a).toContain('>t (s)</text>')
+      expect(framed(spec, PI_VIEW, 'dark')).toBe(a)
+    })
+
+    it('draws the frame under the scene', () => {
+      const out = framed('y = x', STD)
+      expect(out.indexOf('<text')).toBeLessThan(out.indexOf('<polyline'))
+    })
   })
 
   it('does not hide a number that is not finite: it is written, for the contact sheet to find', () => {
