@@ -104,6 +104,8 @@ export interface GraphConfig {
   // Per-axis scale, from "@xscale:" / "@yscale:". A log axis needs a positive
   // range (checked against @bounds in parseConfig).
   scales: { x: AxisScale; y: AxisScale }
+  // "@lock": a static plot. Keeps its authored view; pan, zoom, keys and reset are ignored.
+  lock: boolean
   // Whether a detected feature point prints its coordinates.
   pointLabels: 'off' | 'coords'
   // Dashed vertical guide at a detected vertical asymptote. Splitting the
@@ -167,6 +169,7 @@ export function defaultConfig(): GraphConfig {
     labelEvery: 1,
     stepMode: 'nice',
     scales: { x: 'linear', y: 'linear' },
+    lock: false,
     pointLabels: 'off',
     asymptotes: true,
     hidden: new Set(),

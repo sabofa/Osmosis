@@ -123,3 +123,27 @@ describe('ViewController', () => {
     near(cam.getBounds().xMax, 10)
   })
 })
+
+describe('ViewController locked', () => {
+  const B = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+  it('wheel, drag, keys and reset leave the bounds and report not-handled; unlocking works again', () => {
+    const cam = new Camera2D(100, 100, B)
+    const vc = new ViewController(cam, { locked: true })
+    expect(vc.wheel(wheel({ deltaY: -100 }))).toBe(false)
+    expect(vc.wheel(wheel({ deltaY: -100, altKey: true }))).toBe(false)
+    expect(vc.pointerDown(ptr(50, 50, 0))).toEqual([])
+    expect(vc.pointerMove(ptr(70, 40, 16))).toEqual([])
+    expect(vc.pointerUp(ptr(70, 40, 32))).toEqual([])
+    expect(vc.key('ArrowLeft', 40)).toBe(false)
+    expect(vc.key('+', 50)).toBe(false)
+    vc.reset(60)
+    expect(vc.moving).toBe(false)
+    expect(vc.step(10000)).toBe(false)
+    expect(cam.getBounds()).toEqual(B)
+    vc.locked = false
+    expect(vc.wheel(wheel({ deltaY: -100 }))).toBe(true)
+    vc.step(20000)
+    expect(cam.getBounds().xMax).toBeLessThan(10)
+  })
+})
+

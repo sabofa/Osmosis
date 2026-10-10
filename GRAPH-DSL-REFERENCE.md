@@ -862,6 +862,7 @@ different keys; for a repeated key, the last one wins.
 | Directive | Values | Default | Notes |
 |---|---|---|---|
 | `@bounds` | `xMin,xMax,yMin,yMax` | auto | axis window; `xMin < xMax` and `yMin < yMax` required |
+| `@lock` | bare, or `true`\|`false` | `false` | static plot: keeps the authored view (`@bounds`, aspect, scales) and ignores pan, zoom, keys and reset; hover readouts still work, and the page scrolls over it. 2D only |
 | `@xstep`, `@ystep` | positive number | auto | gridline spacing |
 | `@grid` | `on`\|`off` | `on` | |
 | `@axes` | `on`\|`off` | `on` | |
@@ -883,6 +884,8 @@ different keys; for a repeated key, the last one wins.
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
 | `@param` | `<name> = <value> range [<min>, <max>] [step <s>] [integer]` | — | a named constant with a range, usable in every expression: `@param n = 3 range [0, 12] step 1 integer`. In a 2D graph every expression sees the authored value (there is no slider in the 2D viewer yet). A definition with the same name is an error on its line, and the `@param` is used |
 | `@focus` | `(x, y)`, `(x, y, z)` or `view (u, v)`, optionally followed by `zoom <k>` | fitted view | where a **figure** opens, in the figure's own coordinates — see "`@focus`: where a figure opens" below. Figures only; a plot or a table ignores it |
+
+`@lock` makes a graph static, for a figure that should not wander: the window is the one `@bounds` (or the auto-fit) already gives, and the plot keeps it. Dragging, the wheel, pinch, Alt+wheel, the arrow/zoom keys and reset do nothing, the page scrolls over the plot and the canvas takes no keyboard focus. Hover readouts still work, and editing `@bounds` live still moves the window. Write it bare (`@lock`) or as `@lock: true`; `@lock: false` is the default. 3D specs ignore it.
 
 ### `@focus`: where a figure opens
 

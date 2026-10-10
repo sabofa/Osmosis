@@ -350,3 +350,23 @@ describe('@focus', () => {
     expect(result.statements).toHaveLength(1)
   })
 })
+
+describe('@lock', () => {
+  it('defaults to false', () => expect(defaultConfig().lock).toBe(false))
+  it('bare @lock and @lock: true lock', () => {
+    expect(parse('@lock').lock).toBe(true)
+    expect(parse('@lock: true').lock).toBe(true)
+  })
+  it('@lock: false unlocks', () => {
+    const c = parse('@lock')
+    parseConfigLine('@lock: false', c)
+    expect(c.lock).toBe(false)
+  })
+  it('a junk value is a clear error', () => {
+    expect(() => parse('@lock: maybe')).toThrow(/@lock must be "true" or "false"/)
+    expect(() => parse('@lock: on')).toThrow(/@lock/)
+  })
+  it('parses through a whole spec', () => {
+    expect(parseSpec(['@lock', 'y = x'].join('\n')).config.lock).toBe(true)
+  })
+})

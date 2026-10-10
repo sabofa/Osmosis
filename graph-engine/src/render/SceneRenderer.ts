@@ -256,7 +256,7 @@ export class SceneRenderer {
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
     this.camera2d = new Camera2D(width, height, authoredBounds(options.config, width / height), options.config.space.aspect)
-    this.controller = new ViewController(this.camera2d)
+    this.controller = new ViewController(this.camera2d, { locked: options.config.lock })
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     // the size the first scene is built at: the observer reports it once as it starts, which is no change
@@ -273,8 +273,7 @@ export class SceneRenderer {
     canvas.addEventListener('pointercancel', this.handlePointerCancel)
     canvas.addEventListener('lostpointercapture', this.handlePointerCancel)
     canvas.addEventListener('keydown', this.handleKeyDown)
-    canvas.tabIndex = 0
-    canvas.style.touchAction = 'none'
+    this.applyLock(options.config.lock)
     canvas.style.outline = 'none'
     canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     canvas.addEventListener('pointermove', this.handleHoverMove)
@@ -340,7 +339,15 @@ export class SceneRenderer {
     return this.pixelToWorldXY(px).x
   }
 
+  // A locked plot is not an input surface: the page scrolls over it and it takes no keyboard focus.
+  private applyLock(locked: boolean) {
+    this.controller.locked = locked
+    this.canvas.tabIndex = locked ? -1 : 0
+    this.canvas.style.touchAction = locked ? 'auto' : 'none'
+  }
+
   setConfig(config: GraphConfig, palette?: Palette) {
+    this.applyLock(config.lock)
     // Only an edit to the authored frame moves the view; any other edit leaves the user's pan/zoom alone.
     // The caller rebuilds the scene right after, which picks up the new camera bounds.
     if (frameChanged(this.options.config, config)) {
@@ -532,6 +539,7 @@ export class SceneRenderer {
   }
 
   private handleWheel = (e: WheelEvent) => {
+    if (this.controller.locked) return
     e.preventDefault()
     const rect = this.canvas.getBoundingClientRect()
     this.controller.wheel({

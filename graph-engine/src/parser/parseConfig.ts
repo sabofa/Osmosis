@@ -52,6 +52,11 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
 
   const body = rawLine.trim().slice(1) // strip leading "@"
   const colonIdx = body.indexOf(':')
+  // "@lock" is a flag: bare means true.
+  if (colonIdx === -1 && body.trim() === 'lock') {
+    config.lock = true
+    return
+  }
   if (colonIdx === -1) throw new Error(`Expected "@key: value", got "@${body}"`)
 
   const key = body.slice(0, colonIdx).trim()
@@ -249,6 +254,11 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
       const next = { ...config.scales, [key === 'xscale' ? 'x' : 'y']: value }
       if (config.bounds) checkLogBounds(next, config.bounds)
       config.scales = next
+      return
+    }
+    case 'lock': {
+      if (value !== 'true' && value !== 'false') throw new Error(`@lock must be "true" or "false" (or bare "@lock"), got "${value}"`)
+      config.lock = value === 'true'
       return
     }
     case 'point-labels': {

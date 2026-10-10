@@ -38,8 +38,12 @@ export class ViewController {
 
   private readonly cam: Camera2D
 
-  constructor(cam: Camera2D, options?: { axisZoomAllowed?: () => boolean }) {
+  /** A locked (@lock) plot keeps its authored view: every input below is a no-op that reports not-handled. */
+  locked: boolean
+
+  constructor(cam: Camera2D, options?: { axisZoomAllowed?: () => boolean; locked?: boolean }) {
     this.cam = cam
+    this.locked = options?.locked ?? false
     this.axisZoomAllowed = options?.axisZoomAllowed ?? (() => axisZoomAllowedFor(cam.aspect()))
     this.recognizer = new GestureRecognizer({ screen: () => cam.screenSize() })
     this.motion = new ViewMotion({
@@ -61,41 +65,49 @@ export class ViewController {
   }
 
   pointerDown(s: PointerSample): Intent[] {
+    if (this.locked) return []
     return this.dispatch(this.recognizer.pointerDown(s))
   }
   pointerMove(s: PointerSample): Intent[] {
+    if (this.locked) return []
     return this.dispatch(this.recognizer.pointerMove(s))
   }
   pointerUp(s: PointerSample): Intent[] {
+    if (this.locked) return []
     return this.dispatch(this.recognizer.pointerUp(s))
   }
   pointerCancel(s: PointerSample): Intent[] {
+    if (this.locked) return []
     return this.dispatch(this.recognizer.pointerCancel(s))
   }
 
-  /** Plain wheel: isotropic zoom. Alt: x only; Alt+Shift: y only (exact, unsmoothed). */
-  wheel(w: WheelInput): void {
+  /** True when the wheel moved the view (a locked plot leaves it, and the page scrolls). Plain wheel: isotropic zoom. Alt: x only; Alt+Shift: y only (exact, unsmoothed). */
+  wheel(w: WheelInput): boolean {
+    if (this.locked) return false
     if (!w.altKey) {
       this.dispatch(this.recognizer.wheel({ ...w, deltaY: w.deltaY || w.deltaX }))
-      return
+      return true
     }
-    if (!this.axisZoomAllowed()) return
+    if (!this.axisZoomAllowed()) return true
     const factor = wheelFactor(w)
     const view = plotViewOf(this.motion.current, this.cam.getView().a, this.cam.getView().b)
     const next = axisZoom(view, this.cam.plotWindow(), w.shiftKey ? 'y' : 'x', factor, { x: w.x, y: w.y }, this.cam.screenSize())
     this.cam.setView(next)
     this.motion.setContent(this.cam.frame(), plotCameraOf(next))
     this.pending = true
+    return true
   }
 
   /** True when the key is the view's (the caller then preventDefaults). */
   key(key: string, t: number): boolean {
+    if (this.locked) return false
     const intents = this.recognizer.key({ key, t })
     this.dispatch(intents)
     return intents.some((i) => i.kind === 'zoom' || i.kind === 'pan' || i.kind === 'reset')
   }
 
   reset(t: number): void {
+    if (this.locked) return
     const start = this.cam.startView()
     const view = this.cam.getView()
     if (start.a !== view.a || start.b !== view.b) {
