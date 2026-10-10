@@ -119,6 +119,49 @@ export default function ReviewPage(): ReactNode {
     }
     return () => timers.forEach(clearTimeout)
   }, [pdf, q])
+  // ?hlSpans=3-9 highlights text-layer spans 3..9 of page 1 (multi-line when
+  // they span lines); ?selSpans=3-9 sets a native selection over them;
+  // ?dump=1 lists page-1 spans (index, top, text) in #dump.
+  useEffect(() => {
+    if (!pdf) return
+    let done = false
+    const t = setInterval(() => {
+      if (done) return
+      const spans = Array.from(document.querySelectorAll<HTMLElement>('.document-viewer-pdf-page[data-page="1"] .document-viewer-pdf-text-layer [data-start]')).filter(
+        (s) => s.firstChild instanceof Text
+      )
+      if (spans.length === 0) return
+      done = true
+      const parse = (k: string): [number, number] | null => {
+        const v = q.get(k)
+        if (!v) return null
+        const [a, b] = v.split('-').map(Number)
+        return spans[a] && spans[b] ? [a, b] : null
+      }
+      const hs = parse('hlSpans')
+      if (hs) {
+        const start = Number(spans[hs[0]].dataset.start)
+        const end = Number(spans[hs[1]].dataset.start) + (spans[hs[1]].firstChild as Text).length
+        setHl([{ id: 'hs', color: q.get('hlColor') ?? 'yellow', start, end }])
+      }
+      const ss = parse('selSpans')
+      if (ss) {
+        const r = document.createRange()
+        r.setStart(spans[ss[0]].firstChild as Text, 0)
+        r.setEnd(spans[ss[1]].firstChild as Text, (spans[ss[1]].firstChild as Text).length)
+        const sel = document.getSelection()
+        sel?.removeAllRanges()
+        sel?.addRange(r)
+      }
+      if (q.has('dump')) {
+        const pre = document.createElement('pre')
+        pre.id = 'dump'
+        pre.textContent = spans.map((s, i) => `${i}\t${Math.round(s.getBoundingClientRect().top)}\t${s.textContent}`).join('\n')
+        document.body.appendChild(pre)
+      }
+    }, 500)
+    return () => clearInterval(t)
+  }, [pdf, q])
   useEffect(() => { document.body.style.margin = '0' }, [])
   const sheetBg = `color-mix(in srgb, ${tokens.colors.page} ${opacity * 100}%, transparent)`
 

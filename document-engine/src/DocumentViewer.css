@@ -276,6 +276,21 @@
   display: contents;
 }
 
+/* Highlight and selection bars (pdfOverlays.ts) sit between the canvas and the
+   text layer; the native selection is drawn as bars instead of ragged span
+   boxes, so the text layer's own ::selection stays invisible. */
+.document-viewer-pdf-highlights,
+.document-viewer-pdf-selection {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.document-viewer-pdf-text-layer ::selection,
+.document-viewer-pdf-text-layer::selection {
+  background: transparent;
+}
+
 .document-viewer-pdf-marker {
   cursor: pointer;
   background: var(--de-marker-bg);

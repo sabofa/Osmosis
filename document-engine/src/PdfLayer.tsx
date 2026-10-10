@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { TextLayer, type PDFPageProxy, type RenderTask } from 'pdfjs-dist'
 import { loadPdf, PAGE_JOIN, type TextItemLike } from './pdfSetup'
 import { markerSpanInternal } from './offsetBoundary'
-import { usePaintHighlights } from './highlightPainter'
+import { paintPdfHighlights, paintPdfSelection } from './pdfOverlays'
 import { RESCALE_DEBOUNCE_MS, canvasPlan, cssStretch, planRender, sameScale } from './pdfRenderModel'
 import type { ResolvedMarker } from './viewerModel'
 import type { DocumentAnchor, DocumentHighlight, DocumentRenderError } from './types'
@@ -47,7 +47,6 @@ export default function PdfLayer({
   markers,
   highlights,
   showOverlays,
-  groupPrefix,
   onErrors,
   onText,
   scale = 1,
@@ -466,7 +465,30 @@ export default function PdfLayer({
     return () => cleanups.forEach((fn) => fn())
   }, [tick, fullText, markers])
 
-  usePaintHighlights(rootRef, groupPrefix, anchors, highlights, showOverlays, `${tick}:${fullText.length}`)
+  // Highlights and the live selection are drawn as clean per-line overlay bars
+  // (not ::highlight on the ragged text spans); see pdfOverlays.ts. Repaints
+  // when the data changes or any page's text layer is (re)built.
+  useEffect(() => {
+    const root = rootRef.current
+    if (root) paintPdfHighlights(root, anchors, highlights, showOverlays)
+  }, [anchors, highlights, showOverlays, tick, fullText])
+
+  useEffect(() => {
+    let raf = 0
+    const paint = () => {
+      raf = 0
+      if (rootRef.current) paintPdfSelection(rootRef.current)
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(paint)
+    }
+    paint()
+    document.addEventListener('selectionchange', schedule)
+    return () => {
+      document.removeEventListener('selectionchange', schedule)
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [tick, fullText])
 
   const register = useCallback((n: number, el: HTMLDivElement | null) => engineRef.current?.setHost(n, el), [])
 
