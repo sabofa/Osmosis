@@ -82,6 +82,10 @@ export default function PdfLayer({
   onPageSizesRef.current = onPageSizes
   const scaleRef = useRef(scale)
   scaleRef.current = scale
+  // Latest overlay inputs, so a freshly swapped-in page can repaint its
+  // highlight/selection bars in the same task as the swap (no bar-less frame).
+  const paintRef = useRef({ anchors, highlights, showOverlays })
+  paintRef.current = { anchors, highlights, showOverlays }
 
   useEffect(() => {
     let disposed = false
@@ -208,6 +212,14 @@ export default function PdfLayer({
       st.textDiv = textDiv
       st.renderedScale = scale
       applyStretch(st)
+      // Old and new inner swap in this one task (the new canvas was drawn
+      // off-screen), so the page never shows blank or half-drawn. Repaint the
+      // overlay bars now too, rather than 30 ms later via the tick.
+      if (textDiv && st.host) {
+        const p = paintRef.current
+        paintPdfHighlights(st.host, p.anchors, p.highlights, p.showOverlays)
+        paintPdfSelection(st.host)
+      }
       if (textDiv || hadText) bump()
       else void ensureText(st)
     }

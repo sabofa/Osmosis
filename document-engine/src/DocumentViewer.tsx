@@ -5,6 +5,7 @@ import TextContent from './TextContent'
 import { ZoomControl, SettingsMenu } from './Toolbar'
 import {
   SCROLLBAR_ALLOWANCE,
+  ZOOM_ANIM_MS,
   ZOOM_MAX,
   ZOOM_MIN,
   clampZoom,
@@ -16,6 +17,7 @@ import {
   stepZoom,
   wheelZoomFactor,
   zoomAround,
+  zoomTweenStart,
   type Size,
   type ZoomMode,
 } from './zoomModel'
@@ -175,6 +177,15 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   // Re-anchor the scroll position after a zoom so the point under the cursor
   // (or the viewport centre) stays put.
+  //
+  // Discrete steps (buttons, menu, fit modes) then ease the stretch: layout
+  // is already at the new scale, so the one content wrapper is drawn at the
+  // old look (transform about the anchor point) and transitions to 1. Only
+  // that wrapper's transform animates (WAAPI): no per-frame layout. Continuous
+  // ctrl+wheel/pinch asks for no tween (it is continuous already).
+  const tweenRequest = useRef<{ x: number; y: number } | null>(null)
+  const prevScale = useRef(scale)
+  const tweenAnim = useRef<Animation | null>(null)
   useLayoutEffect(() => {
     const el = scrollRef.current
     const target = pendingScroll.current
@@ -183,7 +194,43 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       el.scrollTop = target.top
     }
     pendingScroll.current = null
+    const from = prevScale.current
+    prevScale.current = scale
+    const anchor = tweenRequest.current
+    tweenRequest.current = null
+    const content = contentRef.current
+    if (!anchor || !el || !content || !paged || from === scale) return
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    let running = 1
+    try {
+      running = new DOMMatrixReadOnly(getComputedStyle(content).transform).a || 1
+    } catch {
+      /* no transform in flight */
+    }
+    if (typeof content.animate !== 'function') return
+    // Web Animations: no forced reflow to commit a start state, and the
+    // transform runs off the main thread where the browser can.
+    tweenAnim.current?.cancel()
+    content.style.transformOrigin = `${el.scrollLeft + anchor.x}px ${el.scrollTop + anchor.y}px`
+    const anim = content.animate([{ transform: `scale(${zoomTweenStart(from, scale, running)})` }, { transform: 'scale(1)' }], {
+      duration: ZOOM_ANIM_MS,
+      easing: 'ease-out',
+    })
+    tweenAnim.current = anim
+    const done = () => {
+      if (tweenAnim.current !== anim) return
+      tweenAnim.current = null
+      content.style.transformOrigin = ''
+    }
+    anim.onfinish = done
+    anim.oncancel = done
   }, [scale])
+  useEffect(
+    () => () => {
+      tweenAnim.current?.cancel()
+    },
+    []
+  )
 
   const setZoom = useCallback(
     (mode: ZoomMode, around?: { x: number; y: number }) => {
@@ -196,7 +243,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         const cursor = around ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 }
         const base = pendingScroll.current ?? { left: el.scrollLeft, top: el.scrollTop }
         pendingScroll.current = zoomAround(current, next, cursor, base)
-        scaleRef.current = next      }
+        scaleRef.current = next
+        tweenRequest.current = around ? null : cursor
+      }
       setZoomState(isFitMode(mode) ? mode : clampZoom(mode, zoomMin, zoomMax))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -210,14 +259,30 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
+    // Events inside one frame are multiplied together and applied once per
+    // animation frame, so a fast burst costs one relayout per frame.
+    let raf = 0
+    let factor = 1
+    let cursor = { x: 0, y: 0 }
+    const flush = () => {
+      raf = 0
+      const f = factor
+      factor = 1
+      setZoomRef.current(scaleRef.current * f, cursor)
+    }
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const box = el!.getBoundingClientRect()
-      setZoomRef.current(scaleRef.current * wheelZoomFactor(e.deltaY), { x: e.clientX - box.left, y: e.clientY - box.top })
+      cursor = { x: e.clientX - box.left, y: e.clientY - box.top }
+      factor *= wheelZoomFactor(e.deltaY)
+      if (!raf) raf = requestAnimationFrame(flush)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      if (raf) cancelAnimationFrame(raf)
+    }
   }, [])
   const [showOverlays, setShowOverlays] = useState(true)
   const [localHighlights, setLocalHighlights] = useState<DocumentHighlight[]>(highlights ?? [])

@@ -74,6 +74,18 @@ export function settleFitScale(prev: number | null, next: number, rel = FIT_SCAL
   return Math.abs(next - prev) / prev < rel ? prev : next
 }
 
+// Length of the stretch animation for button/menu/fit-mode zoom steps.
+export const ZOOM_ANIM_MS = 140
+
+// Layout jumps to the new scale at once; the content is then drawn at the OLD
+// look (a transform of this factor about the anchor) and eased to 1. If a
+// previous animation is still running, `currentFactor` is its transform now,
+// so the new one starts from what is actually on screen.
+export function zoomTweenStart(fromScale: number, toScale: number, currentFactor = 1): number {
+  if (!(fromScale > 0) || !(toScale > 0) || !(currentFactor > 0)) return 1
+  return (fromScale * currentFactor) / toScale
+}
+
 // Next stop above (in) or below (out) the current scale, clamped to the range.
 export function stepZoom(current: number, direction: 'in' | 'out', min = ZOOM_MIN, max = ZOOM_MAX): number {
   const eps = 0.004

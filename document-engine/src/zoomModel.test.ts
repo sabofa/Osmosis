@@ -12,6 +12,7 @@ import {
   stepZoom,
   wheelZoomFactor,
   zoomAround,
+  zoomTweenStart,
   type Size,
   type ZoomMode,
 } from './zoomModel'
@@ -193,6 +194,21 @@ describe('scrollbar feedback loop (regression)', () => {
   })
   it('numeric modes ignore the allowance', () => {
     expect(stableFitScale(1.5, outer, wide, PAD, SB)).toBe(1.5)
+  })
+})
+
+describe('zoomTweenStart', () => {
+  it('starts at the old look: zooming in 1 -> 2 starts at half size', () => {
+    expect(zoomTweenStart(1, 2)).toBe(0.5)
+    expect(zoomTweenStart(2, 1)).toBe(2)
+  })
+  it('continues from a running animation', () => {
+    // layout is at 2 but still drawn at factor 0.4 (visual 0.8); now go to 4
+    expect(zoomTweenStart(2, 4, 0.4)).toBeCloseTo(0.2)
+  })
+  it('bad input is neutral', () => {
+    expect(zoomTweenStart(0, 2)).toBe(1)
+    expect(zoomTweenStart(1, NaN)).toBe(1)
   })
 })
 
