@@ -81,6 +81,17 @@ export function assertNoCycles(defs: readonly LayerTokenDef[]): void {
 
 assertNoCycles(LAYER_TOKENS)
 
+const asNumber = (v: number | string | undefined): number =>
+  typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : Number.NaN
+
+/**
+ * Resolve every layer token from theme values and device overrides.
+ * - Precedence: a usable (numeric) device override, else a usable theme value, else the token default.
+ *   A non-numeric device override is skipped, so it never hides a valid theme value.
+ * - Each value is clamped to its floor; doc-media-alpha is never less opaque than the sheet (atLeast).
+ * - ctx.minOverride is a paper kind's own legibility guard (06 2.3): it only raises tokens that define
+ *   floorsBy (the paper token). Other tokens ignore it here; call effectiveFloor directly for per-layer use.
+ */
 export function resolveLayerAlphas(
   themeValues: Partial<Record<string, number | string>>,
   deviceOverrides: Partial<Record<string, number | string>> = {},
@@ -91,8 +102,11 @@ export function resolveLayerAlphas(
     const hit = out[token]
     if (hit !== undefined) return hit
     const d = layerDef(token)
-    const raw = deviceOverrides[token] ?? themeValues[token] ?? d.default
-    let v = clampTokenValue(token, raw, ctx)
+    const dev = deviceOverrides[token]
+    const thm = themeValues[token]
+    const raw = Number.isFinite(asNumber(dev)) ? dev : Number.isFinite(asNumber(thm)) ? thm : d.default
+    const tokenCtx: FloorCtx = d.floorsBy ? ctx : { paper: ctx.paper }
+    let v = clampTokenValue(token, raw as number | string, tokenCtx)
     if (d.atLeast) v = Math.max(v, resolveOne(d.atLeast))
     out[token] = v
     return v

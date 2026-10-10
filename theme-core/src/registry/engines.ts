@@ -14,7 +14,7 @@ type Row = [string, string, (c: DeriveCtx) => string]
 
 const layerFloor = (token: string): number => LAYER_TOKENS.find((t) => t.token === token)!.floor
 
-const alias =(to: string) => (c: DeriveCtx): string => c.get(to)
+const alias = (to: string) => (c: DeriveCtx): string => c.get(to)
 
 function build(g: 'graph' | 'document', type: TokenType, modeDependent: boolean, rows: Row[]): TokenDef[] {
   return rows.map(([name, meaning, derive]) => def(name, g, type, meaning, derive, { modeDependent }))

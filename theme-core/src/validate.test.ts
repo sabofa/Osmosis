@@ -380,6 +380,11 @@ describe('validate: layer alpha warnings', () => {
     expect(validate(ov('any', { 'doc-sheet-alpha': '0.9' })).warnings.filter((x) => x.path.includes('media'))).toEqual([])
     expect(validate(ov('any', { 'doc-sheet-alpha': '0.6', 'doc-media-alpha': '0.95' })).warnings.filter((x) => x.path.includes('media'))).toEqual([])
   })
+  it('explicit media below the sheet but also below its own floor: only the floor warning', () => {
+    const r = validate(ov('any', { 'doc-sheet-alpha': '0.6', 'doc-media-alpha': '0.5' }))
+    const msgs = r.warnings.filter((x) => x.path === 'overrides.any.doc-media-alpha').map((x) => x.message)
+    expect(msgs).toEqual(['doc-media-alpha is below its floor, clamped to 0.7'])
+  })
   it('none for built-ins', () => {
     for (const b of BUILTINS) expect(validate(b).warnings.filter((x) => x.message.includes('alpha'))).toEqual([])
   })

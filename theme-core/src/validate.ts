@@ -3,7 +3,7 @@ import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type LayerKind, type
 import { tokenByName, isValidTokenValue } from './registry/index.js'
 import { mirrorSeed, resolve } from './resolve.js'
 import { compose, ownerOf } from './layers.js'
-import { LAYER_TOKENS, formatAlpha } from './layerTokens.js'
+import { LAYER_TOKENS, clampTokenValue, formatAlpha } from './layerTokens.js'
 import { DEFAULT_THEME_ID, DEFAULT_WORKSPACE_THEME_ID, builtinById } from './builtins/index.js'
 
 export interface Issue { path: string; message: string; suggestion?: string }
@@ -251,8 +251,13 @@ function layerWarnings(raw: Record<string, unknown>, layer: LayerKind, errors: I
 function alphaWarnings(raw: Record<string, unknown>, warnings: Issue[]): void {
   if (!isObj(raw.overrides)) return
   const floors = new Map(LAYER_TOKENS.map((t) => [t.token, t.floor]))
+  // resolved lazily: only a manifest that overrides doc-media-alpha needs the sheet value
   let resolved: ReturnType<typeof resolve> | undefined
-  try { resolved = resolve(normalise(raw as never)) } catch { resolved = undefined }
+  let tried = false
+  const resolvedOnce = (): ReturnType<typeof resolve> | undefined => {
+    if (!tried) { tried = true; try { resolved = resolve(normalise(raw as never)) } catch { resolved = undefined } }
+    return resolved
+  }
   for (const [bucket, o] of Object.entries(raw.overrides)) {
     if (!isObj(o)) continue
     for (const [tok, v] of Object.entries(o)) {
@@ -263,9 +268,10 @@ function alphaWarnings(raw: Record<string, unknown>, warnings: Issue[]): void {
       if (n < floor) {
         warnings.push({ path, message: `${tok} is below its floor, clamped to ${formatAlpha(floor)}`, suggestion: `set ${tok} to ${formatAlpha(floor)}` })
       }
-      if (tok === 'doc-media-alpha' && resolved) {
-        const sheet = Number(resolved[bucket === 'dark' ? 'dark' : 'light']['doc-sheet-alpha'])
-        if (Number.isFinite(sheet) && n < sheet) {
+      if (tok === 'doc-media-alpha') {
+        const res = resolvedOnce()
+        const sheet = res ? Number(res[bucket === 'dark' ? 'dark' : 'light']['doc-sheet-alpha']) : Number.NaN
+        if (Number.isFinite(sheet) && clampTokenValue(tok, n) < sheet) {
           warnings.push({ path, message: `doc-media-alpha is below the sheet opacity and will be raised to ${formatAlpha(sheet)}` })
         }
       }

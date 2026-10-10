@@ -33,6 +33,19 @@ describe('effectiveFloor', () => {
   })
 })
 
+describe('minOverride is a paper guard', () => {
+  it('resolveLayerAlphas applies it only to tokens with floorsBy', () => {
+    const r = resolveLayerAlphas({}, {}, { minOverride: 0.8 })
+    expect(r['graph-region-alpha']).toBe(0.18)
+    expect(r['callout-alpha']).toBe(0.92)
+    expect(r['graph-paper-alpha']).toBe(1)
+    expect(resolveLayerAlphas({}, { 'graph-paper-alpha': 0.5 }, { minOverride: 0.8 })['graph-paper-alpha']).toBe(0.8)
+  })
+  it('effectiveFloor still honours it for any token when called directly', () => {
+    expect(effectiveFloor('callout-alpha', { minOverride: 0.8 })).toBe(0.8)
+  })
+})
+
 describe('clampTokenValue', () => {
   it('clamps and falls back', () => {
     expect(clampTokenValue('callout-alpha', 0.1)).toBe(0.7)
@@ -80,6 +93,10 @@ describe('resolveLayerAlphas', () => {
     const theme = { 'doc-sheet-alpha': 0.6, 'doc-media-alpha': 0.7 }
     expect(resolveLayerAlphas(theme)['doc-media-alpha']).toBe(0.7)
     expect(resolveLayerAlphas(theme, { 'doc-sheet-alpha': 0.9 })['doc-media-alpha']).toBe(0.9)
+  })
+  it('a non-numeric device override falls back to the theme value, then the default', () => {
+    expect(resolveLayerAlphas({ 'doc-sheet-alpha': 0.8 }, { 'doc-sheet-alpha': 'xx' })['doc-sheet-alpha']).toBe(0.8)
+    expect(resolveLayerAlphas({}, { 'callout-alpha': 'xx' })['callout-alpha']).toBe(0.92)
   })
   it('device wins over theme; paper raises; out of range clamped', () => {
     expect(resolveLayerAlphas({ 'callout-alpha': 0.8 }, { 'callout-alpha': 0.75 })['callout-alpha']).toBe(0.75)

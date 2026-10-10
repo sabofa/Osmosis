@@ -28,6 +28,8 @@ describe('contracts', () => {
     it(`${m.id}/${mode} document complete`, () => {
       const d = toDocumentTokens(r, m, mode)
       expect(allStrings({ ...d, scale: { ...d.scale, ratio: 'x' }, alphas: {} })).toBe(true)
+      for (const v of Object.values(d.alphas)) expect(typeof v).toBe('number')
+      for (const v of Object.values(toGraphThemeSource(r, m, mode).alphas!)) expect(typeof v).toBe('number')
       expect(d.colors.highlight).toHaveLength(4)
       expect(d.key).toBe(r.key)
       expect(d.mode).toBe(mode)
@@ -89,6 +91,12 @@ describe('contracts', () => {
       expect(docA(mk({}, { 'doc-sheet-alpha': '0.6' })).media).toBe(0.95)
       expect(docA(mk({}, { 'doc-sheet-alpha': '0.6', 'doc-media-alpha': '0.65' })).media).toBe(0.7)
       expect(docA(mk({}, { 'doc-sheet-alpha': '0.8', 'doc-media-alpha': '0.75' })).media).toBe(0.8)
+    })
+    it('the document key changes when an alpha changes', () => {
+      const k = (any: Record<string, string>) => { const m = mk({}, any); return toDocumentTokens(resolve(m), m, 'light').key }
+      expect(k({ 'callout-alpha': '0.8' })).not.toBe(k({}))
+      expect(k({ 'callout-alpha': '0.8' })).not.toBe(k({ 'callout-alpha': '0.9' }))
+      expect(k({})).toBe(k({}))
     })
     it('finite numbers in [0,1], both modes', () => {
       for (const m of [a, b, mk({ translucency: 0.5 })]) for (const mode of modes) {
