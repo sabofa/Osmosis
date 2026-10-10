@@ -11,6 +11,8 @@ export interface HoverInfo {
   screenX: number
   screenY: number
   label?: string
+  // Smaller side of the visible world window when read: the digits a readout needs.
+  span: number
   // True when the reported position is a feature's exact location rather than
   // an interpolated point on a sampled curve. The marker is drawn differently
   // so an exact reading is visibly not a guess.
@@ -176,6 +178,7 @@ export class HoverResolver {
       screenX: screen.x,
       screenY: screen.y,
       label: target.label,
+      span: Math.min(camera2d.getBounds().xMax - camera2d.getBounds().xMin, camera2d.getBounds().yMax - camera2d.getBounds().yMin),
       exact: target.exact,
       feature: target.feature,
     }

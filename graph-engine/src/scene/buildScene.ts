@@ -18,7 +18,7 @@ import { chainOf } from './chains'
 import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
 import { buildConstructions } from './geometry/buildConstructions'
 import { circleCurve, polygonObjects } from './geometry/sceneObjects'
-import { formatCoord } from './format'
+import { formatCoord, formatForSpan } from './format'
 import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 
 const FIELD_DIVISIONS = 18
@@ -258,9 +258,9 @@ function sampleParametric(statement: Statement & { kind: 'parametric' }, stateme
   return sampleStatement({ kind: 'parametric', param: statement.param, fx, fy, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
 }
 
-function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
+function featureLabel(feature: FeaturePoint, config: GraphConfig, span = Infinity): string | null {
   if (config.pointLabels !== 'coords') return null
-  return `(${formatCoord(feature.position.x)}, ${formatCoord(feature.position.y)})`
+  return `(${formatForSpan(feature.position.x, span)}, ${formatForSpan(feature.position.y, span)})`
 }
 
 // One pass over every explicit statement, after the curves are built. Explicit
@@ -316,7 +316,7 @@ function buildFeaturePoints(
     return plane.log && (Number.isNaN(position.x) || Number.isNaN(position.y)) ? [] : [{ feature, position }]
   }).map(({ feature, position }) => ({
     kind: 'point' as const,
-    label: featureLabel(feature, config),
+    label: featureLabel(feature, config, Math.min(bounds.xMax - bounds.xMin, bounds.yMax - bounds.yMin)),
     position,
     feature: feature.kind,
     exact: feature.exact,

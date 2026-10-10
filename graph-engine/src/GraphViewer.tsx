@@ -3,7 +3,7 @@ import { parseSpec } from './parser/parseSpec'
 import { defaultConfig, type GraphConfig } from './parser/config'
 import { buildScene } from './scene/buildScene'
 import { buildTable, type NamedTableData } from './scene/buildTable'
-import { formatCoord } from './scene/format'
+import { formatCoord, formatForSpan } from './scene/format'
 import { isThreeD, resolvePanels } from './scene/mode'
 import { renderFigure } from './figure/render'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
@@ -364,7 +364,7 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
         {figure === null && hover && (
           <div className="graph-viewer-hover-label" style={{ left: hover.screenX, top: hover.screenY }}>
             {hover.label ? `${hover.label}: ` : ''}(
-            {formatCoord(hover.worldX)}, {formatCoord(hover.worldY)})
+            {formatForSpan(hover.worldX, hover.span)}, {formatForSpan(hover.worldY, hover.span)})
           </div>
         )}
       </div>
