@@ -120,3 +120,37 @@ export function frameTicks(view: FrameView, config: GraphConfig): FrameTicks {
     y: axisTicks('y', b.yMin, b.yMax, view.heightPx, config.ystep, config),
   }
 }
+
+export interface LabelAnchor {
+  value: number
+  label: string
+  kind: 'major' | 'minor'
+  at: { x: number; y: number } // world position where the label is drawn
+}
+
+function pinned(axisPos: number, lo: number, hi: number, margin: number): number {
+  const a = lo + margin
+  const b = hi - margin
+  if (!(a <= b)) return (lo + hi) / 2
+  return Math.min(Math.max(axisPos, a), b)
+}
+
+/**
+ * Where each tick label is drawn. x labels ride the line y = 0 and y labels the line x = 0; an axis outside the
+ * view pins its labels to the nearest edge, inset by `margins` (world units). A log axis has no zero, so labels
+ * for ticks along the other axis pin to this axis's lower edge.
+ */
+export function labelAnchors(
+  ticks: FrameTicks,
+  view: FrameView,
+  margins: { x: number; y: number },
+  scales: { x: 'linear' | 'log'; y: 'linear' | 'log' } = { x: 'linear', y: 'linear' },
+): { x: LabelAnchor[]; y: LabelAnchor[] } {
+  const b = view.bounds
+  const rowY = scales.y === 'log' ? b.yMin + margins.y : pinned(0, b.yMin, b.yMax, margins.y)
+  const colX = scales.x === 'log' ? b.xMin + margins.x : pinned(0, b.xMin, b.xMax, margins.x)
+  return {
+    x: ticks.x.map((t) => ({ ...t, at: { x: t.value, y: rowY } })),
+    y: ticks.y.map((t) => ({ ...t, at: { x: colX, y: t.value } })),
+  }
+}

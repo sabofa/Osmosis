@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultConfig } from '../../parser/config'
-import { frameTicks, type FrameView } from './ticks'
+import { frameTicks, labelAnchors, type FrameView } from './ticks'
 
 const view = (xMin: number, xMax: number, yMin: number, yMax: number, widthPx = 800, heightPx = 480): FrameView => ({
   bounds: { xMin, xMax, yMin, yMax },
@@ -98,5 +98,50 @@ describe('frameTicks degenerate', () => {
     const t = frameTicks(view(0, 1, 0, 1, 0, 0), cfg())
     expect(t).toEqual({ x: [], y: [] })
     expect(frameTicks(view(Infinity, -Infinity, NaN, NaN), cfg())).toEqual({ x: [], y: [] })
+  })
+})
+
+describe('labelAnchors', () => {
+  const m = { x: 0.5, y: 0.25 }
+  const anchors = (v: FrameView, c = cfg()) => labelAnchors(frameTicks(v, c), v, m, c.scales)
+
+  it('sits on the axes when 0 is inside the view', () => {
+    const a = anchors(view(-10, 10, -6, 6))
+    expect(a.x.every((l) => l.at.y === 0)).toBe(true)
+    expect(a.y.every((l) => l.at.x === 0)).toBe(true)
+    expect(a.x[0].at.x).toBe(a.x[0].value)
+    expect(a.y[0].at.y).toBe(a.y[0].value)
+  })
+
+  it('pins y labels to the left edge when the y-axis is off-screen to the left', () => {
+    const a = anchors(view(20, 30, -5, 5))
+    expect(a.y.length).toBeGreaterThan(0)
+    expect(a.y.every((l) => l.at.x === 20 + 0.5)).toBe(true)
+    expect(a.x.every((l) => l.at.y === 0)).toBe(true)
+  })
+
+  it('pins to the right edge when the view is entirely negative in x', () => {
+    const a = anchors(view(-30, -20, -5, 5))
+    expect(a.y.every((l) => l.at.x === -20 - 0.5)).toBe(true)
+  })
+
+  it('pins x labels to the bottom or top edge when y=0 is off-screen', () => {
+    expect(anchors(view(-5, 5, 10, 20)).x.every((l) => l.at.y === 10 + 0.25)).toBe(true)
+    expect(anchors(view(-5, 5, -20, -10)).x.every((l) => l.at.y === -10 - 0.25)).toBe(true)
+  })
+
+  it('an axis exactly on the edge is held inside by the margin', () => {
+    const a = anchors(view(0, 10, 0, 10))
+    expect(a.y.every((l) => l.at.x === 0.5)).toBe(true)
+    expect(a.x.every((l) => l.at.y === 0.25)).toBe(true)
+  })
+
+  it('log axes pin to the lower edge', () => {
+    const c = defaultConfig()
+    c.scales.y = 'log'
+    c.scales.x = 'log'
+    const a = anchors(view(1, 1e3, 1, 1e4), c)
+    expect(a.x.every((l) => l.at.y === 1 + 0.25)).toBe(true)
+    expect(a.y.every((l) => l.at.x === 1 + 0.5)).toBe(true)
   })
 })
