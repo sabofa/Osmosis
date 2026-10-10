@@ -1,15 +1,17 @@
 import type { DocumentHighlight } from './types'
+import { DEFAULT_HIGHLIGHT_COLOR } from './highlightPalette'
 
-// Selecting a range that overlaps existing highlight(s) toggles PER COLOR:
-// a portion already highlighted in the SAME color the user just picked gets
-// removed (that's "highlighting inside a highlight unhighlights it").
-// A portion already highlighted in a DIFFERENT color gets recolored — it's
-// unconditionally cut out of the old-color highlight (a character can't be
-// two colors at once) and always lands in `additions` below, since only
-// same-color overlap is excluded from re-addition. A portion with no
-// existing highlight just gets added. Any existing highlight touched by the
-// selection is split around the overlap regardless of color, so its
-// untouched portions survive with their original color intact.
+const colorOf = (h: DocumentHighlight) => h.color ?? DEFAULT_HIGHLIGHT_COLOR
+
+// Applying a colour to the selection [start, end):
+//  1. Nothing covered -> one new highlight for the whole range.
+//  2. Mixed (some covered, some not) -> the colour fills ONLY the uncovered
+//     gaps; existing highlights are returned untouched (same objects).
+//  3. Entirely covered and every touched highlight already has this colour
+//     -> remove highlighting from just [start, end) (split around it).
+//  4. Entirely covered, not all this colour -> recolour: split around
+//     [start, end) and add ONE highlight of this colour for the whole range.
+// Coverage is the union of the existing highlights (order/overlap agnostic).
 export function toggleHighlightRange(
   highlights: DocumentHighlight[],
   start: number,
@@ -17,35 +19,30 @@ export function toggleHighlightRange(
   color: string,
   makeId: () => string
 ): DocumentHighlight[] {
-  const untouched: DocumentHighlight[] = []
-  const remainders: DocumentHighlight[] = []
-  const sameColorCovered: { start: number; end: number }[] = []
+  if (start >= end) return highlights
 
-  for (const h of highlights) {
-    const overlapStart = Math.max(h.start, start)
-    const overlapEnd = Math.min(h.end, end)
-    if (overlapStart >= overlapEnd) {
-      untouched.push(h)
-      continue
-    }
-    if (h.start < overlapStart) remainders.push({ id: makeId(), start: h.start, end: overlapStart, color: h.color })
-    if (overlapEnd < h.end) remainders.push({ id: makeId(), start: overlapEnd, end: h.end, color: h.color })
-    if (h.color === color) sameColorCovered.push({ start: overlapStart, end: overlapEnd })
-    // else: h's color differs from the target — its overlapped portion is
-    // dropped here (already excluded from remainders above) and falls
-    // through to `additions` below, i.e. it gets recolored.
-  }
+  const touching = highlights.filter((h) => Math.max(h.start, start) < Math.min(h.end, end))
 
-  sameColorCovered.sort((a, b) => a.start - b.start)
-  const additions: DocumentHighlight[] = []
+  // Gaps of [start, end) not covered by any highlight.
+  const clipped = touching
+    .map((h) => ({ start: Math.max(h.start, start), end: Math.min(h.end, end) }))
+    .sort((a, b) => a.start - b.start)
+  const gaps: { start: number; end: number }[] = []
   let cursor = start
-  for (const c of sameColorCovered) {
-    if (cursor < c.start) additions.push({ id: makeId(), start: cursor, end: c.start, color })
+  for (const c of clipped) {
+    if (cursor < c.start) gaps.push({ start: cursor, end: c.start })
     cursor = Math.max(cursor, c.end)
   }
-  if (cursor < end) additions.push({ id: makeId(), start: cursor, end, color })
+  if (cursor < end) gaps.push({ start: cursor, end })
 
-  return [...untouched, ...remainders, ...additions]
+  if (touching.length === 0 || gaps.length > 0) {
+    return [...highlights, ...gaps.map((g) => ({ id: makeId(), start: g.start, end: g.end, color }))]
+  }
+
+  const removing = touching.every((h) => colorOf(h) === color)
+  const result = removeHighlightRange(highlights, start, end, makeId)
+  if (!removing) result.push({ id: makeId(), start, end, color })
+  return result
 }
 
 // Used by the click-to-edit affordance: which (if any) highlight contains
