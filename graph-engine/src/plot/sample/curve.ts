@@ -102,6 +102,7 @@ import type { Bounds, Break, Chain, SceneObject, Vec2 } from '../../scene/types'
 import { chordMeets, sampleRange } from './adaptive'
 import { BandSink } from './band'
 import { classify, type Classification } from './limits'
+import type { AxisScale } from '../frame/scale'
 import { locateZeros, type Zero } from './locate'
 import { ChainSink } from './sink'
 import { type Generator, joinGenerators, troubleGenerators } from './structure'
@@ -117,6 +118,9 @@ export interface View {
   bounds: Bounds
   widthPx: number
   heightPx: number
+  // absent = linear; the samplers measure through these from subtask 4.2 on
+  xScale?: AxisScale
+  yScale?: AxisScale
 }
 
 export interface CurveOptions {
