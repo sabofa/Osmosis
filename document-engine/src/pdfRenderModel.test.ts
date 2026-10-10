@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MAX_CANVAS_PIXELS, canvasPlan, cssStretch, expandWindow, planRender, sameScale } from './pdfRenderModel'
+import { EMBED_MAX_CANVAS_PIXELS, MAX_CANVAS_PIXELS, canvasPlan, cssStretch, expandWindow, planRender, sameScale } from './pdfRenderModel'
 
 describe('expandWindow', () => {
   it('expands by the radius and clips to the document', () => {
@@ -40,6 +40,19 @@ describe('canvasPlan', () => {
     expect(p.outputScale).toBeLessThan(1)
     expect(p.width * p.height).toBeLessThanOrEqual(MAX_CANVAS_PIXELS)
   })
+  it('non-finite sizes fall back to a safe 1x1 plan', () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      const p = canvasPlan(bad, 800, 2)
+      expect(Number.isFinite(p.width) && Number.isFinite(p.height) && Number.isFinite(p.outputScale)).toBe(true)
+      expect(p).toEqual({ width: 1, height: 1, outputScale: 1 })
+    }
+    expect(canvasPlan(600, NaN, 1)).toEqual({ width: 1, height: 1, outputScale: 1 })
+  })
+  it('the embedded cap keeps every page of a 20-page 5x embed under 4M px', () => {
+    const p = canvasPlan(612 * 5, 792 * 5, 2, EMBED_MAX_CANVAS_PIXELS)
+    expect(p.width * p.height).toBeLessThanOrEqual(EMBED_MAX_CANVAS_PIXELS)
+    expect(20 * p.width * p.height * 4).toBeLessThan(400_000_000)
+  })
   it('leaves a page under the cap untouched', () => {
     expect(canvasPlan(612, 792, 2).outputScale).toBe(2)
   })
@@ -77,10 +90,15 @@ describe('planRender', () => {
     const plan = planRender({ ...base, visible: [10], rendered })
     expect(plan.free).toEqual([1, 6])
   })
-  it('while debouncing starts nothing but still frees', () => {
-    const plan = planRender({ ...base, debouncing: true, visible: [10], rendered: new Map([[1, 1]]) })
+  it('while debouncing does not re-render drawn pages but still frees', () => {
+    const stale = new Map([[1, 1], [9, 0.5], [10, 0.5], [11, 0.5]])
+    const plan = planRender({ ...base, debouncing: true, visible: [10], rendered: stale })
     expect(plan.render).toEqual([])
     expect(plan.free).toEqual([1])
+  })
+  it('while debouncing, on-screen pages with no canvas still render at once', () => {
+    const plan = planRender({ ...base, debouncing: true, visible: [10], rendered: new Map([[10, 0.5]]) })
+    expect(plan.render).toEqual([9, 11])
   })
   it('at 25% many pages are visible and all (plus a margin) render', () => {
     const plan = planRender({ ...base, scale: 0.25, visible: [1, 2, 3, 4, 5, 6], rendered: new Map() })

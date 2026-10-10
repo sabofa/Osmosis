@@ -5,6 +5,8 @@ export const RENDER_RADIUS = 1 // visible page +/- this many pages get a canvas
 export const KEEP_RADIUS = 3 // rendered pages farther than this are freed
 export const MAX_DPR = 2
 export const MAX_CANVAS_PIXELS = 16_000_000
+// The embedded view draws EVERY page at once, so each gets a smaller budget.
+export const EMBED_MAX_CANVAS_PIXELS = 4_000_000
 export const RESCALE_DEBOUNCE_MS = 150
 
 // 1-based page numbers within `radius` of any visible page, ascending.
@@ -28,6 +30,8 @@ export interface CanvasPlan {
 // the pixel count at MAX_CANVAS_PIXELS: past that we lower the resolution
 // (outputScale may drop below 1) rather than fail to allocate.
 export function canvasPlan(cssW: number, cssH: number, dpr: number, maxPixels = MAX_CANVAS_PIXELS, dprCap = MAX_DPR): CanvasPlan {
+  // Math.max(1, NaN) is NaN: refuse non-finite sizes with a safe 1x1 buffer.
+  if (!Number.isFinite(cssW) || !Number.isFinite(cssH)) return { width: 1, height: 1, outputScale: 1 }
   const w = Math.max(1, cssW)
   const h = Math.max(1, cssH)
   let outputScale = Math.min(Math.max(Number.isFinite(dpr) ? dpr : 1, 1), dprCap)
@@ -56,8 +60,9 @@ export interface RenderPlanInput {
   // page -> scale it is rendered at, or being rendered at (in flight).
   rendered: ReadonlyMap<number, number>
   scale: number
-  // A rescale debounce is pending: do not start renders yet (existing pages
-  // are CSS-stretched meanwhile); freeing still happens.
+  // A rescale debounce is pending: do not RE-render pages that already have a
+  // canvas (they are CSS-stretched meanwhile). Pages with no canvas at all
+  // would show blank, so those render at once. Freeing always happens.
   debouncing: boolean
 }
 
@@ -71,14 +76,12 @@ export function planRender(input: RenderPlanInput): RenderPlan {
   const want = expandWindow(visible, input.numPages, RENDER_RADIUS)
   const keep = new Set(expandWindow(visible, input.numPages, KEEP_RADIUS))
   const dist = (p: number) => visible.reduce((m, v) => Math.min(m, Math.abs(v - p)), Infinity)
-  const render = input.debouncing
-    ? []
-    : want
-        .filter((p) => {
-          const at = input.rendered.get(p)
-          return at === undefined || !sameScale(at, input.scale)
-        })
-        .sort((a, b) => dist(a) - dist(b) || a - b)
+  const render = want
+    .filter((p) => {
+      const at = input.rendered.get(p)
+      return at === undefined || (!input.debouncing && !sameScale(at, input.scale))
+    })
+    .sort((a, b) => dist(a) - dist(b) || a - b)
   const free = [...input.rendered.keys()].filter((p) => !keep.has(p)).sort((a, b) => a - b)
   return { render, free }
 }

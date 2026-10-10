@@ -64,7 +64,9 @@ function drawBars(layer: HTMLElement, inner: HTMLElement, groups: { rects: Box[]
   const origin = inner.getBoundingClientRect()
   // Undo any instant-rescale transform so bars are in the inner's own space
   // (the layer is inside it and gets scaled together with the page).
-  const f = inner.offsetWidth > 0 && origin.width > 0 ? origin.width / inner.offsetWidth : 1
+  // The inner's exact layout width (offsetWidth is rounded to an integer).
+  const layoutW = parseFloat(inner.style.width)
+  const f = layoutW > 0 && origin.width > 0 ? origin.width / layoutW : 1
   const frag = document.createDocumentFragment()
   for (const g of groups) {
     const local = g.rects.map((r) => ({
@@ -132,6 +134,15 @@ export function paintPdfHighlights(
 
 export function paintPdfSelection(root: HTMLElement): void {
   const sel = typeof document !== 'undefined' ? document.getSelection() : null
+  // selectionchange fires for the whole document: when the selection is
+  // elsewhere and no bars are showing, there is nothing to draw or clear.
+  // (Anchor/focus inside the root, or a range spanning it, e.g. select-all.)
+  const touches =
+    !!sel &&
+    !sel.isCollapsed &&
+    ([sel.anchorNode, sel.focusNode].some((n) => !!n && root.contains(n)) ||
+      Array.from({ length: sel.rangeCount }, (_, i) => sel.getRangeAt(i)).some((r) => r.intersectsNode(root)))
+  if (!touches && !root.querySelector(`.${SELECTION_LAYER_CLASS} > *`)) return
   const ranges: Range[] = []
   if (sel && !sel.isCollapsed) for (let i = 0; i < sel.rangeCount; i++) ranges.push(sel.getRangeAt(i))
   for (const { inner, textDiv } of pages(root)) {

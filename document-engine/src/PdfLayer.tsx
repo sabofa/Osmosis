@@ -163,7 +163,10 @@ export default function PdfLayer({
       // element. TextLayer is used standalone here, so set them explicitly,
       // mirroring what pdf_viewer.mjs sets on its page container.
       div.style.setProperty('--scale-factor', String(viewport.scale))
-      div.style.setProperty('--user-unit', '1')
+      // pdfjs PageViewport multiplies its width/height by userUnit but keeps
+      // `.scale` as given (pdfjs-dist build/pdf.mjs, class PageViewport), so
+      // the text layer needs the page's real UserUnit here, as pdf_viewer does.
+      div.style.setProperty('--user-unit', String(viewport.userUnit || 1))
       div.style.setProperty('--total-scale-factor', 'calc(var(--scale-factor) * var(--user-unit))')
       div.style.setProperty('--scale-round-x', '1px')
       div.style.setProperty('--scale-round-y', '1px')
@@ -194,6 +197,10 @@ export default function PdfLayer({
         if (!disposed) onErrorsRef.current?.([{ message: err instanceof Error ? err.message : String(err) }])
       } finally {
         st.textBuilding = false
+        // A rescale swapIn that landed mid-build bailed (textBuilding) and the
+        // build above discarded itself; the new inner still needs its text.
+        // Only when the inner CHANGED, so a persistent error cannot loop.
+        if (!disposed && st.inner && st.inner !== inner && !st.textDiv) void ensureText(st)
       }
     }
 
@@ -340,7 +347,8 @@ export default function PdfLayer({
           return
         }
         // Instant feedback came from the CSS stretch; the sharp re-render of
-        // the visible pages waits until the zoom settles.
+        // already-drawn pages waits until the zoom settles. Visible pages with
+        // no canvas yet render right away (planRender), never blank for 150ms.
         debouncing = true
         if (debounceTimer !== null) clearTimeout(debounceTimer)
         debounceTimer = setTimeout(() => {
@@ -348,6 +356,7 @@ export default function PdfLayer({
           debouncing = false
           reconcile()
         }, RESCALE_DEBOUNCE_MS)
+        reconcile()
       },
     }
     engineRef.current = engine

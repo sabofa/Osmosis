@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PDFPageProxy, RenderTask } from 'pdfjs-dist'
 import { loadPdf } from './pdfSetup'
-import { RESCALE_DEBOUNCE_MS, canvasPlan, cssStretch } from './pdfRenderModel'
+import { EMBED_MAX_CANVAS_PIXELS, RESCALE_DEBOUNCE_MS, canvasPlan, cssStretch } from './pdfRenderModel'
 import type { DocumentRenderError } from './types'
 
 interface Size {
@@ -73,6 +73,12 @@ export default function SimplePdfPages({
   )
 }
 
+function freeCanvas(canvas: HTMLCanvasElement | null) {
+  if (!canvas) return
+  canvas.width = 0
+  canvas.height = 0
+}
+
 function PageCanvas({
   page,
   size,
@@ -88,13 +94,26 @@ function PageCanvas({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [drawnAt, setDrawnAt] = useState<number | null>(null)
+  // The canvas currently on screen. It stays visible until a replacement has
+  // finished drawing, so a rescale never blanks the page.
+  const shownRef = useRef<HTMLCanvasElement | null>(null)
+
+  // Unmount: release the visible canvas's backing store.
+  useEffect(
+    () => () => {
+      freeCanvas(shownRef.current)
+      shownRef.current = null
+    },
+    []
+  )
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
     let task: RenderTask | null = null
     let stale = false
-    const plan = canvasPlan(size.w * settled, size.h * settled, window.devicePixelRatio || 1)
+    // Every page is drawn at once here, so each gets a smaller pixel budget.
+    const plan = canvasPlan(size.w * settled, size.h * settled, window.devicePixelRatio || 1, EMBED_MAX_CANVAS_PIXELS)
     const canvas = document.createElement('canvas')
     canvas.width = plan.width
     canvas.height = plan.height
@@ -112,7 +131,10 @@ function PageCanvas({
     task.promise
       .then(() => {
         if (stale) return
+        const displaced = shownRef.current
         host.replaceChildren(canvas)
+        shownRef.current = canvas
+        freeCanvas(displaced)
         setDrawnAt(settled)
       })
       .catch((err) => {
@@ -122,8 +144,9 @@ function PageCanvas({
     return () => {
       stale = true
       task?.cancel()
-      canvas.width = 0
-      canvas.height = 0
+      // Free only a canvas that never made it on screen; the shown one is
+      // freed when it is displaced or on unmount.
+      if (shownRef.current !== canvas) freeCanvas(canvas)
     }
   }, [page, size, settled, onErrors])
 
