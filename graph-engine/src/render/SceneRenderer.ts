@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
 import { Camera2D } from './camera2d'
+import { ViewController } from './viewController'
+import { keyReachesView, pointerKindOf } from '../view2d/dom/domInput'
+import type { Intent, PointerSample } from '../view2d'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
 import { GeometryGroupManager } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
@@ -213,7 +216,9 @@ export class SceneRenderer {
   // Whether the view is being dragged or zoomed, for the coarse pass (render/interaction.ts)
   private interaction = createInteraction(() => performance.now())
   private settleTimer: ReturnType<typeof setTimeout> | null = null
-  private lastPointer = { x: 0, y: 0 }
+  private controller: ViewController
+  // The camera may be behind the input (a drag or pinch is applied at the next frame).
+  private viewDirty = false
   private options: SceneRendererOptions
   private palette: Palette
   private lastScene: GraphScene | null = null
@@ -248,6 +253,7 @@ export class SceneRenderer {
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
     this.camera2d = new Camera2D(width, height, options.config.bounds ?? undefined)
+    this.controller = new ViewController(this.camera2d)
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     // the size the first scene is built at: the observer reports it once as it starts, which is no change
@@ -261,8 +267,12 @@ export class SceneRenderer {
     window.addEventListener('pointerup', this.handlePointerUp)
     // A drag the browser takes away (a touch becoming a scroll, a dialog) never gets a pointerup, and neither
     // does one whose capture is lost: both end it, and settle it, as the pointerup would have.
-    canvas.addEventListener('pointercancel', this.handlePointerUp)
-    canvas.addEventListener('lostpointercapture', this.handlePointerUp)
+    canvas.addEventListener('pointercancel', this.handlePointerCancel)
+    canvas.addEventListener('lostpointercapture', this.handlePointerCancel)
+    canvas.addEventListener('keydown', this.handleKeyDown)
+    canvas.tabIndex = 0
+    canvas.style.touchAction = 'none'
+    canvas.style.outline = 'none'
     canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     canvas.addEventListener('pointermove', this.handleHoverMove)
     canvas.addEventListener('pointerleave', this.handlePointerLeave)
@@ -340,6 +350,7 @@ export class SceneRenderer {
     const height = Math.max(rect.height, 1)
     this.renderer.setSize(width, height, false)
     this.camera2d.resize(width, height)
+    this.controller.resized()
     this.drawGrid()
     const changed = this.interaction.viewportChanged(width, height)
     if (changed && rect.width >= 1 && rect.height >= 1) {
@@ -349,14 +360,27 @@ export class SceneRenderer {
     }
   }
 
+  private sample(e: PointerEvent): PointerSample {
+    const box = this.canvas.getBoundingClientRect()
+    return {
+      id: e.pointerId,
+      x: e.clientX - box.left,
+      y: e.clientY - box.top,
+      t: performance.now(),
+      kind: pointerKindOf(e.pointerType),
+      button: e.button,
+      shiftKey: e.shiftKey,
+    }
+  }
+
   private handlePointerDown = (e: PointerEvent) => {
-    this.interaction.pointerDown()
-    this.lastPointer = { x: e.clientX, y: e.clientY }
+    this.canvas.focus({ preventScroll: true })
     try {
       this.canvas.setPointerCapture(e.pointerId)
     } catch {
       // ignore — pointer capture is a nicety (keeps dragging past the canvas edge), not required for panning to work
     }
+    this.onIntents(this.controller.pointerDown(this.sample(e)))
   }
 
   // Rebuilding the scene (re-sampling every function/region/etc. over the new
@@ -433,47 +457,77 @@ export class SceneRenderer {
     }, wait)
   }
 
-  private handlePointerMove = (e: PointerEvent) => {
-    if (!this.interaction.isDragging()) return
-    const dx = e.clientX - this.lastPointer.x
-    const dy = e.clientY - this.lastPointer.y
-    this.lastPointer = { x: e.clientX, y: e.clientY }
-    const rect = this.canvas.getBoundingClientRect()
-    this.camera2d.panByPixels(dx, dy, rect.height)
-    this.interaction.pointerMove()
-    // Cheap, every frame — keeps the guide line's far end reaching the true
-    // bottom of the view throughout the drag instead of freezing at
-    // whatever bounds were current when hover was last fully resolved (see
-    // refreshGuideLine's own comment). The full re-hit-test in resolveHover
-    // stays skipped for the whole drag (see its `dragging` guard) — this
-    // only touches the line's two vertices, not a scan of every candidate.
+  // What the view's input does to the renderer's interaction clock (see interaction.ts). A drag is
+  // dragStart..dragEnd; everything else that moves the view (wheel, keys, coast, reset) is a burst.
+  private onIntents(intents: Intent[]) {
+    for (const i of intents) {
+      if (i.kind === 'dragStart') this.interaction.pointerDown()
+      else if (i.kind === 'dragEnd') {
+        this.applyView() // the last drag move is not in the camera yet
+        // a coast carries on and settles when it stops; otherwise a moved drag settles now
+        if (this.interaction.pointerUp() && !this.controller.moving) this.settle()
+      } else if (i.kind === 'drag' || i.kind === 'zoom' || i.kind === 'pinch' || i.kind === 'pan' || i.kind === 'reset') {
+        this.viewDirty = true
+      }
+    }
+    // Belt-and-suspenders: see resolveHover's own re-resolve in scheduleViewChange.
+    if (intents.some((i) => i.kind === 'dragEnd') && this.pendingHoverEvent) this.resolveHover(this.pendingHoverEvent)
+  }
+
+  // Step the motion to now and, if the camera moved, tell everything that follows it.
+  private applyView() {
+    if (!this.controller.step(performance.now())) {
+      this.viewDirty = this.controller.moving
+      return
+    }
+    this.viewDirty = this.controller.moving
     this.hoverResolver.refreshGuideLine(this.camera2d)
     this.needsRender = true
+    if (this.interaction.isDragging()) this.interaction.pointerMove()
+    else {
+      this.interaction.wheel()
+      this.armSettle()
+    }
     this.scheduleViewChange()
   }
 
-  private handlePointerUp = () => {
-    const moved = this.interaction.pointerUp()
-    if (moved) this.settle()
-    // Belt-and-suspenders alongside scheduleViewChange's own re-resolve: that
-    // one only fires once its queued rAF callback runs, which could in
-    // principle land before or after this synchronous pointerup depending on
-    // frame timing. Resolving right here means the hover marker reappears at
-    // its correct, settled-view position the instant the drag actually ends,
-    // regardless of that race.
-    if (this.pendingHoverEvent) this.resolveHover(this.pendingHoverEvent)
+  private handlePointerMove = (e: PointerEvent) => {
+    this.onIntents(this.controller.pointerMove(this.sample(e)))
+  }
+
+  private handlePointerUp = (e: PointerEvent) => {
+    this.onIntents(this.controller.pointerUp(this.sample(e)))
+  }
+
+  private handlePointerCancel = (e: PointerEvent) => {
+    this.onIntents(this.controller.pointerCancel(this.sample(e)))
+  }
+
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (!keyReachesView(e)) return
+    const t = performance.now()
+    if (this.controller.key(e.key, t)) {
+      e.preventDefault()
+      this.viewDirty = true
+    }
   }
 
   private handleWheel = (e: WheelEvent) => {
     e.preventDefault()
     const rect = this.canvas.getBoundingClientRect()
-    const factor = Math.exp(e.deltaY * 0.001)
-    this.camera2d.zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
-    this.hoverResolver.refreshGuideLine(this.camera2d)
-    this.needsRender = true
-    this.interaction.wheel()
-    this.armSettle()
-    this.scheduleViewChange()
+    this.controller.wheel({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode as 0 | 1 | 2,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      t: performance.now(),
+    })
+    this.viewDirty = true
+    this.applyView() // an exact one-axis zoom is already in the camera; the others start moving here
   }
 
   private handleContextLost = (e: Event) => {
@@ -978,6 +1032,7 @@ export class SceneRenderer {
   }
 
   private loop = () => {
+    if (this.viewDirty || this.controller.moving) this.applyView()
     this.updateAnimated()
     // Render on demand: skip the actual draw call on frames where nothing
     // changed (no pan/zoom/hover/scene update in flight), unless a point is
@@ -997,8 +1052,9 @@ export class SceneRenderer {
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     window.removeEventListener('pointermove', this.handlePointerMove)
     window.removeEventListener('pointerup', this.handlePointerUp)
-    this.canvas.removeEventListener('pointercancel', this.handlePointerUp)
-    this.canvas.removeEventListener('lostpointercapture', this.handlePointerUp)
+    this.canvas.removeEventListener('pointercancel', this.handlePointerCancel)
+    this.canvas.removeEventListener('lostpointercapture', this.handlePointerCancel)
+    this.canvas.removeEventListener('keydown', this.handleKeyDown)
     this.canvas.removeEventListener('wheel', this.handleWheel)
     this.canvas.removeEventListener('pointermove', this.handleHoverMove)
     this.canvas.removeEventListener('pointerleave', this.handlePointerLeave)

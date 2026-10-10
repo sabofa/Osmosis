@@ -45,6 +45,33 @@ export class Camera2D {
     this.camera.updateProjectionMatrix()
   }
 
+  // The view state, for the input controller (render/viewController.ts), which moves it by view2d's motion.
+  getView(): PlotView {
+    return this.view
+  }
+
+  setView(view: PlotView) {
+    this.view = view
+    this.updateProjection()
+  }
+
+  frame() {
+    return frameRect(this.win, this.view.a, this.view.b)
+  }
+
+  plotWindow(): PlotWindow {
+    return this.win
+  }
+
+  screenSize(): Size {
+    return this.screen
+  }
+
+  /** The fitted start view at the authored unit ratio (equal until 5.3 wires @aspect). */
+  startView(): PlotView {
+    return startView(this.win, null, this.screen)
+  }
+
   private base(screen: Size = this.screen): number {
     return basePxPerUnit(frameRect(this.win, this.view.a, this.view.b), screen)
   }
