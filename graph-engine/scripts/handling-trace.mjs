@@ -17,6 +17,7 @@
 //   WHEEL=1            after the drag, 240 wheel events in and out
 //   SHOTS=1            screenshots mid-drag (shot-<label>-<i>.jpg in the cwd)
 //   STOPAT=<i>         release the drag at move i, wait, screenshot (rest-<label>.jpg)
+//   SETUPSHOT=1        a screenshot right after the setup script (setup-<label>.png)
 //   EXTRA="<flags>"    more browser flags (e.g. --disable-gpu)
 //
 // What to read: `active` is the frame gaps while input is arriving (p50 at a
@@ -76,6 +77,7 @@ await send('Page.enable')
 await send('Page.navigate', { url })
 await sleep(4000)
 if (setupFile) console.log('setup:', await evaluate(readFileSync(setupFile, 'utf8')))
+if (process.env.SETUPSHOT) { const r = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(process.cwd(), `setup-${label}.png`), Buffer.from(r.result.data, 'base64')) }
 const rect = await evaluate(`(()=>{const r=document.querySelector('.figure-view-surface').getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height}})()`)
 const info = await evaluate(`JSON.stringify({dpr:devicePixelRatio, w:innerWidth, layers:[...document.querySelectorAll('svg[data-figure-layer]')].map(s=>s.getAttribute('data-figure-layer')+':'+s.querySelectorAll('*').length)})`)
 console.log(label, info)
