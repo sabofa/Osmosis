@@ -5,6 +5,10 @@ import type { Box3, SpaceScene, Vec3 } from '../scene/types'
 
 const AUTO: Vec3 = [1, 1, 0.7]
 
+// Refused by the kernel at build time and, as a backstop for hand-built scenes,
+// by boxHalfExtents.
+export const RATIO_XY_IN_3D = '@aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"'
+
 // V1: a flat axis (frame/bounds.ts flatAxes) reads thin under `auto`, not the
 // usual 0.7 — a region on the floor should look like a floor, not a box
 // three-quarters as tall as it is wide.
@@ -45,7 +49,7 @@ export function boxHalfExtents(box: Box3, aspect: Aspect | null, scene: SpaceSce
   if (chosen.kind === 'ratioXY') {
     // The directive parser cannot tell 2D from 3D, so 3D refuses a two-ratio
     // aspect here rather than reading it as `auto`.
-    throw new Error('@aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"')
+    throw new Error(RATIO_XY_IN_3D)
   }
   return [flat.x ? FLAT_HALF_EXTENT : AUTO[0], flat.y ? FLAT_HALF_EXTENT : AUTO[1], flat.z ? FLAT_HALF_EXTENT : AUTO[2]]
 }

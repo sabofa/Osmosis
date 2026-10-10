@@ -67,7 +67,7 @@ function parseAspect(value: string): SpaceConfig['aspect'] {
   if (value === 'equal') return { kind: 'equal' }
   if (value === 'auto') return { kind: 'auto' }
   const parts = value.split(':').map((p) => p.trim())
-  if ((parts.length !== 2 && parts.length !== 3) || parts.some((p) => !/^(\d+\.?\d*|\.\d+)$/.test(p))) {
+  if ((parts.length !== 2 && parts.length !== 3) || parts.some((p) => !/^-?(\d+\.?\d*|\.\d+)$/.test(p))) {
     throw new Error(`@aspect must be "equal", "auto", two ratios "a:b" (2D) or three ratios "a:b:c" (3D), got "${value}"`)
   }
   if (parts.length === 2) {

@@ -187,6 +187,29 @@ describe('SpaceRenderer.setSpec', () => {
     r.dispose()
   })
 
+  it('returns an error for a 3D spec with @aspect a:b instead of throwing, and keeps the renderer usable', () => {
+    const { canvas } = mount(createFakeGl())
+    const clock = fakeEnv()
+    const r = new SpaceRenderer(canvas as unknown as HTMLCanvasElement, { palette: LIGHT_PALETTE, theme: 'light' }, clock.env)
+    const surface = 'z = x^2 + y^2 for x in [-1, 1], y in [-1, 1]'
+    const bad = parseSpec(`@aspect: 2:1\n${surface}`)
+    expect(bad.errors).toEqual([])
+    let errors: ReturnType<SpaceRenderer['setSpec']> = []
+    expect(() => {
+      errors = r.setSpec(bad.statements, bad.config, bad.statementLines)
+    }).not.toThrow()
+    expect(errors).toEqual([
+      {
+        line: 0,
+        message:
+          'space could not build this spec: @aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"',
+      },
+    ])
+    const good = parseSpec(`@aspect: 2:1:1\n${surface}`)
+    expect(r.setSpec(good.statements, good.config, good.statementLines)).toEqual([])
+    r.dispose()
+  })
+
   it("returns the kernel's errors with their 1-based lines, and still draws the rest", () => {
     const fake = createFakeGl()
     const { canvas } = mount(fake)
