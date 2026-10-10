@@ -1,87 +1,102 @@
 import * as THREE from 'three'
 import type { Bounds } from './marchingSquares'
+import { anchoredCamera, basePxPerUnit, panByScreen } from '../view2d'
+import type { Size } from '../view2d'
+import {
+  boundsOf,
+  frameRect,
+  plotCameraOf,
+  plotToScreen,
+  PLOT_LIMITS,
+  pxPerUnitXY,
+  screenToPlot,
+  startView,
+  type PlotView,
+  type PlotWindow,
+} from '../plot/view/plotView'
 
-// Orthographic pan/zoom camera for the 2D view. Tracks world-space center +
-// visible height; width follows from the canvas aspect ratio. Kept separate
-// from SceneRenderer so a phase-2 3D orbit camera can sit alongside it without
-// touching this file.
+// Orthographic pan/zoom camera for the 2D view: a facade over the pure PlotView
+// (plot/view/plotView.ts), equal aspect only. The state is the PlotView over a
+// fixed @bounds window; the three camera is derived from boundsOf() after every
+// move. hover.ts, grid.ts and SceneRenderer keep the method names below.
 export class Camera2D {
   readonly camera: THREE.OrthographicCamera
-  private centerX = 0
-  private centerY = 0
-  private viewHeight = 12
-  private aspect: number
+  private win: PlotWindow
+  private view: PlotView
+  private screen: Size
 
   constructor(width: number, height: number, initialBounds?: Bounds) {
-    this.aspect = width / height
+    this.screen = { width, height }
+    // Without a window, the old default: 12 units tall, the width follows the canvas.
+    this.win = initialBounds
+      ? { uMin: initialBounds.xMin, uMax: initialBounds.xMax, vMin: initialBounds.yMin, vMax: initialBounds.yMax }
+      : { uMin: (-6 * width) / height, uMax: (6 * width) / height, vMin: -6, vMax: 6 }
+    this.view = startView(this.win, null, this.screen)
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 1000)
-    if (initialBounds) {
-      this.centerX = (initialBounds.xMin + initialBounds.xMax) / 2
-      this.centerY = (initialBounds.yMin + initialBounds.yMax) / 2
-      // Fit the requested window inside the view regardless of aspect ratio.
-      this.viewHeight = Math.max(initialBounds.yMax - initialBounds.yMin, (initialBounds.xMax - initialBounds.xMin) / this.aspect)
-    }
     this.updateProjection()
   }
 
   private updateProjection() {
-    const viewWidth = this.viewHeight * this.aspect
-    this.camera.left = this.centerX - viewWidth / 2
-    this.camera.right = this.centerX + viewWidth / 2
-    this.camera.top = this.centerY + this.viewHeight / 2
-    this.camera.bottom = this.centerY - this.viewHeight / 2
+    const b = boundsOf(this.view, this.win, this.screen)
+    this.camera.left = b.uMin
+    this.camera.right = b.uMax
+    this.camera.top = b.vMax
+    this.camera.bottom = b.vMin
     this.camera.updateProjectionMatrix()
   }
 
+  private base(screen: Size = this.screen): number {
+    return basePxPerUnit(frameRect(this.win, this.view.a, this.view.b), screen)
+  }
+
+  // The canvas height stays the same number of world units, as it always has.
   resize(width: number, height: number) {
-    this.aspect = width / height
+    const next = { width, height }
+    const keep = this.screen.height > 0 && height > 0 ? height / this.screen.height : 1
+    this.view = { ...this.view, zoom: (this.view.zoom * this.base() * keep) / this.base(next) }
+    this.screen = next
     this.updateProjection()
   }
 
   // Pan by a delta in screen pixels.
   panByPixels(dxPx: number, dyPx: number, canvasHeightPx: number) {
-    const worldPerPixel = this.viewHeight / canvasHeightPx
-    this.centerX -= dxPx * worldPerPixel
-    this.centerY += dyPx * worldPerPixel
+    const screen = { width: this.screen.width, height: canvasHeightPx }
+    const frame = frameRect(this.win, this.view.a, this.view.b)
+    const cam = panByScreen(plotCameraOf(this.view), dxPx, dyPx, frame, screen)
+    this.view = { ...this.view, cu: cam.cx / this.view.a, cv: -cam.cy / this.view.b }
     this.updateProjection()
   }
 
   // Zoom around a screen-space anchor point (keeps the point under the cursor fixed).
   zoomAt(factor: number, anchorXPx: number, anchorYPx: number, canvasWidthPx: number, canvasHeightPx: number) {
-    const before = this.screenToWorld(anchorXPx, anchorYPx, canvasWidthPx, canvasHeightPx)
-    this.viewHeight *= factor
-    this.viewHeight = Math.min(Math.max(this.viewHeight, 1e-3), 1e6)
-    this.updateProjection()
-    const after = this.screenToWorld(anchorXPx, anchorYPx, canvasWidthPx, canvasHeightPx)
-    this.centerX += before.x - after.x
-    this.centerY += before.y - after.y
+    const screen = { width: canvasWidthPx, height: canvasHeightPx }
+    const at = { x: anchorXPx, y: anchorYPx }
+    const anchor = screenToPlot(this.view, this.win, screen, at)
+    const zoom = Math.min(PLOT_LIMITS.zoomMax, Math.max(PLOT_LIMITS.zoomMin, this.view.zoom / factor))
+    const frame = frameRect(this.win, this.view.a, this.view.b)
+    const cam = anchoredCamera({ x: this.view.a * anchor.x, y: -this.view.b * anchor.y }, at, zoom, frame, screen)
+    this.view = { ...this.view, cu: cam.cx / this.view.a, cv: -cam.cy / this.view.b, zoom }
     this.updateProjection()
   }
 
   screenToWorld(xPx: number, yPx: number, widthPx: number, heightPx: number): { x: number; y: number } {
-    const nx = xPx / widthPx // 0..1 left->right
-    const ny = yPx / heightPx // 0..1 top->bottom
-    return {
-      x: this.camera.left + nx * (this.camera.right - this.camera.left),
-      y: this.camera.top - ny * (this.camera.top - this.camera.bottom),
-    }
+    return screenToPlot(this.view, this.win, { width: widthPx, height: heightPx }, { x: xPx, y: yPx })
   }
 
   // Inverse of screenToWorld — used to place HTML overlays (hover tooltip) at
   // a world-space point.
   worldToScreen(x: number, y: number, widthPx: number, heightPx: number): { x: number; y: number } {
-    const nx = (x - this.camera.left) / (this.camera.right - this.camera.left)
-    const ny = (this.camera.top - y) / (this.camera.top - this.camera.bottom)
-    return { x: nx * widthPx, y: ny * heightPx }
+    return plotToScreen(this.view, this.win, { width: widthPx, height: heightPx }, { x, y })
   }
 
   // World units per screen pixel — for converting a pixel hit-radius into a
   // world-space distance for hover hit-testing.
   worldPerPixel(canvasHeightPx: number): number {
-    return this.viewHeight / canvasHeightPx
+    return 1 / pxPerUnitXY(this.view, this.win, { width: this.screen.width, height: canvasHeightPx }).x
   }
 
   getBounds(): Bounds {
-    return { xMin: this.camera.left, xMax: this.camera.right, yMin: this.camera.bottom, yMax: this.camera.top }
+    const b = boundsOf(this.view, this.win, this.screen)
+    return { xMin: b.uMin, xMax: b.uMax, yMin: b.vMin, yMax: b.vMax }
   }
 }
