@@ -1,9 +1,22 @@
 import { applyStyleDirective } from '../style/resolve'
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
-import { parseSpaceDirective } from '../space/grammar/directives'
+import { piMultiple, parseSpaceDirective } from '../space/grammar/directives'
+import type { TickStep } from '../space/config'
+import { parseExprString } from './parseExpr'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
+}
+
+// A positive rational multiple of pi, read by space's own reader; null for
+// anything else (including text that is not an expression at all).
+function piStep(value: string): TickStep | null {
+  try {
+    const pi = piMultiple(parseExprString(value))
+    return pi ? { value: (pi.num * Math.PI) / pi.den, pi } : null
+  } catch {
+    return null
+  }
 }
 
 function parseBoolean(value: string): boolean | null {
@@ -70,6 +83,18 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
     }
     case 'xstep':
     case 'ystep': {
+      // A step written as a rational multiple of pi ("pi/2", "2pi",
+      // "3*pi/4") sets the numeric step AND marks the axis in space.ticks, the
+      // field the 2D tick labels read. A plain number is untouched. Whichever
+      // of this and @ticks3d comes later wins space.ticks.x/.y.
+      if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(value)) {
+        const pi = piStep(value)
+        if (pi) {
+          config[key] = pi.value
+          config.space.ticks[key === 'xstep' ? 'x' : 'y'] = pi
+          return
+        }
+      }
       const n = Number.parseFloat(value)
       if (!Number.isFinite(n) || n <= 0) throw new Error(`@${key} must be a positive number, got "${value}"`)
       config[key] = n

@@ -74,6 +74,42 @@ describe('@step-mode', () => {
   })
 })
 
+describe('@xstep and @ystep as a multiple of pi', () => {
+  it('reads pi/2 as a number and marks the axis as a pi step', () => {
+    const c = parse('@xstep: pi/2')
+    expect(c.xstep).toBeCloseTo(Math.PI / 2, 12)
+    expect(c.space.ticks.x).toEqual({ value: c.xstep, pi: { num: 1, den: 2 } })
+    expect(c.space.ticks.y).toBeNull()
+  })
+
+  it('reads 2pi and 3*pi/4 as reduced rationals', () => {
+    const y = parse('@ystep: 2pi')
+    expect(y.ystep).toBeCloseTo(2 * Math.PI, 12)
+    expect(y.space.ticks.y?.pi).toEqual({ num: 2, den: 1 })
+    expect(parse('@xstep: 3*pi/4').space.ticks.x?.pi).toEqual({ num: 3, den: 4 })
+  })
+
+  it('leaves a plain number alone', () => {
+    const c = parse('@xstep: 0.5')
+    expect(c.xstep).toBe(0.5)
+    expect(c.space.ticks.x).toBeNull()
+  })
+
+  it('keeps today\'s refusals', () => {
+    expect(() => parse('@xstep: abc')).toThrow('@xstep must be a positive number, got "abc"')
+    expect(() => parse('@xstep: -pi')).toThrow('@xstep must be a positive number')
+    expect(() => parse('@xstep: 0')).toThrow('@xstep must be a positive number')
+  })
+
+  it('combines with @step-mode', () => {
+    const config = defaultConfig()
+    parseConfigLine('@xstep: pi/2', config)
+    parseConfigLine('@step-mode: geometric', config)
+    expect(config.stepMode).toBe('geometric')
+    expect(config.xstep).toBeCloseTo(Math.PI / 2, 12)
+  })
+})
+
 describe('@xscale and @yscale', () => {
   it('default to linear on both axes', () => {
     expect(defaultConfig().scales).toEqual({ x: 'linear', y: 'linear' })
