@@ -1,28 +1,83 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ZoomMode } from './zoomModel'
 import { MenuIcon, ZoomInIcon, ZoomOutIcon, DownloadIcon, EyeIcon } from './icons'
 
+const FIT_ITEMS: { mode: ZoomMode; label: string }[] = [
+  { mode: 'fit-width', label: 'Fit width' },
+  { mode: 'fit-page', label: 'Fit page' },
+  { mode: 'fit-height', label: 'Fit height' },
+]
+
+// +/- buttons around a percentage button that opens a small menu of fit modes
+// (when the content has pages/pixels to fit) and 100%.
 export function ZoomControl({
   zoom,
+  scale,
+  allowFit,
   onZoomIn,
   onZoomOut,
-  onReset,
+  onSelect,
 }: {
-  zoom: number
+  zoom: ZoomMode
+  scale: number
+  allowFit: boolean
   onZoomIn: () => void
   onZoomOut: () => void
-  onReset: () => void
+  onSelect: (mode: ZoomMode) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handlePointerDown(e: PointerEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+  }, [open])
+
+  const items = allowFit ? [...FIT_ITEMS, { mode: 1 as ZoomMode, label: '100%' }] : [{ mode: 1 as ZoomMode, label: '100%' }]
   return (
-    <div className="document-viewer-zoom-control" data-component="tool-row">
-      <button type="button" data-component="pill" aria-label="Zoom out" onClick={onZoomOut}>
-        <ZoomOutIcon size={14} />
-      </button>
-      <button type="button" data-component="pill" className="document-viewer-zoom-pct" onClick={onReset} title="Reset zoom">
-        {Math.round(zoom * 100)}%
-      </button>
-      <button type="button" data-component="pill" aria-label="Zoom in" onClick={onZoomIn}>
-        <ZoomInIcon size={14} />
-      </button>
+    <div className="document-viewer-zoom" ref={rootRef}>
+      <div className="document-viewer-zoom-control" data-component="tool-row">
+        <button type="button" data-component="pill" aria-label="Zoom out" onClick={onZoomOut}>
+          <ZoomOutIcon size={14} />
+        </button>
+        <button
+          type="button"
+          data-component="pill"
+          className="document-viewer-zoom-pct"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          title="Zoom options"
+          onClick={() => setOpen((o) => !o)}
+        >
+          {Math.round(scale * 100)}%
+        </button>
+        <button type="button" data-component="pill" aria-label="Zoom in" onClick={onZoomIn}>
+          <ZoomInIcon size={14} />
+        </button>
+      </div>
+      {open && (
+        <div className="document-viewer-zoom-menu" data-component="menu" role="menu">
+          {items.map((item) => (
+            <button
+              key={String(item.mode)}
+              type="button"
+              role="menuitemradio"
+              aria-checked={item.mode === zoom}
+              data-component="menu-item"
+              onClick={() => {
+                onSelect(item.mode)
+                setOpen(false)
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

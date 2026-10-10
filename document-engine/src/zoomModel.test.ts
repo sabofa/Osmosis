@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ZOOM_MAX, ZOOM_MIN, clampZoom, fitScale, stepZoom, wheelZoomFactor, zoomAround } from './zoomModel'
+import { ZOOM_MAX, ZOOM_MIN, clampZoom, fitReference, fitScale, stepZoom, wheelZoomFactor, zoomAround } from './zoomModel'
 
 const letter = { w: 612, h: 792 }
 
@@ -126,5 +126,17 @@ describe('wheelZoomFactor', () => {
   })
   it('caps a huge delta', () => {
     expect(wheelZoomFactor(100000)).toBeCloseTo(Math.exp(-1))
+  })
+})
+
+describe('fitReference', () => {
+  it('unknown without pages', () => {
+    expect(fitReference('fit-width', [])).toEqual({ w: 0, h: 0 })
+  })
+  it('fit-width uses the widest page, others the first', () => {
+    const pages = [{ w: 300, h: 400 }, { w: 900, h: 200 }]
+    expect(fitReference('fit-width', pages)).toEqual({ w: 900, h: 400 })
+    expect(fitReference('fit-page', pages)).toEqual({ w: 300, h: 400 })
+    expect(fitReference('fit-height', pages)).toEqual({ w: 300, h: 400 })
   })
 })

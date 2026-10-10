@@ -73,3 +73,13 @@ export function zoomAround(
 export function wheelZoomFactor(deltaY: number): number {
   return Math.exp(-Math.max(-100, Math.min(100, deltaY)) * 0.01)
 }
+
+// The page size a fit mode measures against. Fit-width uses the widest page so
+// no page overflows sideways; page/height use the first page, which is what
+// the reader lands on. Empty list: unknown (fitScale then falls back to 1).
+export function fitReference(mode: ZoomMode, pages: readonly Size[]): Size {
+  const first = pages[0]
+  if (!first) return { w: 0, h: 0 }
+  if (mode === 'fit-width') return { w: pages.reduce((m, p) => Math.max(m, p.w), 0), h: first.h }
+  return first
+}

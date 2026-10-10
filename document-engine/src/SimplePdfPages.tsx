@@ -8,10 +8,23 @@ const RENDER_SCALE = 1.75
 // overlays, no click handling. Cheap enough to mount several at once (e.g.
 // a handful of small figure references inline in a list of description
 // boxes) since it skips all the per-item geometry work PdfLayer does.
-export default function SimplePdfPages({ url, onErrors }: { url: string; onErrors?: (errors: DocumentRenderError[]) => void }) {
+export default function SimplePdfPages({
+  url,
+  onErrors,
+  scale = 1,
+  onPageSizes,
+}: {
+  url: string
+  onErrors?: (errors: DocumentRenderError[]) => void
+  // Numeric zoom: 1 = pdfjs viewport scale 1 (one PDF point per CSS px).
+  scale?: number
+  onPageSizes?: (sizes: { w: number; h: number }[]) => void
+}) {
   const [canvases, setCanvases] = useState<HTMLCanvasElement[]>([])
   const onErrorsRef = useRef(onErrors)
   onErrorsRef.current = onErrors
+  const onPageSizesRef = useRef(onPageSizes)
+  onPageSizesRef.current = onPageSizes
 
   useEffect(() => {
     let cancelled = false
@@ -21,6 +34,7 @@ export default function SimplePdfPages({ url, onErrors }: { url: string; onError
       try {
         const doc = await loadingTask.promise
         const built: HTMLCanvasElement[] = []
+        const sizes: { w: number; h: number }[] = []
         const outputScale = Math.max(window.devicePixelRatio || 1, 1)
         for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
           if (cancelled) return
@@ -41,8 +55,12 @@ export default function SimplePdfPages({ url, onErrors }: { url: string; onError
           }).promise
           if (cancelled) return
           built.push(canvas)
+          sizes.push({ w: viewport.width / RENDER_SCALE, h: viewport.height / RENDER_SCALE })
         }
-        if (!cancelled) setCanvases(built)
+        if (!cancelled) {
+          setCanvases(built)
+          onPageSizesRef.current?.(sizes)
+        }
       } catch (err) {
         onErrorsRef.current?.([{ message: err instanceof Error ? err.message : String(err) }])
       }
@@ -56,7 +74,7 @@ export default function SimplePdfPages({ url, onErrors }: { url: string; onError
   }, [url])
 
   return (
-    <div className="document-viewer-pdf-pages">
+    <div className="document-viewer-pdf-pages" style={{ zoom: scale / RENDER_SCALE }}>
       {canvases.map((canvas, i) => (
         <PageCanvas key={i} canvas={canvas} />
       ))}

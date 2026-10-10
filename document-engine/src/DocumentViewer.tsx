@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
 import { ZoomControl, SettingsMenu } from './Toolbar'
+import { ZOOM_MAX, ZOOM_MIN, clampZoom, fitReference, fitScale, isFitMode, stepZoom, wheelZoomFactor, zoomAround, type Size, type ZoomMode } from './zoomModel'
 import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
@@ -55,9 +56,11 @@ export interface DocumentViewerProps {
   gatedLabel?: string
 }
 
-const ZOOM_MIN = 1
-const ZOOM_MAX = 4
-const ZOOM_STEP = 0.25
+// Plain text/markdown keeps a narrower numeric range and no fit modes.
+const TEXT_ZOOM_MIN = 0.5
+const TEXT_ZOOM_MAX = 3
+// Space kept around a page in the PDF/image views (matches the CSS padding).
+const FIT_PADDING = 16
 
 let highlightCounter = 0
 function makeHighlightId(): string {
@@ -66,6 +69,11 @@ function makeHighlightId(): string {
 }
 
 let instanceCounter = 0
+
+// An image shown beside a text panel only gets half the width to fit into.
+function sidePanelSized(sizes: Size[], split: boolean): Size[] {
+  return split ? sizes.map((s) => ({ w: s.w * 2, h: s.h })) : sizes
+}
 
 export default function DocumentViewer(props: DocumentViewerProps) {
   const { asset, tokens = DEFAULT_TOKENS, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
@@ -104,7 +112,84 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   const cssVars = useMemo(() => tokensToCssVars(tokens), [tokens])
 
-  const [zoom, setZoom] = useState(1)
+  const paged = (isPdf && !!asset.url) || (isImage && !!asset.url)
+  const zoomMin = paged ? ZOOM_MIN : TEXT_ZOOM_MIN
+  const zoomMax = paged ? ZOOM_MAX : TEXT_ZOOM_MAX
+  const defaultZoom: ZoomMode = paged ? 'fit-width' : 1
+  const [zoom, setZoomState] = useState<ZoomMode>(defaultZoom)
+  const [pageSizes, setPageSizes] = useState<Size[]>([])
+  const [container, setContainer] = useState<Size>({ w: 0, h: 0 })
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    setZoomState(defaultZoom)
+    setPageSizes([])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asset.url, paged])
+
+  const scale = isFitMode(zoom)
+    ? fitScale(zoom, container, fitReference(zoom, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, zoomMin, zoomMax)
+    : clampZoom(zoom, zoomMin, zoomMax)
+  const scaleRef = useRef(scale)
+  scaleRef.current = scale
+  const pendingScroll = useRef<{ left: number; top: number } | null>(null)
+
+  // Tracks the scroll container so fit modes follow window/pane resizes.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const measure = () => setContainer((c) => (c.w === el.clientWidth && c.h === el.clientHeight ? c : { w: el.clientWidth, h: el.clientHeight }))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // Re-anchor the scroll position after a zoom so the point under the cursor
+  // (or the viewport centre) stays put.
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const target = pendingScroll.current
+    if (el && target) {
+      el.scrollLeft = target.left
+      el.scrollTop = target.top
+    }
+    pendingScroll.current = null
+  }, [scale])
+
+  const setZoom = useCallback(
+    (mode: ZoomMode, around?: { x: number; y: number }) => {
+      const el = scrollRef.current
+      const current = scaleRef.current
+      const next = isFitMode(mode) ? fitScale(mode, container, fitReference(mode, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, zoomMin, zoomMax) : clampZoom(mode, zoomMin, zoomMax)
+      if (el && next !== current) {
+        const cursor = around ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 }
+        const base = pendingScroll.current ?? { left: el.scrollLeft, top: el.scrollTop }
+        pendingScroll.current = zoomAround(current, next, cursor, base)
+        scaleRef.current = next
+      }
+      setZoomState(isFitMode(mode) ? mode : clampZoom(mode, zoomMin, zoomMax))
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [container, pageSizes, zoomMin, zoomMax, isImage, text]
+  )
+
+  // Ctrl+wheel (trackpad pinch arrives as ctrl+wheel) zooms around the
+  // cursor; a plain wheel scrolls. Native listener: React's is passive.
+  const setZoomRef = useRef(setZoom)
+  setZoomRef.current = setZoom
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const box = el!.getBoundingClientRect()
+      setZoomRef.current(scaleRef.current * wheelZoomFactor(e.deltaY), { x: e.clientX - box.left, y: e.clientY - box.top })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
   const [showOverlays, setShowOverlays] = useState(true)
   const [localHighlights, setLocalHighlights] = useState<DocumentHighlight[]>(highlights ?? [])
   useEffect(() => {
@@ -152,13 +237,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const highlightCss = useMemo(() => buildHighlightCss(groupPrefix, tokens), [groupPrefix, tokens])
 
   function zoomIn() {
-    setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100))
+    setZoom(stepZoom(scaleRef.current, 'in', zoomMin, zoomMax))
   }
   function zoomOut() {
-    setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100))
-  }
-  function resetZoom() {
-    setZoom(1)
+    setZoom(stepZoom(scaleRef.current, 'out', zoomMin, zoomMax))
   }
 
   function handleMouseUp() {
@@ -224,12 +306,24 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   const onGraphErrors = (msgs: string[]) => onErrorsRef.current?.(msgs.map((message) => ({ message })))
 
+  const imageSize = pageSizes[0]
+  const imageBody = asset.url ? (
+    <img
+      className={`document-viewer-image${imageSize ? ' document-viewer-image-scaled' : ''}`}
+      src={asset.url}
+      alt=""
+      draggable={false}
+      style={imageSize ? { width: imageSize.w * scale, height: imageSize.h * scale } : undefined}
+      onLoad={(e) => setPageSizes([{ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight }])}
+    />
+  ) : null
+
   let body: ReactNode
   let sidePanel: ReactNode = null
 
   if (embedded) {
-    if (isPdf && asset.url) body = <SimplePdfPages url={asset.url} onErrors={onErrors} />
-    else if (isImage && asset.url) body = <img className="document-viewer-image" src={asset.url} alt="" draggable={false} />
+    if (isPdf && asset.url) body = <SimplePdfPages url={asset.url} onErrors={onErrors} scale={scale} onPageSizes={setPageSizes} />
+    else if (isImage && asset.url) body = imageBody
     else if (isText) {
       // Reuses TextContent's markdown rendering (see markdown.ts) with
       // every interactive feature switched off — embedded chrome's whole
@@ -249,10 +343,12 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         groupPrefix={groupPrefix}
         onErrors={onErrors}
         onText={setPdfText}
+        scale={scale}
+        onPageSizes={setPageSizes}
       />
     )
   } else if (isImage && asset.url) {
-    body = <img className="document-viewer-image" src={asset.url} alt="" draggable={false} />
+    body = imageBody
     if (text) {
       sidePanel = (
         <TextContent
@@ -303,10 +399,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           {gate.placeholder}
         </div>
       )}
-      <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}`}>
+      <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}${paged ? ' document-viewer-scroll-fit' : ''}`} ref={scrollRef}>
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}${gate.contentHidden ? ' document-viewer-content-hidden' : ''}`}
-          style={{ zoom }}
+          style={paged ? undefined : { zoom: scale }}
           ref={contentRef}
           onMouseUp={handleMouseUp}
           aria-hidden={gate.contentHidden || undefined}
@@ -318,7 +414,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       </div>
 
       <div className="document-viewer-toolbar" data-component="tool-row">
-        <ZoomControl zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetZoom} />
+        <ZoomControl zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />
         {caps.settingsMenu && (
           <SettingsMenu
             showOverlays={showOverlays}

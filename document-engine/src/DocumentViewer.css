@@ -61,6 +61,16 @@
   transition: zoom 0.18s ease;
 }
 
+/* Fit modes read the container width: keep the scrollbar gutter constant so
+   a scrollbar appearing never changes the width the fit was computed for. */
+.document-viewer-scroll-fit {
+  scrollbar-gutter: stable;
+}
+
+.document-viewer-image.document-viewer-image-scaled {
+  max-width: none;
+}
+
 .document-viewer-content-split {
   display: flex;
   align-items: flex-start;
@@ -264,6 +274,7 @@
 .document-viewer-image {
   max-width: 100%;
   display: block;
+  flex-shrink: 0;
   border-radius: var(--de-radius-sm);
 }
 
@@ -287,6 +298,7 @@
 .document-viewer-zoom-control,
 .document-viewer-settings,
 .document-viewer-settings-menu,
+.document-viewer-zoom-menu,
 .document-viewer-highlight-action {
   background: var(--menu-bg, var(--de-chrome-bg));
   color: var(--color-text, var(--de-chrome-text));
@@ -379,7 +391,12 @@
   transform: scale(0.9);
 }
 
-.document-viewer-settings-menu {
+.document-viewer-zoom {
+  position: relative;
+}
+
+.document-viewer-settings-menu,
+.document-viewer-zoom-menu {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -393,7 +410,8 @@
   animation: document-viewer-pop-in 0.14s ease-out;
 }
 
-.document-viewer-settings-menu button {
+.document-viewer-settings-menu button,
+.document-viewer-zoom-menu button {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -410,7 +428,8 @@
   transition: background 0.12s ease;
 }
 
-.document-viewer-settings-menu button:hover {
+.document-viewer-settings-menu button:hover,
+.document-viewer-zoom-menu button:hover {
   background: var(--menu-hover, var(--de-chrome-hover));
 }
 
@@ -585,4 +604,8 @@
   margin-top: 0.3em;
   font-size: 0.85em;
   color: var(--de-text-muted);
+}
+
+.document-viewer-zoom-menu button[aria-checked='true'] {
+  background: var(--menu-hover, var(--de-chrome-hover));
 }

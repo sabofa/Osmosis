@@ -29,6 +29,8 @@ export default function PdfLayer({
   groupPrefix,
   onErrors,
   onText,
+  scale = 1,
+  onPageSizes,
 }: {
   url: string
   anchors: DocumentAnchor[]
@@ -40,6 +42,10 @@ export default function PdfLayer({
   // The pdfjs full text the highlights are painted against; the viewer
   // converts and resolves offsets against this, not the asset's own text.
   onText?: (text: string | null) => void
+  // Numeric zoom: 1 = pdfjs viewport scale 1 (one PDF point per CSS px).
+  scale?: number
+  // Page sizes at scale 1, reported once they are known (drives fit modes).
+  onPageSizes?: (sizes: { w: number; h: number }[]) => void
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [pages, setPages] = useState<RenderedPage[]>([])
@@ -48,6 +54,8 @@ export default function PdfLayer({
   onErrorsRef.current = onErrors
   const onTextRef = useRef(onText)
   onTextRef.current = onText
+  const onPageSizesRef = useRef(onPageSizes)
+  onPageSizesRef.current = onPageSizes
 
   useEffect(() => {
     let cancelled = false
@@ -135,6 +143,7 @@ export default function PdfLayer({
         }
         if (!cancelled) {
           setPages(built)
+          onPageSizesRef.current?.(built.map((p) => ({ w: p.width / RENDER_SCALE, h: p.height / RENDER_SCALE })))
           setFullText(text)
           onTextRef.current?.(text)
         }
@@ -195,7 +204,7 @@ export default function PdfLayer({
   usePaintHighlights(rootRef, groupPrefix, anchors, highlights, showOverlays, pages)
 
   return (
-    <div className="document-viewer-pdf-pages" ref={rootRef}>
+    <div className="document-viewer-pdf-pages" ref={rootRef} style={{ zoom: scale / RENDER_SCALE }}>
       {pages.map((page) => (
         <PageHost key={page.pageNumber} page={page} />
       ))}
