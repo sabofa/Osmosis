@@ -116,6 +116,112 @@ export function zoomAround(
   }
 }
 
+// ---- Document-geometry anchoring (PDF page stack) -------------------------
+//
+// The page stack is: `padding`, page 1, `gap`, page 2, ..., page n, `padding`.
+// Page sizes scale with zoom but padding and gaps do not, so content position
+// is NOT proportional to scale. A point is therefore remembered relative to a
+// page: which page, how far down it (fraction of the page height), and a small
+// absolute remainder `px` for points in a gap or in the padding (which do not
+// scale). `px` is 0 for points inside a page.
+
+export interface PageAnchor {
+  page: number // 0-based index into pageSizes
+  frac: number // 0..1 down that page's height (scaled)
+  px: number // absolute CSS px past (frac) of the page top; for gaps/padding
+}
+
+function tops(pageSizes: readonly Size[], scale: number, padding: number, gap: number): number[] {
+  const out: number[] = []
+  let y = padding
+  for (const p of pageSizes) {
+    out.push(y)
+    y += p.h * scale + gap
+  }
+  return out
+}
+
+export function stackHeight(pageSizes: readonly Size[], scale: number, padding: number, gap: number): number {
+  if (pageSizes.length === 0) return 2 * padding
+  const t = tops(pageSizes, scale, padding, gap)
+  const last = pageSizes.length - 1
+  return t[last] + pageSizes[last].h * scale + padding
+}
+
+// The anchor of the content point `contentY` (px from the top of the scrolled
+// content) at `scale`.
+export function anchorAt(pageSizes: readonly Size[], scale: number, contentY: number, padding: number, gap: number): PageAnchor {
+  if (pageSizes.length === 0 || !(scale > 0)) return { page: 0, frac: 0, px: contentY }
+  const t = tops(pageSizes, scale, padding, gap)
+  const last = pageSizes.length - 1
+  if (contentY < t[0]) return { page: 0, frac: 0, px: contentY - t[0] }
+  for (let i = 0; i <= last; i++) {
+    const h = pageSizes[i].h * scale
+    if (contentY <= t[i] + h) return { page: i, frac: h > 0 ? (contentY - t[i]) / h : 0, px: 0 }
+    if (i < last && contentY < t[i + 1]) return { page: i + 1, frac: 0, px: contentY - t[i + 1] }
+  }
+  return { page: last, frac: 1, px: contentY - (t[last] + pageSizes[last].h * scale) }
+}
+
+// scrollTop that puts `anchor` under `cursorY` (px from the scroller's top) at
+// `newScale`. `viewportH`, when given, clamps to the scrollable range.
+export function scrollTopFor(
+  pageSizes: readonly Size[],
+  newScale: number,
+  anchor: PageAnchor,
+  cursorY: number,
+  padding: number,
+  gap: number,
+  viewportH?: number
+): number {
+  if (pageSizes.length === 0 || !(newScale > 0)) return 0
+  const t = tops(pageSizes, newScale, padding, gap)
+  const page = Math.min(pageSizes.length - 1, Math.max(0, anchor.page))
+  const contentY = t[page] + anchor.frac * pageSizes[page].h * newScale + anchor.px
+  let top = contentY - cursorY
+  if (viewportH !== undefined) top = Math.min(top, stackHeight(pageSizes, newScale, padding, gap) - viewportH)
+  return Math.max(0, top)
+}
+
+// Horizontal: pages are centred; the widest one starts at max(padding, centre).
+// Its left edge in scroller content coordinates:
+function widestLeft(maxW: number, scale: number, padding: number, viewportW: number): number {
+  return Math.max(padding, (viewportW - maxW * scale) / 2)
+}
+
+// Anchor of content x (scrollLeft + cursor.x) as a fraction of the widest page.
+export function anchorXAt(maxW: number, scale: number, contentX: number, padding: number, viewportW: number): number {
+  const w = maxW * scale
+  return w > 0 ? (contentX - widestLeft(maxW, scale, padding, viewportW)) / w : 0
+}
+
+export function scrollLeftFor(maxW: number, newScale: number, frac: number, cursorX: number, padding: number, viewportW: number): number {
+  const contentX = widestLeft(maxW, newScale, padding, viewportW) + frac * maxW * newScale
+  const total = Math.max(viewportW, maxW * newScale + 2 * padding)
+  return Math.max(0, Math.min(contentX - cursorX, total - viewportW))
+}
+
+// The whole step for a PDF page stack: new scroll offsets keeping the point
+// under `cursor` fixed when the scale goes from `scale` to `newScale`.
+export function zoomAroundPages(
+  pageSizes: readonly Size[],
+  scale: number,
+  newScale: number,
+  cursor: { x: number; y: number },
+  scroll: { left: number; top: number },
+  viewport: Size,
+  padding: number,
+  gap: number
+): { left: number; top: number } {
+  const maxW = pageSizes.reduce((m, p) => Math.max(m, p.w), 0)
+  const anchor = anchorAt(pageSizes, scale, scroll.top + cursor.y, padding, gap)
+  const fx = anchorXAt(maxW, scale, scroll.left + cursor.x, padding, viewport.w)
+  return {
+    left: scrollLeftFor(maxW, newScale, fx, cursor.x, padding, viewport.w),
+    top: scrollTopFor(pageSizes, newScale, anchor, cursor.y, padding, gap, viewport.h),
+  }
+}
+
 // Ctrl+wheel / pinch: a smooth multiplicative factor from the wheel delta.
 export function wheelZoomFactor(deltaY: number): number {
   return Math.exp(-Math.max(-100, Math.min(100, deltaY)) * 0.0025)

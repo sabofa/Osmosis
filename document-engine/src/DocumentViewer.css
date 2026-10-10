@@ -463,8 +463,22 @@
 }
 
 .document-viewer-settings-menu button:hover,
-.document-viewer-zoom-menu button:hover {
+.document-viewer-zoom-menu button:hover,
+.document-viewer-zoom-menu button:focus-visible,
+.document-viewer-zoom-menu button[aria-checked='true'] {
   background: var(--menu-hover, var(--de-chrome-hover));
+}
+
+.document-viewer-zoom-menu button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+
+/* Non-selectable readout of a custom (non-fit, non-100%) zoom. */
+.document-viewer-zoom-current {
+  font-size: 11px;
+  opacity: 0.7;
+  padding: 4px 9px 2px;
 }
 
 @keyframes document-viewer-pop-in {

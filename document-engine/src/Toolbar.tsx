@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ZoomMode } from './zoomModel'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { isFitMode, type ZoomMode } from './zoomModel'
+import { initialMenuIndex, menuKeyAction } from './menuKeys'
 import { MenuIcon, ZoomInIcon, ZoomOutIcon, DownloadIcon, EyeIcon } from './icons'
 
 const FIT_ITEMS: { mode: ZoomMode; label: string }[] = [
@@ -27,6 +28,8 @@ export function ZoomControl({
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -38,6 +41,33 @@ export function ZoomControl({
   }, [open])
 
   const items = allowFit ? [...FIT_ITEMS, { mode: 1 as ZoomMode, label: '100%' }] : [{ mode: 1 as ZoomMode, label: '100%' }]
+  // Fit modes are checked when active; 100% when the zoom is numerically 100%.
+  // Any other numeric zoom has no item: the menu shows it as a header instead.
+  const checked = items.map((item) => (isFitMode(item.mode) ? item.mode === zoom : !isFitMode(zoom) && Math.abs(scale - 1) < 0.005))
+  const customPct = !isFitMode(zoom) && !checked.some(Boolean) ? Math.round(scale * 100) : null
+  const initialIndex = initialMenuIndex(checked)
+
+  // Focus the checked (or first) item as the menu opens.
+  useEffect(() => {
+    if (open) itemRefs.current[initialIndex]?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  function close(refocus: boolean) {
+    setOpen(false)
+    if (refocus) triggerRef.current?.focus()
+  }
+
+  function onMenuKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const current = itemRefs.current.findIndex((el) => el === document.activeElement)
+    const action = menuKeyAction(e.key, current, items.length)
+    if (!action) return
+    // Tab keeps its default so focus moves on from the trigger.
+    if (e.key !== 'Tab') e.preventDefault()
+    if (action.kind === 'focus') itemRefs.current[action.index]?.focus()
+    else close(action.refocus)
+  }
+
   return (
     <div className="document-viewer-zoom" ref={rootRef}>
       <div className="document-viewer-zoom-control" data-component="tool-row">
@@ -46,6 +76,7 @@ export function ZoomControl({
         </button>
         <button
           type="button"
+          ref={triggerRef}
           data-component="pill"
           className="document-viewer-zoom-pct"
           aria-haspopup="menu"
@@ -60,17 +91,25 @@ export function ZoomControl({
         </button>
       </div>
       {open && (
-        <div className="document-viewer-zoom-menu" data-component="menu" role="menu">
-          {items.map((item) => (
+        <div className="document-viewer-zoom-menu" data-component="menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
+          {customPct !== null && (
+            <div role="presentation" className="document-viewer-zoom-current" aria-hidden="true">
+              {customPct}%
+            </div>
+          )}
+          {items.map((item, i) => (
             <button
               key={String(item.mode)}
+              ref={(el) => {
+                itemRefs.current[i] = el
+              }}
               type="button"
               role="menuitemradio"
-              aria-checked={item.mode === zoom}
+              aria-checked={checked[i]}
               data-component="menu-item"
               onClick={() => {
                 onSelect(item.mode)
-                setOpen(false)
+                close(true)
               }}
             >
               {item.label}

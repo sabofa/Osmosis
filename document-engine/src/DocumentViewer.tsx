@@ -17,6 +17,7 @@ import {
   stepZoom,
   wheelZoomFactor,
   zoomAround,
+  zoomAroundPages,
   zoomTweenStart,
   type Size,
   type ZoomMode,
@@ -82,6 +83,8 @@ const TEXT_ZOOM_MIN = 0.5
 const TEXT_ZOOM_MAX = 3
 // Space kept around a page in the PDF/image views (matches the CSS padding).
 const FIT_PADDING = 16
+// Vertical gap between PDF pages (matches .document-viewer-pdf-pages gap).
+const PAGE_GAP = 12
 
 let highlightCounter = 0
 function makeHighlightId(): string {
@@ -236,20 +239,31 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     (mode: ZoomMode, around?: { x: number; y: number }) => {
       const el = scrollRef.current
       const current = scaleRef.current
+      // One source of truth for fit hysteresis: the render reads
+      // lastFitScale too, so seed it with the scale actually on screen.
+      if (isFitMode(mode)) lastFitScale.current = current
       const next = isFitMode(mode)
         ? settleFitScale(current, stableFitScale(mode, container, fitReference(mode, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, SCROLLBAR_ALLOWANCE, zoomMin, zoomMax))
         : clampZoom(mode, zoomMin, zoomMax)
       if (el && next !== current) {
         const cursor = around ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 }
         const base = pendingScroll.current ?? { left: el.scrollLeft, top: el.scrollTop }
-        pendingScroll.current = zoomAround(current, next, cursor, base)
+        // PDF pages: padding and gaps do not scale, so anchor on the page
+        // geometry. Images and text keep the proportional maths.
+        pendingScroll.current =
+          isPdf && pageSizes.length > 0
+            ? zoomAroundPages(pageSizes, current, next, cursor, base, { w: el.clientWidth, h: el.clientHeight }, FIT_PADDING, PAGE_GAP)
+            : zoomAround(current, next, cursor, base)
         scaleRef.current = next
         tweenRequest.current = around ? null : cursor
+      } else {
+        // No scale change: never leave a stale request for a later resize.
+        tweenRequest.current = null
       }
       setZoomState(isFitMode(mode) ? mode : clampZoom(mode, zoomMin, zoomMax))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [container, pageSizes, zoomMin, zoomMax, isImage, text]
+    [container, pageSizes, zoomMin, zoomMax, isImage, isPdf, text]
   )
 
   // Ctrl+wheel (trackpad pinch arrives as ctrl+wheel) zooms around the
@@ -273,6 +287,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
+      // A discrete-zoom stretch may still be running: wheel zoom is
+      // continuous, so drop it rather than fight the new layout.
+      tweenAnim.current?.cancel()
       const box = el!.getBoundingClientRect()
       cursor = { x: e.clientX - box.left, y: e.clientY - box.top }
       factor *= wheelZoomFactor(e.deltaY)

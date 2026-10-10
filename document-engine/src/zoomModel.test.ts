@@ -12,6 +12,10 @@ import {
   stepZoom,
   wheelZoomFactor,
   zoomAround,
+  zoomAroundPages,
+  anchorAt,
+  scrollTopFor,
+  stackHeight,
   zoomTweenStart,
   type Size,
   type ZoomMode,
@@ -236,5 +240,80 @@ describe('fitReference', () => {
     expect(fitReference('fit-width', pages)).toEqual({ w: 900, h: 400 })
     expect(fitReference('fit-page', pages)).toEqual({ w: 300, h: 400 })
     expect(fitReference('fit-height', pages)).toEqual({ w: 300, h: 400 })
+  })
+})
+
+describe('page-stack anchoring', () => {
+  const PAD = 16
+  const GAP = 12
+  // 60 mixed-size pages: letter, A4-ish, landscape.
+  const pages: Size[] = Array.from({ length: 60 }, (_, i) => (i % 3 === 0 ? { w: 612, h: 792 } : i % 3 === 1 ? { w: 595, h: 842 } : { w: 792, h: 612 }))
+  // Independent expectation: top of page i (0-based) at scale s.
+  const topOf = (i: number, s: number) => PAD + pages.slice(0, i).reduce((y, p) => y + p.h * s + GAP, 0)
+
+  it('page 50 at 1x -> 2x keeps the point under the cursor within 1px', () => {
+    const cursorY = 300
+    const contentY = topOf(49, 1) + 250
+    const anchor = anchorAt(pages, 1, contentY, PAD, GAP)
+    expect(anchor.page).toBe(49)
+    expect(anchor.frac).toBeCloseTo(250 / pages[49].h, 9)
+    const top = scrollTopFor(pages, 2, anchor, cursorY, PAD, GAP)
+    expect(Math.abs(top + cursorY - (topOf(49, 2) + 500))).toBeLessThan(1)
+    // The old proportional maths would have been ~600px off here.
+    const naive = zoomAround(1, 2, { x: 0, y: cursorY }, { left: 0, top: contentY - cursorY }).top
+    expect(Math.abs(naive - top)).toBeGreaterThan(500)
+  })
+  it('first page, cursor on it', () => {
+    const anchor = anchorAt(pages, 1, PAD + 100, PAD, GAP)
+    expect(anchor).toEqual({ page: 0, frac: 100 / 792, px: 0 })
+    const top = scrollTopFor(pages, 3, anchor, 150, PAD, GAP)
+    expect(top + 150).toBeCloseTo(PAD + 300, 6)
+  })
+  it('a cursor in a gap keeps its distance from the next page', () => {
+    const contentY = topOf(10, 1) - 5 // 5px above page 11, inside the gap
+    const anchor = anchorAt(pages, 1, contentY, PAD, GAP)
+    expect(anchor).toEqual({ page: 10, frac: 0, px: -5 })
+    const top = scrollTopFor(pages, 2, anchor, 100, PAD, GAP)
+    expect(top + 100).toBeCloseTo(topOf(10, 2) - 5, 6)
+  })
+  it('above the first page and below the last stay attached to the ends', () => {
+    expect(anchorAt(pages, 1, 4, PAD, GAP)).toEqual({ page: 0, frac: 0, px: 4 - PAD })
+    const end = stackHeight(pages, 1, PAD, GAP)
+    const a = anchorAt(pages, 1, end - 3, PAD, GAP)
+    expect(a.page).toBe(59)
+    expect(a.frac).toBe(1)
+    expect(a.px).toBeCloseTo(PAD - 3, 6)
+  })
+  it('zooming out keeps the point too', () => {
+    const contentY = topOf(30, 2) + 400
+    const anchor = anchorAt(pages, 2, contentY, PAD, GAP)
+    const top = scrollTopFor(pages, 0.5, anchor, 200, PAD, GAP)
+    expect(Math.abs(top + 200 - (topOf(30, 0.5) + 100))).toBeLessThan(1)
+  })
+  it('clamps to the scrollable range and never goes negative', () => {
+    const anchor = { page: 0, frac: 0, px: 0 }
+    expect(scrollTopFor(pages, 1, anchor, 500, PAD, GAP)).toBe(0)
+    const last = { page: 59, frac: 1, px: 0 }
+    const vh = 700
+    const max = stackHeight(pages, 1, PAD, GAP) - vh
+    expect(scrollTopFor(pages, 1, last, 0, PAD, GAP, vh)).toBeCloseTo(max, 6)
+  })
+  it('repeated wheel frames do not accumulate drift', () => {
+    let scale = 1
+    let top = topOf(49, 1) + 250 - 300
+    for (let i = 0; i < 20; i++) {
+      const next = scale * 1.05
+      top = zoomAroundPages(pages, scale, next, { x: 0, y: 300 }, { left: 0, top }, { w: 800, h: 1000 }, PAD, GAP).top
+      scale = next
+    }
+    const frac = 250 / pages[49].h
+    const expected = topOf(49, scale) + frac * pages[49].h * scale - 300
+    expect(Math.abs(top - expected)).toBeLessThan(1)
+  })
+  it('horizontal: the point under the cursor stays on the widest page', () => {
+    const r = zoomAroundPages([{ w: 600, h: 800 }], 1, 2, { x: 300, y: 100 }, { left: 0, top: 0 }, { w: 400, h: 500 }, PAD, GAP)
+    // scale 1: page spans 16..616 (viewport 400 so content 632 wide); x=300 -> frac (300-16)/600
+    const fx = (300 - 16) / 600
+    expect(r.left + 300).toBeCloseTo(PAD + fx * 1200, 6)
   })
 })
