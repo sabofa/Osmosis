@@ -22,7 +22,8 @@ import {
   type Size,
   type ZoomMode,
 } from './zoomModel'
-import { RemoveHighlightIcon } from './icons'
+import { resolveIcon } from './iconSheet'
+import { buildCommands, commandsShape } from './commands'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
@@ -111,7 +112,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     host?.layers(engineLayers())
   }, [host])
   const { interaction = 'annotate', chrome = 'full', layers = [] } = props
-  const caps = capabilities(interaction, chrome)
+  const caps = capabilities(interaction, chrome, !!host)
+  const iconRef = host?.icons ?? { kind: 'default' as const }
+  const RemoveHighlightIcon = resolveIcon('doc-highlight-remove', iconRef)
   const embedded = chrome === 'embedded'
   const layersRef = useRef(layers)
   layersRef.current = layers
@@ -501,6 +504,46 @@ export default function DocumentViewer(props: DocumentViewerProps) {
 
   const canDownload = !!asset.url || (asset.type === 'text' && !!asset.content)
 
+  // Commands for the host toolbar. `run` goes through a ref to the latest
+  // callbacks, so it is never stale; the list is only republished when its
+  // visible shape (ids/labels/icons/enabled/active) changes.
+  const selectionTouchesHighlight =
+    !!pendingSelection && painted.highlights.some((h) => h.start < pendingSelection.end && h.end > pendingSelection.start)
+  const latest = {
+    interaction,
+    chrome,
+    zoom,
+    allowFit: paged,
+    atMin: scale <= zoomMin + 1e-6,
+    atMax: scale >= zoomMax - 1e-6,
+    showOverlays,
+    canRemoveHighlight: selectionTouchesHighlight && !gate.gated,
+    canDownload: canDownload && !gate.gated,
+    onZoomIn: zoomIn,
+    onZoomOut: zoomOut,
+    onFit: (mode: ZoomMode) => setZoom(mode),
+    onToggleOverlays: () => setShowOverlays((v) => !v),
+    onRemoveHighlight: removeHighlight,
+    onDownload: handleDownload,
+  }
+  const latestRef = useRef(latest)
+  latestRef.current = latest
+  const commandsKey = commandsShape(buildCommands(latest))
+  useEffect(() => {
+    if (!host) return
+    const cmds = buildCommands({
+      ...latestRef.current,
+      onZoomIn: () => latestRef.current.onZoomIn(),
+      onZoomOut: () => latestRef.current.onZoomOut(),
+      onFit: (m) => latestRef.current.onFit(m),
+      onToggleOverlays: () => latestRef.current.onToggleOverlays(),
+      onRemoveHighlight: () => latestRef.current.onRemoveHighlight(),
+      onDownload: () => latestRef.current.onDownload(),
+    })
+    host.toolbar.publishCommands(cmds)
+    return () => host.toolbar.clear()
+  }, [host, commandsKey])
+
   return (
     <div
       className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}`}
@@ -532,16 +575,19 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         </div>
       </div>
 
+      {(caps.zoomControl || caps.settingsMenu) && (
       <div className="document-viewer-toolbar" data-component="tool-row">
-        <ZoomControl zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />
+        {caps.zoomControl && <ZoomControl icons={iconRef} zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />}
         {caps.settingsMenu && (
           <SettingsMenu
+            icons={iconRef}
             showOverlays={showOverlays}
             onToggleOverlays={() => setShowOverlays((v) => !v)}
             onDownload={canDownload && !gate.gated ? handleDownload : null}
           />
         )}
       </div>
+      )}
 
       {caps.highlightPopover && pendingSelection && !gate.gated && (
         <div

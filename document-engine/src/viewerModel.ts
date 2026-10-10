@@ -8,6 +8,9 @@ export interface Capabilities {
   settingsMenu: boolean
   layers: boolean
   editStub: boolean
+  // The viewer's own zoom control is drawn. False in edit mode under a host:
+  // the host toolbar owns all chrome there.
+  zoomControl: boolean
 }
 
 // Layers this viewer publishes to the host's layer controls.
@@ -21,16 +24,18 @@ export function engineLayers(): EngineLayer[] {
 
 export const EDIT_STUB_MESSAGE = 'Editing arrives in a later release'
 
-export function capabilities(interaction: Interaction, chrome: Chrome): Capabilities {
+export function capabilities(interaction: Interaction, chrome: Chrome, hosted = false): Capabilities {
   const full = chrome === 'full'
   const annotate = full && interaction === 'annotate'
+  const hostOwnsChrome = hosted && interaction === 'edit'
   return {
     selection: true,
     highlight: annotate,
     highlightPopover: annotate,
-    settingsMenu: full,
+    settingsMenu: full && !hostOwnsChrome,
     layers: full,
     editStub: interaction === 'edit',
+    zoomControl: !hostOwnsChrome,
   }
 }
 

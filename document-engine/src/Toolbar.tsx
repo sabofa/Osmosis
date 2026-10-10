@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { isFitMode, type ZoomMode } from './zoomModel'
 import { initialMenuIndex, menuKeyAction } from './menuKeys'
-import { MenuIcon, ZoomInIcon, ZoomOutIcon, DownloadIcon, EyeIcon } from './icons'
+import type { IconSheetRef } from 'theme-core'
+import { resolveIcon } from './iconSheet'
+
+const DEFAULT_ICONS: IconSheetRef = { kind: 'default' }
 
 const FIT_ITEMS: { mode: ZoomMode; label: string }[] = [
   { mode: 'fit-width', label: 'Fit width' },
@@ -18,7 +21,9 @@ export function ZoomControl({
   onZoomIn,
   onZoomOut,
   onSelect,
+  icons = DEFAULT_ICONS,
 }: {
+  icons?: IconSheetRef
   zoom: ZoomMode
   scale: number
   allowFit: boolean
@@ -26,6 +31,8 @@ export function ZoomControl({
   onZoomOut: () => void
   onSelect: (mode: ZoomMode) => void
 }) {
+  const ZoomOutIcon = resolveIcon('doc-zoom-out', icons)
+  const ZoomInIcon = resolveIcon('doc-zoom-in', icons)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -127,11 +134,16 @@ export function SettingsMenu({
   showOverlays,
   onToggleOverlays,
   onDownload,
+  icons = DEFAULT_ICONS,
 }: {
+  icons?: IconSheetRef
   showOverlays: boolean
   onToggleOverlays: () => void
   onDownload: (() => void) | null
 }) {
+  const MenuIcon = resolveIcon('doc-menu', icons)
+  const EyeIcon = resolveIcon(showOverlays ? 'doc-eye' : 'doc-eye-off', icons)
+  const DownloadIcon = resolveIcon('doc-download', icons)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
 
@@ -152,7 +164,7 @@ export function SettingsMenu({
       {open && (
         <div className="document-viewer-settings-menu" data-component="menu">
           <button type="button" data-component="menu-item" onClick={onToggleOverlays}>
-            <EyeIcon size={13} off={!showOverlays} />
+            <EyeIcon size={13} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}
           </button>
           {onDownload && (
