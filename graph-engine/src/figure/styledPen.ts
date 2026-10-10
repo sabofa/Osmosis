@@ -373,7 +373,12 @@ export function styledPen(style: Style, palette: Palette): FigurePen {
         random: randomFor('paper', style.seed),
       })
       paperDefs = laid.defs
-      paperMarkup = laid.background.length > 0 ? `<g data-layer="paper">${laid.background.join('')}</g>` : ''
+      // The ruling is its own group, over the paper, so a host can fade it
+      // apart from the paper (see style/papers/types.ts).
+      const grid = laid.grid ?? []
+      paperMarkup =
+        (laid.background.length > 0 ? `<g data-layer="paper">${laid.background.join('')}</g>` : '') +
+        (grid.length > 0 ? `<g data-layer="grid">${grid.join('')}</g>` : '')
     },
 
     svg(viewBox) {

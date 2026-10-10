@@ -42,7 +42,8 @@ export const roughGraph: PaperType = {
     const fine = grain(input, 'rough-graph-grain', '0.5', 3, 0.8 * settings.texture, 0.45, 17)
     return {
       defs: [pattern, ...fine.defs],
-      background: [sheet(view, tint), sheet(view, fine.fill), sheet(view, `url(#${id('rough-graph')})`)],
+      background: [sheet(view, tint), sheet(view, fine.fill)],
+      grid: [sheet(view, `url(#${id('rough-graph')})`)],
     }
   },
 }

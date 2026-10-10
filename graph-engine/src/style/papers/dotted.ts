@@ -14,6 +14,6 @@ export const dotted: PaperType = {
     // (each shows one quarter), which keeps it whole where tiles meet.
     const corners = [dot, dot.replace('cx="0"', `cx="${g}"`), dot.replace('cy="0"', `cy="${g}"`), dot.replace('cx="0" cy="0"', `cx="${g}" cy="${g}"`)]
     const pattern = tag('pattern', { id: id('dotted'), patternUnits: 'userSpaceOnUse', x: 0, y: 0, width: g, height: g }, corners)
-    return { defs: [pattern], background: [sheet(view, tint), sheet(view, `url(#${id('dotted')})`)] }
+    return { defs: [pattern], background: [sheet(view, tint)], grid: [sheet(view, `url(#${id('dotted')})`)] }
   },
 }

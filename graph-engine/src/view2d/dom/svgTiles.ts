@@ -1,22 +1,29 @@
 import { svgWindow } from '../svgMarkup'
-import { coversRect } from '../liveTransform'
-import { drawList, levelFor, mayPaint, TILE_PX, TileCache, tileId, tileRect, tilesCovering, wantList, type TileKey } from '../tiles'
+import { coversRect, drawList, levelFor, mayPaint, TILE_PX, TileCache, tileId, tileRect, tilesCovering, wantList, type TileKey } from '../tiles'
 import type { Rect, Size } from '../types'
 
-// The browser side of ../tiles.ts: an <svg> drawing painted into tiles once,
+// The browser side of ../tiles.ts: <svg> drawings painted into tiles once,
 // kept, and composited onto one <canvas> for every frame of the view.
 //
 // Why: an <svg> on the page is repainted by the browser whenever its window
 // (viewBox) changes, and a styled figure is dear to repaint (procedural chalk
 // and paper grain, hundreds of hatch strokes). Repainting while the view moved
 // is what made it lag, and what left blank bars where the repaint had not
-// caught up. Here a frame only places painted tiles; painting happens between,
-// a few tiles at a time, and a hole is covered by another level's tiles, or at
-// worst the overview, so the drawing is never missing.
+// caught up. Here a frame only places painted tiles; painting happens at rest,
+// a tile at a time, and a hole is covered by another level's tiles, or at
+// worst an overview, so the drawing is never missing.
 //
-// Two ways to paint, chosen by the figure:
+// A drawing comes in PLANES (bottom first: paper, grid, content), each its own
+// svg and its own tiles, drawn with its own alpha. Changing an alpha is a
+// redraw from the tiles already painted, never a repaint, so a host can fade
+// the paper or the grid on a slider without the drawing (the workspace's
+// graph-paper and graph-grid alphas). The alpha is the layer's, set on the
+// canvas while that plane is drawn, never on the page element: ink drawn in
+// another plane is never faded by it.
+//
+// Two ways to paint a plane, chosen by the figure:
 // - a styled figure (every mark scales with the view) is decoded ONCE as one
-//   image of the whole drawing, and each tile is a crop of it, drawn at the
+//   image of the whole plane, and each tile is a crop of it, drawn at the
 //   tile's resolution (Chrome draws an svg image as vectors at the size it is
 //   drawn, so a crop is as sharp as a fresh render);
 // - a clean figure keeps its strokes a fixed width on screen
@@ -24,10 +31,11 @@ import type { Rect, Size } from '../types'
 //   the image's own size, so each tile is its own small image, sized in CSS
 //   pixels. Clean figures are light, so the extra parse is cheap.
 
-// How many painted tiles are kept (each TILE_PX², 4 bytes a pixel: 1 MiB).
-export const TILE_BUDGET = 160
+// How many painted tiles are kept, over every plane (each TILE_PX², 4 bytes a
+// pixel: 1 MiB).
+export const TILE_BUDGET = 240
 // The view counts as at rest this long after it last moved; then the tiles
-// around it are painted ahead of need.
+// it lacks are painted, and the ones around it ahead of need.
 export const REST_MS = 120
 // The overviews: the stand-ins of last resort, each one image of at most this
 // many device pixels a side. One of the whole paintable plane (for a view
@@ -36,9 +44,25 @@ export const OVERVIEW_PX = 2048
 
 const NON_SCALING = '[data-layer] * { vector-effect: non-scaling-stroke }'
 
+export interface TilePlane {
+  // A complete <svg> document: this plane's part of the drawing.
+  svg: string
+  // 0..1: how strongly the plane is drawn.
+  alpha: number
+}
+
 interface Painted {
   bitmap: ImageBitmap
   rect: Rect
+}
+
+interface Plane {
+  svg: string
+  alpha: number
+  // Styled: the whole plane as one image, `extent` at one CSS px per unit.
+  whole: HTMLImageElement | null
+  ready: boolean
+  overviews: Painted[]
 }
 
 async function decode(markup: string): Promise<HTMLImageElement> {
@@ -59,10 +83,10 @@ export class SvgTiles {
   private readonly ctx: CanvasRenderingContext2D
   private readonly scratch = new OffscreenCanvas(TILE_PX, TILE_PX)
   private readonly cache = new TileCache<Painted>(TILE_BUDGET, (p) => p.bitmap.close())
+  private readonly planes: Plane[]
   private readonly clean: boolean
-  // Styled: the whole drawing as one image, `extent` at one CSS px per unit.
-  private whole: HTMLImageElement | null = null
-  private overviews: Painted[] = []
+  private readonly content: Rect
+  private readonly extent: Rect
   private view: { visible: Rect; screen: Size } | null = null
   private dpr = globalThis.devicePixelRatio || 1
   private lastMove = 0
@@ -70,17 +94,18 @@ export class SvgTiles {
   private painting = false
   private disposed = false
   private onScreen: ReadonlySet<string> = new Set()
+  // Frame intervals, for pacing (see ../tiles.ts mayPaint).
+  private lastTick = 0
+  private lastFrameMs = Infinity
+  private recentFrames: number[] = []
 
   // `content`: the drawing's own frame. `extent`: the part of its plane worth
   // painting at all (beyond it the tiles are left empty), at least `content`.
-  private readonly svg: string
-  private readonly content: Rect
-  private readonly extent: Rect
-  constructor(svg: string, content: Rect, extent: Rect) {
-    this.svg = svg
+  constructor(planes: readonly TilePlane[], content: Rect, extent: Rect) {
+    this.planes = planes.map((p) => ({ svg: p.svg, alpha: clampAlpha(p.alpha), whole: null, ready: false, overviews: [] }))
+    this.clean = !planes.some((p) => /^<svg\b[^>]*\sdata-style="/.test(p.svg))
     this.content = content
     this.extent = extent
-    this.clean = !/^<svg\b[^>]*\sdata-style="/.test(svg)
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'view2d-tiles'
     this.ctx = this.canvas.getContext('2d')!
@@ -88,14 +113,19 @@ export class SvgTiles {
   }
 
   private async start(): Promise<void> {
-    if (!this.clean) {
-      const markup = svgWindow(this.svg, this.extent, this.extent.width, this.extent.height)
-      if (!markup) return
-      this.whole = await decode(markup)
+    // The content plane first: it is what the reader came for.
+    for (const plane of [...this.planes].reverse()) {
+      if (!this.clean) {
+        const markup = svgWindow(plane.svg, this.extent, this.extent.width, this.extent.height)
+        if (!markup) continue
+        plane.whole = await decode(markup)
+        if (this.disposed) return
+      }
+      plane.ready = true
+      await this.paintOverviews(plane)
       if (this.disposed) return
+      this.draw()
     }
-    await this.paintOverviews()
-    this.draw()
     this.kick()
   }
 
@@ -104,13 +134,14 @@ export class SvgTiles {
     if (this.disposed) return
     const dpr = globalThis.devicePixelRatio || 1
     if (dpr !== this.dpr) {
-      // Painted for another pixel density: start over (the overview too).
+      // Painted for another pixel density: start over (the overviews too).
       this.dpr = dpr
       this.cache.clear()
-      if (this.overviews.length > 0) {
-        this.overviews.forEach((o) => o.bitmap.close())
-        this.overviews = []
-        void this.paintOverviews().then(() => this.draw())
+      for (const plane of this.planes) {
+        if (plane.overviews.length === 0) continue
+        plane.overviews.forEach((o) => o.bitmap.close())
+        plane.overviews = []
+        void this.paintOverviews(plane).then(() => this.draw())
       }
     }
     const was = this.view
@@ -122,13 +153,26 @@ export class SvgTiles {
     this.kick()
   }
 
+  // A plane's alpha, by its index in the planes given: redrawn from the tiles
+  // already painted.
+  setAlpha(plane: number, alpha: number): void {
+    const p = this.planes[plane]
+    if (!p || this.disposed) return
+    const a = clampAlpha(alpha)
+    if (a === p.alpha) return
+    p.alpha = a
+    this.draw()
+  }
+
   dispose(): void {
     this.disposed = true
     if (this.raf) cancelAnimationFrame(this.raf)
     this.raf = 0
     this.cache.clear()
-    this.overviews.forEach((o) => o.bitmap.close())
-    this.overviews = []
+    for (const plane of this.planes) {
+      plane.overviews.forEach((o) => o.bitmap.close())
+      plane.overviews = []
+    }
     this.canvas.remove()
   }
 
@@ -137,7 +181,7 @@ export class SvgTiles {
     return levelFor((v.screen.width * this.dpr) / v.visible.width)
   }
 
-  private has = (k: TileKey): boolean => this.cache.has(tileId(k))
+  private hasIn = (plane: number) => (k: TileKey): boolean => this.cache.has(keyOf(plane, k))
 
   // ---------------------------------------------------------------------------
   // Drawing a frame
@@ -154,6 +198,7 @@ export class SvgTiles {
     }
     const ctx = this.ctx
     ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.globalAlpha = 1
     ctx.clearRect(0, 0, w, h)
     // Bilinear: a tile is drawn at most √2 smaller than it was painted, and a
     // stand-in only for a moment; 'high' costs the GPU a filter pass per draw.
@@ -172,20 +217,28 @@ export class SvgTiles {
       ctx.drawImage(p.bitmap, x0, y0, x1 - x0, y1 - y0)
     }
     const level = this.level()
-    const list = drawList(v.visible, level, this.has)
-    // The overviews only under holes: when the level's own tiles cover the
-    // screen, nothing shows through. The far one only past the near one.
-    const whole = list.length === tilesCovering(v.visible, level).length && list.every((k) => k.level === level)
-    if (!whole) {
-      const [far, near] = this.overviews
-      if (far && (!near || !coversRect(near.rect, v.visible))) place(far)
-      if (near) place(near)
-    }
-    for (const k of list) {
-      const p = this.cache.get(tileId(k))
-      if (p) place(p)
-    }
-    this.onScreen = new Set(list.map(tileId))
+    const onScreen = new Set<string>()
+    this.planes.forEach((plane, i) => {
+      if (plane.alpha <= 0) return
+      ctx.globalAlpha = plane.alpha
+      const list = drawList(v.visible, level, this.hasIn(i))
+      // The overviews only under holes: when the level's own tiles cover the
+      // screen, nothing shows through. The far one only past the near one.
+      const whole = list.length === tilesCovering(v.visible, level).length && list.every((k) => k.level === level)
+      if (!whole) {
+        const [far, near] = plane.overviews
+        if (far && (!near || !coversRect(near.rect, v.visible))) place(far)
+        if (near) place(near)
+      }
+      for (const k of list) {
+        const id = keyOf(i, k)
+        const p = this.cache.get(id)
+        if (p) place(p)
+        onScreen.add(id)
+      }
+    })
+    ctx.globalAlpha = 1
+    this.onScreen = onScreen
   }
 
   // ---------------------------------------------------------------------------
@@ -195,11 +248,6 @@ export class SvgTiles {
   private kick(): void {
     if (!this.raf && !this.disposed) this.raf = requestAnimationFrame(this.tick)
   }
-
-  // Frame intervals, for pacing (see ../tiles.ts mayPaint).
-  private lastTick = 0
-  private lastFrameMs = Infinity
-  private recentFrames: number[] = []
 
   private readonly tick = (now: number): void => {
     this.raf = 0
@@ -212,18 +260,38 @@ export class SvgTiles {
     void this.paintSome()
   }
 
+  // The next tile wanted: what is on screen in every plane before anything is
+  // painted ahead, the content plane first.
+  private nextWanted(v: { visible: Rect }): { plane: number; key: TileKey } | null {
+    const level = this.level()
+    const order = this.planes.map((_, i) => i).reverse()
+    let ahead: { plane: number; key: TileKey } | null = null
+    for (const i of order) {
+      const plane = this.planes[i]
+      if (!plane.ready || plane.alpha <= 0) continue
+      const has = this.hasIn(i)
+      const onScreen = tilesCovering(v.visible, level).find((k) => !has(k))
+      if (onScreen) return { plane: i, key: onScreen }
+      if (!ahead) {
+        const next = wantList(v.visible, level, has, true)[0]
+        if (next) ahead = { plane: i, key: next }
+      }
+    }
+    return ahead
+  }
+
   private async paintSome(): Promise<void> {
     const v = this.view
-    if (!v || this.painting || this.disposed || (!this.clean && !this.whole)) return
-    const atRest = performance.now() - this.lastMove >= REST_MS
-    if (!atRest) {
+    if (!v || this.painting || this.disposed) return
+    if (performance.now() - this.lastMove < REST_MS) {
       // Nothing is painted while the view moves; wait for it to settle.
       this.kick()
       return
     }
-    const want = wantList(v.visible, this.level(), this.has, true)
-    if (want.length === 0) {
-      // Nothing to paint: the loop stops, and its frame clock with it.
+    const next = this.nextWanted(v)
+    if (!next) {
+      // Nothing to paint (or nothing decoded yet; start() kicks again): the
+      // loop stops, and its frame clock with it.
       this.lastTick = 0
       this.lastFrameMs = Infinity
       return
@@ -234,11 +302,10 @@ export class SvgTiles {
     }
     this.painting = true
     try {
-      const k = want[0]
-      const painted = await this.paint(tileRect(k), TILE_PX, TILE_PX)
+      const painted = await this.paint(this.planes[next.plane], tileRect(next.key), TILE_PX, TILE_PX)
       if (this.disposed) return
       if (painted) {
-        this.cache.set(tileId(k), painted, this.onScreen)
+        this.cache.set(keyOf(next.plane, next.key), painted, this.onScreen)
         this.draw()
       }
     } finally {
@@ -247,31 +314,31 @@ export class SvgTiles {
     this.kick()
   }
 
-  private async paintOverviews(): Promise<void> {
+  private async paintOverviews(plane: Plane): Promise<void> {
     const c = this.content
     const near: Rect = { x: c.x - c.width / 2, y: c.y - c.height / 2, width: c.width * 2, height: c.height * 2 }
     for (const r of [this.extent, near]) {
       const scale = OVERVIEW_PX / Math.max(r.width, r.height)
-      const painted = await this.paint(r, Math.max(1, Math.round(r.width * scale)), Math.max(1, Math.round(r.height * scale)))
+      const painted = await this.paint(plane, r, Math.max(1, Math.round(r.width * scale)), Math.max(1, Math.round(r.height * scale)))
       if (this.disposed) return
-      if (painted) this.overviews.push(painted)
+      if (painted) plane.overviews.push(painted)
     }
   }
 
-  // One window of the drawing, painted at `pw` × `ph` device pixels.
-  private async paint(rect: Rect, pw: number, ph: number): Promise<Painted | null> {
+  // One window of a plane, painted at `pw` × `ph` device pixels.
+  private async paint(plane: Plane, rect: Rect, pw: number, ph: number): Promise<Painted | null> {
     const canvas = pw === TILE_PX && ph === TILE_PX ? this.scratch : new OffscreenCanvas(pw, ph)
     const g = canvas.getContext('2d')!
     g.setTransform(1, 0, 0, 1, 0, 0)
     g.clearRect(0, 0, pw, ph)
     if (this.clean) {
-      const markup = svgWindow(this.svg, rect, pw / this.dpr, ph / this.dpr, NON_SCALING)
+      const markup = svgWindow(plane.svg, rect, pw / this.dpr, ph / this.dpr, NON_SCALING)
       if (!markup) return null
       const img = await decode(markup)
       if (this.disposed) return null
       g.drawImage(img, 0, 0, pw, ph)
     } else {
-      const img = this.whole
+      const img = plane.whole
       if (!img) return null
       const e = this.extent
       // The crop of the whole image that is `rect` (one image pixel per unit),
@@ -288,3 +355,7 @@ export class SvgTiles {
     return { bitmap: canvas.transferToImageBitmap(), rect }
   }
 }
+
+const keyOf = (plane: number, k: TileKey): string => `${plane}:${tileId(k)}`
+
+const clampAlpha = (a: number): number => (Number.isFinite(a) ? Math.min(1, Math.max(0, a)) : 1)

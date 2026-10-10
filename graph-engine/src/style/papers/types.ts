@@ -29,6 +29,10 @@ export interface PaperInput {
 export interface PaperOutput {
   defs: string[]
   background: string[]
+  // The paper's ruling (grid lines, ruled lines, dots), drawn over the
+  // background: kept apart so a host can fade the grid on its own (the
+  // workspace's graph-grid alpha). Absent: the paper has none.
+  grid?: string[]
 }
 
 export interface PaperType {

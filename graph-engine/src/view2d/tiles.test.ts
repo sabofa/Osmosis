@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { drawList, LATE_FRAME_FACTOR, levelFor, mayPaint, levelScale, TILE_PX, TileCache, tileId, tileRect, tilesCovering, tileUnits, wantList, type TileKey } from './tiles'
+import { coversRect, drawList, LATE_FRAME_FACTOR, levelFor, mayPaint, levelScale, TILE_PX, TileCache, tileId, tileRect, tilesCovering, tileUnits, wantList, type TileKey } from './tiles'
 import type { Rect } from './types'
 
 const covers = (tiles: TileKey[], r: Rect): boolean => {
@@ -151,5 +151,16 @@ describe('mayPaint', () => {
   })
   it('no interval yet (Infinity): no', () => {
     expect(mayPaint({ lastFrameMs: Infinity, quickestFrameMs: Infinity })).toBe(false)
+  })
+})
+
+describe('coversRect', () => {
+  const outer: Rect = { x: 0, y: 0, width: 10, height: 5 }
+  it('inside, and the rect itself: yes; poking out on any side: no', () => {
+    expect(coversRect(outer, { x: 1, y: 1, width: 2, height: 2 })).toBe(true)
+    expect(coversRect(outer, outer)).toBe(true)
+    for (const r of [{ x: -1, y: 0, width: 2, height: 1 }, { x: 9, y: 0, width: 2, height: 1 }, { x: 0, y: -1, width: 1, height: 2 }, { x: 0, y: 4, width: 1, height: 2 }]) {
+      expect(coversRect(outer, r)).toBe(false)
+    }
   })
 })

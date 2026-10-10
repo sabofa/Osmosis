@@ -44,7 +44,7 @@ describe('every paper', () => {
       expect(x + width).toBeGreaterThanOrEqual(VIEW.x + 4 * VIEW.width)
       expect(y + height).toBeGreaterThanOrEqual(VIEW.y + 4 * VIEW.height)
       // Every layer of it, not only the first.
-      for (const layer of lay(type).background.filter((m) => m.startsWith('<rect'))) {
+      for (const layer of [...lay(type).background, ...(lay(type).grid ?? [])].filter((m) => m.startsWith('<rect'))) {
         expect(number(layer, 'width')).toBeGreaterThanOrEqual(7 * VIEW.width)
         expect(number(layer, 'height')).toBeGreaterThanOrEqual(7 * VIEW.height)
       }
@@ -79,7 +79,16 @@ describe('every paper', () => {
   }
 
   it('ruled draws a margin line', () => {
-    expect(lay('ruled').background.some((m) => m.startsWith('<line') || m.includes('data-paper="margin"'))).toBe(true)
+    expect((lay('ruled').grid ?? []).some((m) => m.startsWith('<line') || m.includes('data-paper="margin"'))).toBe(true)
+  })
+
+  it('a ruled paper keeps its ruling apart from its background, a plain paper has none', () => {
+    for (const type of ['graph', 'rough-graph', 'dotted', 'ruled'] as const) {
+      const laid = lay(type)
+      expect((laid.grid ?? []).length).toBeGreaterThan(0)
+      expect(laid.background.join('')).not.toContain(`url(#P-${type})`)
+    }
+    for (const type of ['clean', 'paper', 'rough-paper', 'canvas'] as const) expect(lay(type).grid ?? []).toEqual([])
   })
 
   it('textured papers grow fainter as texture falls', () => {

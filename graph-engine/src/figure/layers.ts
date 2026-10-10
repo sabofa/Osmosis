@@ -1,13 +1,15 @@
 // A figure drawn as stacked layers.
 //
 // The renderer writes ONE <svg> whose body is a set of `<g data-layer="...">`
-// groups (paper, regions, auxiliary, primary, marks, points, labels). Moving a
-// figure that is one svg means redrawing all of it together, and the shading is
-// by far the dearest part to draw. So the view splits it into a few svgs laid
-// one over another, which it can move, and redraw, on their own terms: a layer
-// that is dear to redraw (`commit: 'rest'`) is only redrawn when the view has
-// come to rest, and slid and scaled in between, while the cheap ones stay
-// crisp as they move. The markup the renderer writes does not change.
+// groups (paper, grid, regions, auxiliary, primary, marks, points, labels).
+// The view splits it into a few svgs laid one over another, each handled on
+// its own terms (see FigureView):
+// - paper, grid and content are painted into tiles (view2d/dom/svgTiles.ts),
+//   each its own plane, so a host can fade the paper and the grid apart from
+//   the drawing (the workspace's graph-paper and graph-grid alphas);
+// - live (points and labels) stays a live svg over the tiles, given the
+//   window on every frame: it keeps its size on the screen.
+// The markup the renderer writes does not change.
 //
 // To add a layer, add an entry to FIGURE_LAYER_SPECS: its `groups` are the
 // renderer's `data-layer` names it takes, and where it sits in the list is where
@@ -18,18 +20,13 @@ export interface LayerSpec {
   name: string
   // The renderer's `data-layer` names this layer draws.
   groups: readonly string[]
-  // 'motion': redrawn whenever the view commits, so crisp while it moves.
-  // 'rest': redrawn only when the view has stopped (slid and scaled meanwhile).
-  commit: 'motion' | 'rest'
-  // How much larger than the screen it is drawn on each side, as a fraction of
-  // the screen: the margin there is to reveal while it moves.
-  overscan: number
 }
 
 export const FIGURE_LAYER_SPECS: readonly LayerSpec[] = [
-  { name: 'paper', groups: ['paper'], commit: 'motion', overscan: 0.3 },
-  { name: 'shading', groups: ['regions'], commit: 'rest', overscan: 0.3 },
-  { name: 'drawing', groups: ['auxiliary', 'primary', 'marks', 'points', 'labels'], commit: 'motion', overscan: 0.3 },
+  { name: 'paper', groups: ['paper'] },
+  { name: 'grid', groups: ['grid'] },
+  { name: 'content', groups: ['regions', 'auxiliary', 'primary', 'marks'] },
+  { name: 'live', groups: ['points', 'labels'] },
 ]
 
 export interface FigureLayerSvg {

@@ -24,6 +24,6 @@ export const graph: PaperType = {
     lines.push(tag('line', { x1: 0, y1: 0, x2: 0, y2: tile, stroke: colour(MAJOR), 'stroke-width': 1 }))
     lines.push(tag('line', { x1: 0, y1: 0, x2: tile, y2: 0, stroke: colour(MAJOR), 'stroke-width': 1 }))
     const pattern = tag('pattern', { id: id('graph'), patternUnits: 'userSpaceOnUse', x: 0, y: 0, width: tile, height: tile }, lines)
-    return { defs: [pattern], background: [sheet(view, tint), sheet(view, `url(#${id('graph')})`)] }
+    return { defs: [pattern], background: [sheet(view, tint)], grid: [sheet(view, `url(#${id('graph')})`)] }
   },
 }
