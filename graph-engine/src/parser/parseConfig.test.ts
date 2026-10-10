@@ -74,6 +74,29 @@ describe('@step-mode', () => {
   })
 })
 
+describe('@xscale and @yscale', () => {
+  it('default to linear on both axes', () => {
+    expect(defaultConfig().scales).toEqual({ x: 'linear', y: 'linear' })
+  })
+
+  it('parse linear and log', () => {
+    expect(parse('@xscale: log').scales.x).toBe('log')
+    expect(parse('@xscale: linear').scales.x).toBe('linear')
+    expect(parse('@yscale: log').scales.y).toBe('log')
+    expect(parse('@yscale: linear').scales.y).toBe('linear')
+  })
+
+  it('are independent per axis', () => {
+    expect(parse('@xscale: log').scales).toEqual({ x: 'log', y: 'linear' })
+    expect(parse('@yscale: log').scales).toEqual({ x: 'linear', y: 'log' })
+  })
+
+  it('refuse anything else, naming the directive', () => {
+    expect(() => parse('@xscale: ln')).toThrow('@xscale must be "linear" or "log", got "ln"')
+    expect(() => parse('@yscale: ln')).toThrow('@yscale must be "linear" or "log", got "ln"')
+  })
+})
+
 describe('@point-labels', () => {
   it('parses off and coords', () => {
     expect(parse('@point-labels: coords').pointLabels).toBe('coords')

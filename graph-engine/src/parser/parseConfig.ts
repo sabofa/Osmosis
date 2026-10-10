@@ -202,6 +202,14 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
       config.stepMode = value
       return
     }
+    case 'xscale':
+    case 'yscale': {
+      if (value !== 'linear' && value !== 'log') {
+        throw new Error(`@${key} must be "linear" or "log", got "${value}"`)
+      }
+      config.scales[key === 'xscale' ? 'x' : 'y'] = value
+      return
+    }
     case 'point-labels': {
       if (value !== 'off' && value !== 'coords') {
         throw new Error(`@point-labels must be "off" or "coords", got "${value}"`)
