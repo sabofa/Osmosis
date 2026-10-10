@@ -11,12 +11,13 @@ import {
   pxPerUnitXY,
   screenToPlot,
   startView,
+  type PlotAspect,
   type PlotView,
   type PlotWindow,
 } from '../plot/view/plotView'
 
 // Orthographic pan/zoom camera for the 2D view: a facade over the pure PlotView
-// (plot/view/plotView.ts), equal aspect only. The state is the PlotView over a
+// (plot/view/plotView.ts), at the authored aspect (null = equal). The state is the PlotView over a
 // fixed @bounds window; the three camera is derived from boundsOf() after every
 // move. hover.ts, grid.ts and SceneRenderer keep the method names below.
 export class Camera2D {
@@ -24,14 +25,16 @@ export class Camera2D {
   private win: PlotWindow
   private view: PlotView
   private screen: Size
+  private readonly aspectOf: PlotAspect | null
 
-  constructor(width: number, height: number, initialBounds?: Bounds) {
+  constructor(width: number, height: number, initialBounds?: Bounds, aspect: PlotAspect | null = null) {
+    this.aspectOf = aspect
     this.screen = { width, height }
     // Without a window, the old default: 12 units tall, the width follows the canvas.
     this.win = initialBounds
       ? { uMin: initialBounds.xMin, uMax: initialBounds.xMax, vMin: initialBounds.yMin, vMax: initialBounds.yMax }
       : { uMin: (-6 * width) / height, uMax: (6 * width) / height, vMin: -6, vMax: 6 }
-    this.view = startView(this.win, null, this.screen)
+    this.view = startView(this.win, aspect, this.screen)
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 1000)
     this.updateProjection()
   }
@@ -67,9 +70,14 @@ export class Camera2D {
     return this.screen
   }
 
-  /** The fitted start view at the authored unit ratio (equal until 5.3 wires @aspect). */
+  /** The authored aspect; one-axis zoom may change the unit ratio only when it is not equal. */
+  aspect(): PlotAspect | null {
+    return this.aspectOf
+  }
+
+  /** The fitted start view at the authored unit ratio. */
   startView(): PlotView {
-    return startView(this.win, null, this.screen)
+    return startView(this.win, this.aspectOf, this.screen)
   }
 
   private base(screen: Size = this.screen): number {

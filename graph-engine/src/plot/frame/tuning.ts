@@ -52,3 +52,6 @@ export const MAX_TICKS = 10000
 
 /** How far a plot view may zoom, relative to the fitted @bounds window (zoom 1). Wide on purpose. */
 export const PLOT_ZOOM = { min: 1e-4, max: 1e6 } as const
+
+/** The window a log axis shows when @bounds gives it no range (world values, before log10). */
+export const DEFAULT_LOG_WINDOW = { min: 0.1, max: 10 } as const

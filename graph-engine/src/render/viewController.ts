@@ -7,6 +7,7 @@ import {
   type Vec,
 } from '../view2d'
 import { axisZoom, wheelFactor } from '../plot/view/axisZoom'
+import { axisZoomAllowedFor } from '../plot/view/authored'
 import { plotCameraOf, plotViewOf, PLOT_LIMITS } from '../plot/view/plotView'
 import type { Camera2D } from './camera2d'
 
@@ -30,7 +31,7 @@ export interface WheelInput {
 export class ViewController {
   private readonly recognizer: GestureRecognizer
   private motion: ViewMotion
-  // Whether one-axis zoom may change the unit ratio. 5.3 wires @aspect here (equal: false).
+  // Whether one-axis zoom may change the unit ratio: only when the authored aspect is not equal.
   // An exact change was written straight to the camera: the next step must report it.
   private pending = false
   private readonly axisZoomAllowed: () => boolean
@@ -39,7 +40,7 @@ export class ViewController {
 
   constructor(cam: Camera2D, options?: { axisZoomAllowed?: () => boolean }) {
     this.cam = cam
-    this.axisZoomAllowed = options?.axisZoomAllowed ?? (() => true)
+    this.axisZoomAllowed = options?.axisZoomAllowed ?? (() => axisZoomAllowedFor(cam.aspect()))
     this.recognizer = new GestureRecognizer({ screen: () => cam.screenSize() })
     this.motion = new ViewMotion({
       frame: cam.frame(),

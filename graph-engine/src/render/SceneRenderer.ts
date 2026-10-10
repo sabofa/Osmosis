@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
 import { Camera2D } from './camera2d'
 import { ViewController } from './viewController'
+import { authoredBounds } from '../plot/view/authored'
 import { keyReachesView, pointerKindOf } from '../view2d/dom/domInput'
 import type { Intent, PointerSample } from '../view2d'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
@@ -252,7 +253,7 @@ export class SceneRenderer {
     const rect = canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
-    this.camera2d = new Camera2D(width, height, options.config.bounds ?? undefined)
+    this.camera2d = new Camera2D(width, height, authoredBounds(options.config, width / height), options.config.space.aspect)
     this.controller = new ViewController(this.camera2d)
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))

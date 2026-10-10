@@ -76,7 +76,8 @@ describe('ViewController', () => {
   })
 
   it('Alt+wheel zooms x only about the cursor; Alt+Shift (deltaX fallback) zooms y only', () => {
-    const { cam, vc } = setup()
+    const cam = new Camera2D(100, 100, { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }, { kind: 'ratioXY', x: 1, y: 1 })
+    const vc = new ViewController(cam)
     const f = Math.exp(0.15)
     vc.wheel(wheel({ altKey: true, deltaY: -100 }))
     let b = cam.getBounds()
@@ -88,6 +89,31 @@ describe('ViewController', () => {
     vc.reset(0)
     b = cam.getBounds()
     near(b.xMin, -10); near(b.yMin, -10)
+  })
+
+  it('equal aspect: Alt+wheel does nothing, by default', () => {
+    const { cam, vc } = setup()
+    vc.wheel(wheel({ altKey: true, deltaY: -100 }))
+    vc.wheel(wheel({ altKey: true, shiftKey: true, deltaY: -100 }))
+    const b = cam.getBounds()
+    near(b.xMin, -10); near(b.xMax, 10); near(b.yMin, -10); near(b.yMax, 10)
+  })
+
+  it('ratioXY 2:1: x px/unit is twice y; Alt+wheel changes the x span only; reset keeps 2:1', () => {
+    const cam = new Camera2D(100, 100, { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }, { kind: 'ratioXY', x: 2, y: 1 })
+    const vc = new ViewController(cam)
+    const a = cam.getView()
+    near(a.a / a.b, 2)
+    const f = Math.exp(0.15)
+    vc.wheel(wheel({ altKey: true, deltaY: -100 }))
+    const b = cam.getBounds()
+    // the 2:1 frame (40 x 20 units) fits the square canvas by width: x spans 20, y bars to 40
+    near(b.yMin, -20); near(b.yMax, 20)
+    near(b.xMax - b.xMin, 20 / f)
+    vc.reset(0)
+    near(cam.getView().a / cam.getView().b, 2)
+    near(cam.getBounds().xMax - cam.getBounds().xMin, 20)
+    near(cam.getBounds().yMax - cam.getBounds().yMin, 40)
   })
 
   it('the axis-zoom hook can refuse (equal aspect)', () => {
