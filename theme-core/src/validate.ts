@@ -3,6 +3,7 @@ import { FONT_STACKS, ID_RE, RESERVED_THEME_IDS, normalise, type LayerKind, type
 import { tokenByName, isValidTokenValue } from './registry/index.js'
 import { mirrorSeed, resolve } from './resolve.js'
 import { compose, ownerOf } from './layers.js'
+import { LAYER_TOKENS, formatAlpha } from './layerTokens.js'
 import { DEFAULT_THEME_ID, DEFAULT_WORKSPACE_THEME_ID, builtinById } from './builtins/index.js'
 
 export interface Issue { path: string; message: string; suggestion?: string }
@@ -247,6 +248,31 @@ function layerWarnings(raw: Record<string, unknown>, layer: LayerKind, errors: I
   contrastWarnings(manifest as unknown as Record<string, unknown>, errors, warnings, layer)
 }
 
+function alphaWarnings(raw: Record<string, unknown>, warnings: Issue[]): void {
+  if (!isObj(raw.overrides)) return
+  const floors = new Map(LAYER_TOKENS.map((t) => [t.token, t.floor]))
+  let resolved: ReturnType<typeof resolve> | undefined
+  try { resolved = resolve(normalise(raw as never)) } catch { resolved = undefined }
+  for (const [bucket, o] of Object.entries(raw.overrides)) {
+    if (!isObj(o)) continue
+    for (const [tok, v] of Object.entries(o)) {
+      const floor = floors.get(tok)
+      const n = typeof v === 'string' ? Number(v) : Number.NaN
+      if (floor === undefined || !Number.isFinite(n)) continue
+      const path = `overrides.${bucket}.${tok}`
+      if (n < floor) {
+        warnings.push({ path, message: `${tok} is below its floor, clamped to ${formatAlpha(floor)}`, suggestion: `set ${tok} to ${formatAlpha(floor)}` })
+      }
+      if (tok === 'doc-media-alpha' && resolved) {
+        const sheet = Number(resolved[bucket === 'dark' ? 'dark' : 'light']['doc-sheet-alpha'])
+        if (Number.isFinite(sheet) && n < sheet) {
+          warnings.push({ path, message: `doc-media-alpha is below the sheet opacity and will be raised to ${formatAlpha(sheet)}` })
+        }
+      }
+    }
+  }
+}
+
 export function validate(raw: unknown): Report {
   const errors: Issue[] = []
   const warnings: Issue[] = []
@@ -256,6 +282,7 @@ export function validate(raw: unknown): Report {
       const r = raw as Record<string, unknown>
       if (r.layer === 'workspace' || r.layer === 'ambience') layerWarnings(r, r.layer, errors, warnings)
       else contrastWarnings(r, errors, warnings)
+      alphaWarnings(r, warnings)
     }
   } catch (e) {
     errors.push({ path: '', message: `validate failed: ${trunc(e instanceof Error ? e.message : 'unknown error', 100)}` })

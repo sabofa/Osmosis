@@ -354,3 +354,33 @@ describe('validate: layer ownership warnings', () => {
     expect(validate(base({ css })).warnings.find((w) => w.path === 'css')).toBeUndefined()
   })
 })
+
+describe('validate: layer alpha warnings', () => {
+  const ov = (bucket: string, o: Record<string, string>) => base({ overrides: { [bucket]: o } })
+  for (const bucket of ['any', 'light', 'dark']) {
+    it(`below-floor override warns in ${bucket}`, () => {
+      const r = validate(ov(bucket, { 'callout-alpha': '0.1' }))
+      expect(r.ok).toBe(true)
+      const w = r.warnings.find((x) => x.path === `overrides.${bucket}.callout-alpha`)!
+      expect(w.message).toBe('callout-alpha is below its floor, clamped to 0.7')
+      expect(w.suggestion).toBe('set callout-alpha to 0.7')
+    })
+  }
+  it('at-floor value has no warning', () => {
+    expect(validate(ov('any', { 'callout-alpha': '0.7' })).warnings.filter((x) => x.path.includes('callout-alpha'))).toEqual([])
+  })
+  it('graph-paper-alpha uses the base floor only', () => {
+    expect(validate(ov('any', { 'graph-paper-alpha': '0.3' })).warnings.filter((x) => x.path.includes('graph-paper'))).toEqual([])
+  })
+  it('media below sheet is informational and only when explicit', () => {
+    const r = validate(ov('any', { 'doc-sheet-alpha': '0.9', 'doc-media-alpha': '0.8' }))
+    expect(r.ok).toBe(true)
+    const w = r.warnings.find((x) => x.path === 'overrides.any.doc-media-alpha')!
+    expect(w.message).toBe('doc-media-alpha is below the sheet opacity and will be raised to 0.9')
+    expect(validate(ov('any', { 'doc-sheet-alpha': '0.9' })).warnings.filter((x) => x.path.includes('media'))).toEqual([])
+    expect(validate(ov('any', { 'doc-sheet-alpha': '0.6', 'doc-media-alpha': '0.95' })).warnings.filter((x) => x.path.includes('media'))).toEqual([])
+  })
+  it('none for built-ins', () => {
+    for (const b of BUILTINS) expect(validate(b).warnings.filter((x) => x.message.includes('alpha'))).toEqual([])
+  })
+})
