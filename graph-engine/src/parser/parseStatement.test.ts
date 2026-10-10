@@ -1490,3 +1490,96 @@ describe('a color: or name: left before a style clause gets a legible error (fix
     expect(parseStatement('z = x opacity: 0.5 color: red name: s')).toMatchObject({ kind: 'space', color: 'red', statementName: 's' })
   })
 })
+
+// Open item 3 of the v2 handoff: "r = bisector of angle A-B-C" was read as a
+// polar curve, because the polar branch claims any "r = <expr>" and the
+// expression grammar reads "bisector of angle A-B-C" as a product of
+// variables. The same went for "y = ...", "x = ..." and "z = ...". A
+// construction bound to one of those names is refused, in words, with the
+// rename that works.
+describe('a construction bound to a name the plotting grammar reserves is refused', () => {
+  it('refuses "r = bisector of angle A-B-C", naming r, quoting the line and suggesting a rename', () => {
+    let message = ''
+    try {
+      parseStatement('r = bisector of angle A-B-C')
+    } catch (err) {
+      message = (err as Error).message
+    }
+    expect(message).toContain('"r" is the polar radius')
+    expect(message).toContain('"r = bisector of angle A-B-C"')
+    expect(message).toContain('polar curve')
+    expect(message).toContain('e.g. "R = bisector of angle A-B-C"')
+  })
+
+  it('refuses the other reserved names the same way, using the author\'s own right-hand side', () => {
+    expect(() => parseStatement('y = midpoint of A-B')).toThrow(/"y" is .* "y = midpoint of A-B".* e\.g\. "Y = midpoint of A-B"/)
+    expect(() => parseStatement('x = intersect line A-B, line C-D')).toThrow(
+      /"x" is .* "x = intersect line A-B, line C-D".* e\.g\. "X = intersect line A-B, line C-D"/
+    )
+    expect(() => parseStatement('z = center of S')).toThrow(/"z" is .* "z = center of S".* e\.g\. "Z = center of S"/)
+    expect(() => parseStatement('y = perpendicular bisector of A-B')).toThrow(/e\.g\. "Y = perpendicular bisector of A-B"/)
+    expect(() => parseStatement('y = line through P parallel to A-B')).toThrow(/e\.g\. "Y = line through P parallel to A-B"/)
+    expect(() => parseStatement('x = foot P to A-B')).toThrow(/e\.g\. "X = foot P to A-B"/)
+    expect(() => parseStatement('r = centroid ABC')).toThrow(/e\.g\. "R = centroid ABC"/)
+  })
+
+  it('refuses a construction phrase that is itself malformed, rather than reading it as a product of names', () => {
+    expect(() => parseStatement('r = bisector of angle A-B')).toThrow(/"r" is the polar radius.*"R = bisector of angle A-B"/)
+  })
+
+  it('quotes the line without a trailing color or name clause', () => {
+    expect(() => parseStatement('r = midpoint of A-B color: red')).toThrow(/"r = midpoint of A-B"/)
+  })
+
+  it('still reads polar curves as polar, explicit functions as explicit, and the rest as before', () => {
+    const num = (value: number) => ({ kind: 'num', value })
+    const twoPi = { kind: 'binary', op: '*', left: num(2), right: { kind: 'var', name: 'pi' } }
+    expect(parseStatement('r = 2 sin(theta)')).toEqual({
+      kind: 'polar',
+      body: { kind: 'binary', op: '*', left: num(2), right: { kind: 'call', name: 'sin', args: [{ kind: 'var', name: 'theta' }] } },
+      from: num(0),
+      to: twoPi,
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('r = theta for theta in [0, 6]')).toEqual({
+      kind: 'polar',
+      body: { kind: 'var', name: 'theta' },
+      from: num(0),
+      to: num(6),
+      color: null,
+      statementName: null,
+    })
+    // A constant or a bare word that merely resembles a construction keyword.
+    expect(parseStatement('r = radius')).toMatchObject({ kind: 'polar', body: { kind: 'var', name: 'radius' } })
+    expect(parseStatement('y = x^2')).toEqual({
+      kind: 'explicit',
+      independent: 'x',
+      body: { kind: 'binary', op: '^', left: { kind: 'var', name: 'x' }, right: num(2) },
+      condition: null,
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('x = 3')).toEqual({ kind: 'explicit', independent: 'y', body: num(3), condition: null, color: null, statementName: null })
+    expect(parseStatement('y = -x if x < 0')).toMatchObject({ kind: 'explicit', independent: 'x', condition: { kind: 'compare', op: '<' } })
+    expect(parseStatement('z = x + y')).toMatchObject({ kind: 'surface' })
+  })
+
+  it('still binds a construction to an ordinary name, including the capital the message suggests', () => {
+    expect(parseStatement('L = bisector of angle A-B-C')).toEqual({
+      kind: 'construction',
+      names: ['L'],
+      body: { kind: 'angleBisector', from: 'A', vertex: 'B', to: 'C' },
+      color: null,
+      statementName: null,
+    })
+    expect(parseStatement('R = bisector of angle A-B-C')).toMatchObject({ kind: 'construction', names: ['R'], body: { kind: 'angleBisector' } })
+    expect(parseStatement('M = midpoint of A-B')).toEqual({
+      kind: 'construction',
+      names: ['M'],
+      body: { kind: 'midpoint', from: 'A', to: 'B' },
+      color: null,
+      statementName: null,
+    })
+  })
+})

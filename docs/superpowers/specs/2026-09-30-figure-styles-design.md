@@ -222,3 +222,11 @@ Ben, with a reference sheet of brush-pen strokes: *"the pen should not have grai
   - each edge has its own small bumps.
 - At variation 0 and taper 0 it is an even ribbon. The spine is still the hand's, so the faithfulness rule is unchanged.
 - The retired pinhole texture (`bleed`) is removed from `textures.ts`.
+
+## Later: graph themes across the engine (Ben, 2026-10-01)
+
+These are not built yet; this records the direction.
+- **Osmosis compatibility:** figure styles must work with Osmosis's design system: light, dark and system modes, and the named themes (Slate, Forest, Ember, Plum and custom ones).
+- **A setting under the app theme:** Settings → Appearance gets a **graph theme** choice beneath the app theme (clean, ink, pencil, marker, …). The app passes it to the engine as the base style (`renderFigure`'s `baseStyle`, which nothing feeds today).
+- **Scope, option B:** the chosen graph theme becomes the standard look for everything in the graphing engine. That means figures, and also 2D plots, whose lines become hand-drawn too; it needs the 2D plot renderer to draw through `style/`. Tables follow the theme's colours, paper and lettering. The 3D space engine may be excepted.
+- **What exists today:** the app sends the engine only `light` or `dark` (`GraphPanel.tsx`), and preset colours reach it only through the CSS tokens `resolvePalette` reads. So designing this starts there.

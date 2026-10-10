@@ -29,6 +29,14 @@ describe('parseSpec', () => {
     expect(result.errors[0].line).toBe(2)
   })
 
+  it('reports a construction bound to a reserved name and still parses the rest of the spec', () => {
+    const result = parseSpec('A = (0, 0)\nr = bisector of angle A-B-C\nr = 2 sin(theta)\nL = midpoint of A-B\ny = x^2')
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0].line).toBe(2)
+    expect(result.errors[0].message).toMatch(/"r" is the polar radius.*"r = bisector of angle A-B-C".*"R = bisector of angle A-B-C"/)
+    expect(result.statements.map((s) => s.kind)).toEqual(['point', 'polar', 'construction', 'explicit'])
+  })
+
   it('lets a later "last value wins" directive override an earlier one', () => {
     const result = parseSpec('@theme: dark\n@theme: light')
     expect(result.config.theme).toBe('light')

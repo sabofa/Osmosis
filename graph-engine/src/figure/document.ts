@@ -150,6 +150,11 @@ export const FIGURE_PADDING = 18
 export interface Projection {
   toView(p: Vec2): Vec2
   scale: number
+  // The world point that lands on the view origin: toView(p) is
+  // ((p.x - centre.x) * scale, -(p.y - centre.y) * scale). Exposed so the
+  // figure's frame (frame.ts) states the same affine map without recomputing
+  // the fit.
+  centre: Vec2
 }
 
 // **1:1 aspect is locked by construction**: one scale for both axes, so a
@@ -174,6 +179,7 @@ export function fitProjection(bounds: WorldBounds): Projection {
   const cy = (bounds.minY + bounds.maxY) / 2
   return {
     scale,
+    centre: { x: cx, y: cy },
     toView(p: Vec2): Vec2 {
       // y is negated: SVG's y axis points down, the plane's points up.
       return { x: (p.x - cx) * scale, y: -(p.y - cy) * scale }

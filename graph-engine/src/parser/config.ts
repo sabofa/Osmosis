@@ -1,4 +1,5 @@
 import type { StyleLayer } from '../style/resolve'
+import type { FocusSpec } from '../view2d/focus'
 
 // Per-spec configuration, set via "@key: value" directive lines anywhere in
 // the spec text (order doesn't matter; last value for a repeated key wins).
@@ -137,6 +138,9 @@ export interface GraphConfig {
   // The spec's @param bindings, in source order (SP6). Space-only for now:
   // the 2D renderer ignores bindings until track 4 adopts them.
   bindings: Binding[]
+  // Where a 2D view opens, from "@focus: (x, y) zoom k" (see view2d/focus.ts).
+  // Null when the spec says nothing: the view opens fitted, as it always did.
+  focus: FocusSpec | null
 }
 
 export function defaultConfig(): GraphConfig {
@@ -166,5 +170,6 @@ export function defaultConfig(): GraphConfig {
     style: {},
     space: defaultSpaceConfig(),
     bindings: [],
+    focus: null,
   }
 }

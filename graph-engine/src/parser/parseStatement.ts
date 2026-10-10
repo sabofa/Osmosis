@@ -542,6 +542,32 @@ function parseConstructionBody(rhs: string): Construction | null {
   return parseTriangleCentre(text)
 }
 
+// What each name the plotting grammar reserves means, for the refusal below.
+const RESERVED_NAMES: Record<string, { is: string; draws: string }> = {
+  r: { is: 'the polar radius', draws: 'a polar curve' },
+  y: { is: 'the height of an explicit function', draws: 'the curve y = f(x)' },
+  x: { is: 'the horizontal position of an explicit function', draws: 'the curve x = f(y)' },
+  z: { is: 'the height of a surface', draws: 'the surface z = f(x, y)' },
+}
+
+// Refuses "<r|x|y|z> = <construction>". The right-hand side is a construction
+// when the construction grammar itself recognises it — parseConstructionBody
+// is the one list of construction phrases — or when it starts like one and is
+// malformed (the grammar throws): "r = bisector of angle A-B" is a
+// construction with a mistake in it, not a polar curve, so it gets the same
+// refusal rather than being read as a product of the words. Anything else
+// returns untouched and keeps its plotting reading.
+function refuseReservedConstruction(line: string, name: string, rhs: string): void {
+  try {
+    if (parseConstructionBody(rhs) === null) return
+  } catch {
+    // starts like a construction, and is one
+  }
+  const { is, draws } = RESERVED_NAMES[name]
+  const rename = `${name.toUpperCase()} = ${rhs.trim()}`
+  throw new Error(`"${name}" is ${is}, so "${line}" would draw ${draws}; name the construction something else, e.g. "${rename}"`)
+}
+
 // "triangle ABC: AB = 8, angle A = 90, AC = 6".
 //
 // Measurements are mapped onto the canonical a/b/c slots here rather than in
@@ -1482,6 +1508,17 @@ function parseStatementCore(rawLine: string): StatementShape {
     const [, name, param, body] = functionDefMatch
     return { kind: 'functionDef', name, param, body: parseExprString(body) }
   }
+
+  // A construction bound to a name the plotting grammar reserves: "r =
+  // bisector of angle A-B-C". The polar branch below (and the y=/x=/z=
+  // branches in the "=" handling) claim any "<name> = <anything>", and the
+  // expression grammar reads "bisector of angle A-B-C" as a product of
+  // variables, so the line used to draw a figure nobody asked for with no
+  // error. It is refused instead, in words (v2 handoff, open item 3).
+  // Checked ahead of all of those claims, and after the keyword statements
+  // above, none of which start with one of these names.
+  const reserved = /^(r|x|y|z)\s*=(?!=)\s*(.*)$/.exec(line)
+  if (reserved) refuseReservedConstruction(line, reserved[1], reserved[2])
 
   // Polar curve: "r = 1 + cos(theta)" (theta defaults to [0, 2*pi]) or
   // "r = f(theta) for theta in [a, b]"
