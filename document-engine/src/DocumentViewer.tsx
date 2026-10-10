@@ -3,7 +3,22 @@ import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
 import { ZoomControl, SettingsMenu } from './Toolbar'
-import { ZOOM_MAX, ZOOM_MIN, clampZoom, fitReference, fitScale, isFitMode, stepZoom, wheelZoomFactor, zoomAround, type Size, type ZoomMode } from './zoomModel'
+import {
+  SCROLLBAR_ALLOWANCE,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  clampZoom,
+  fitReference,
+  isFitMode,
+  settleContainer,
+  settleFitScale,
+  stableFitScale,
+  stepZoom,
+  wheelZoomFactor,
+  zoomAround,
+  type Size,
+  type ZoomMode,
+} from './zoomModel'
 import { RemoveHighlightIcon } from './icons'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
@@ -130,9 +145,17 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asset.url, paged])
 
+  // Fit modes measure the OUTER scroller box minus a constant scrollbar
+  // allowance (see zoomModel.stableFitScale), and ignore sub-0.5% changes, so
+  // a scrollbar toggling can never feed back into the scale.
+  const lastFitScale = useRef<number | null>(null)
   const scale = isFitMode(zoom)
-    ? fitScale(zoom, container, fitReference(zoom, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, zoomMin, zoomMax)
+    ? settleFitScale(
+        lastFitScale.current,
+        stableFitScale(zoom, container, fitReference(zoom, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, SCROLLBAR_ALLOWANCE, zoomMin, zoomMax)
+      )
     : clampZoom(zoom, zoomMin, zoomMax)
+  lastFitScale.current = isFitMode(zoom) ? scale : null
   const scaleRef = useRef(scale)
   scaleRef.current = scale
   const pendingScroll = useRef<{ left: number; top: number } | null>(null)
@@ -141,7 +164,8 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const measure = () => setContainer((c) => (c.w === el.clientWidth && c.h === el.clientHeight ? c : { w: el.clientWidth, h: el.clientHeight }))
+    // offsetWidth/Height (border box) do not change when a scrollbar toggles.
+    const measure = () => setContainer((c) => settleContainer(c, { w: el.offsetWidth, h: el.offsetHeight }))
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
@@ -165,13 +189,14 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     (mode: ZoomMode, around?: { x: number; y: number }) => {
       const el = scrollRef.current
       const current = scaleRef.current
-      const next = isFitMode(mode) ? fitScale(mode, container, fitReference(mode, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, zoomMin, zoomMax) : clampZoom(mode, zoomMin, zoomMax)
+      const next = isFitMode(mode)
+        ? settleFitScale(current, stableFitScale(mode, container, fitReference(mode, sidePanelSized(pageSizes, isImage && !!text)), FIT_PADDING, SCROLLBAR_ALLOWANCE, zoomMin, zoomMax))
+        : clampZoom(mode, zoomMin, zoomMax)
       if (el && next !== current) {
         const cursor = around ?? { x: el.clientWidth / 2, y: el.clientHeight / 2 }
         const base = pendingScroll.current ?? { left: el.scrollLeft, top: el.scrollTop }
         pendingScroll.current = zoomAround(current, next, cursor, base)
-        scaleRef.current = next
-      }
+        scaleRef.current = next      }
       setZoomState(isFitMode(mode) ? mode : clampZoom(mode, zoomMin, zoomMax))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

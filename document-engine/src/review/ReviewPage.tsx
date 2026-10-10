@@ -162,6 +162,44 @@ export default function ReviewPage(): ReactNode {
     }, 500)
     return () => clearInterval(t)
   }, [pdf, q])
+  // ?trace=1 records every change of page-1's rendered width (scale proxy),
+  // the scroller's client height and any horizontal scrollbar in
+  // window.__scaleTrace; ?frames=1 records requestAnimationFrame deltas in
+  // window.__frameDeltas (read by the pacing script).
+  useEffect(() => {
+    if (!q.has('trace')) return
+    const trace: { t: number; pageW: number; clientH: number; hbar: boolean }[] = []
+    ;(window as unknown as { __scaleTrace: typeof trace }).__scaleTrace = trace
+    let raf = 0
+    const t0 = performance.now()
+    const tick = () => {
+      const page = document.querySelector<HTMLElement>('.document-viewer-pdf-page')
+      const sc = document.querySelector<HTMLElement>('.document-viewer-scroll')
+      if (page && sc) {
+        const pageW = Math.round(page.getBoundingClientRect().width * 100) / 100
+        const last = trace[trace.length - 1]
+        const hbar = sc.scrollWidth > sc.clientWidth
+        if (!last || last.pageW !== pageW || last.clientH !== sc.clientHeight || last.hbar !== hbar) trace.push({ t: Math.round(performance.now() - t0), pageW, clientH: sc.clientHeight, hbar })
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [q])
+  useEffect(() => {
+    if (!q.has('frames')) return
+    const deltas: number[] = []
+    ;(window as unknown as { __frameDeltas: number[] }).__frameDeltas = deltas
+    let last = performance.now()
+    let raf = 0
+    const tick = (now: number) => {
+      deltas.push(now - last)
+      last = now
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [q])
   useEffect(() => { document.body.style.margin = '0' }, [])
   const sheetBg = `color-mix(in srgb, ${tokens.colors.page} ${opacity * 100}%, transparent)`
 

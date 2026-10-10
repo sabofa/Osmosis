@@ -39,6 +39,41 @@ export function fitScale(mode: ZoomMode, container: Size, page: Size, padding = 
   return clampZoom(raw, min, max)
 }
 
+// Room reserved for a scrollbar on each axis (CSS px). Fits are computed
+// against the OUTER box minus this constant, never the scroller's clientWidth/
+// clientHeight (which change when a scrollbar toggles and caused a feedback
+// loop: fit -> overflow -> scrollbar -> smaller client -> new fit -> ...).
+export const SCROLLBAR_ALLOWANCE = 16
+// Hysteresis: container wobble below this many px is ignored.
+export const CONTAINER_TOLERANCE = 2
+// Hysteresis: a fit-mode scale change below this fraction is ignored.
+export const FIT_SCALE_TOLERANCE = 0.005
+
+// `outer` is the scroller's border box (offsetWidth/offsetHeight): independent
+// of scrollbars. The allowance is taken off both axes, so a fitted page never
+// needs a scrollbar of its own and the result is a fixed point.
+export function stableFitScale(
+  mode: ZoomMode,
+  outer: Size,
+  page: Size,
+  padding = 0,
+  allowance = SCROLLBAR_ALLOWANCE,
+  min = ZOOM_MIN,
+  max = ZOOM_MAX
+): number {
+  if (!isFitMode(mode)) return clampZoom(mode, min, max)
+  return fitScale(mode, { w: outer.w - allowance, h: outer.h - allowance }, page, padding, min, max)
+}
+
+export function settleContainer(prev: Size, next: Size, tol = CONTAINER_TOLERANCE): Size {
+  return Math.abs(next.w - prev.w) < tol && Math.abs(next.h - prev.h) < tol ? prev : next
+}
+
+export function settleFitScale(prev: number | null, next: number, rel = FIT_SCALE_TOLERANCE): number {
+  if (prev === null || !(prev > 0)) return next
+  return Math.abs(next - prev) / prev < rel ? prev : next
+}
+
 // Next stop above (in) or below (out) the current scale, clamped to the range.
 export function stepZoom(current: number, direction: 'in' | 'out', min = ZOOM_MIN, max = ZOOM_MAX): number {
   const eps = 0.004

@@ -1,5 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { ZOOM_MAX, ZOOM_MIN, clampZoom, fitReference, fitScale, stepZoom, wheelZoomFactor, zoomAround } from './zoomModel'
+import {
+  SCROLLBAR_ALLOWANCE,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  clampZoom,
+  fitReference,
+  fitScale,
+  settleContainer,
+  settleFitScale,
+  stableFitScale,
+  stepZoom,
+  wheelZoomFactor,
+  zoomAround,
+  type Size,
+  type ZoomMode,
+} from './zoomModel'
 
 const letter = { w: 612, h: 792 }
 
@@ -126,6 +141,73 @@ describe('wheelZoomFactor', () => {
   })
   it('caps a huge delta', () => {
     expect(wheelZoomFactor(100000)).toBeCloseTo(Math.exp(-0.25))
+  })
+})
+
+// The scroller loses `sb` px of client size per axis when a scrollbar shows.
+// A vertical bar is always there (stable gutter, multi-page); a horizontal
+// one appears exactly when the page overflows sideways.
+const SB = 12
+const PAD = 16
+function clientOf(outer: Size, scale: number, page: Size): Size {
+  const overflowX = page.w * scale + 2 * PAD > outer.w - SB
+  return { w: outer.w - SB, h: outer.h - (overflowX ? SB : 0) }
+}
+
+describe('scrollbar feedback loop (regression)', () => {
+  const wide = { w: 842, h: 595 }
+  const outer = { w: 700, h: 500 }
+  const modes: ZoomMode[] = ['fit-height', 'fit-page', 'fit-width']
+
+  it('the old client-size measurement oscillates at fit-height with a wide page', () => {
+    let scale = fitScale('fit-height', clientOf(outer, 1, wide), wide, PAD)
+    const seen: number[] = []
+    for (let i = 0; i < 6; i++) {
+      scale = fitScale('fit-height', clientOf(outer, scale, wide), wide, PAD)
+      seen.push(scale)
+    }
+    expect(new Set(seen.map((s) => s.toFixed(4))).size).toBe(2)
+  })
+
+  for (const mode of modes) {
+    it(`${mode}: the stable fit reaches a fixed point after at most one recompute`, () => {
+      // Measurement is the outer box minus a constant, so it cannot depend on scale.
+      const s1 = stableFitScale(mode, outer, wide, PAD, SB)
+      const s2 = stableFitScale(mode, outer, wide, PAD, SB)
+      expect(s2).toBe(s1)
+      // Whatever scrollbar state the settled scale produces, the input is unchanged.
+      const again = stableFitScale(mode, { w: outer.w, h: outer.h }, wide, PAD, SB)
+      expect(again).toBe(s1)
+    })
+    it(`${mode}: the fitted page plus a scrollbar still fits the outer box`, () => {
+      const s = stableFitScale(mode, outer, wide, PAD, SB)
+      if (s > ZOOM_MIN && s < ZOOM_MAX) {
+        if (mode !== 'fit-width') expect(wide.h * s + 2 * PAD + SB).toBeLessThanOrEqual(outer.h + 1e-6)
+        if (mode !== 'fit-height') expect(wide.w * s + 2 * PAD + SB).toBeLessThanOrEqual(outer.w + 1e-6)
+      }
+    })
+  }
+
+  it('defaults the allowance to SCROLLBAR_ALLOWANCE', () => {
+    expect(stableFitScale('fit-width', { w: 1000, h: 800 }, letter, 16)).toBeCloseTo(fitScale('fit-width', { w: 1000 - SCROLLBAR_ALLOWANCE, h: 800 - SCROLLBAR_ALLOWANCE }, letter, 16))
+  })
+  it('numeric modes ignore the allowance', () => {
+    expect(stableFitScale(1.5, outer, wide, PAD, SB)).toBe(1.5)
+  })
+})
+
+describe('hysteresis', () => {
+  it('ignores container changes under 2px', () => {
+    const prev = { w: 700, h: 500 }
+    expect(settleContainer(prev, { w: 701, h: 499 })).toBe(prev)
+    expect(settleContainer(prev, { w: 702, h: 500 })).toEqual({ w: 702, h: 500 })
+    expect(settleContainer(prev, { w: 700, h: 497 })).toEqual({ w: 700, h: 497 })
+  })
+  it('ignores fit scale changes under 0.5%', () => {
+    expect(settleFitScale(1, 1.004)).toBe(1)
+    expect(settleFitScale(1, 0.996)).toBe(1)
+    expect(settleFitScale(1, 1.006)).toBe(1.006)
+    expect(settleFitScale(null, 0.8)).toBe(0.8)
   })
 })
 
