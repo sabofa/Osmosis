@@ -203,6 +203,16 @@ describe('gridPlan titles', () => {
     expect(plan.titles.map((t) => [t.axis, t.text])).toEqual([['x', 't (s)'], ['y', 'v (m/s)']])
   })
 
+  it('draws only authored titles: defaults and a title equal to its default place nothing', () => {
+    const args = [SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }] as const
+    expect(gridPlan(view, defaultConfig(), ...args).titles).toEqual([])
+    const c = defaultConfig()
+    const one = { ...c, space: { ...c.space, titles: { ...c.space.titles, x: 't (s)' } } }
+    expect(gridPlan(view, one, ...args).titles.map((t) => t.axis)).toEqual(['x'])
+    const same = { ...c, space: { ...c.space, titles: { ...c.space.titles, y: 'y' } } }
+    expect(gridPlan(view, same, ...args).titles).toEqual([])
+  })
+
   it('has none for empty titles or with the axes off', () => {
     expect(gridPlan(view, withTitles('', ''), SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
     const off = { ...withTitles('t', 'v'), axes: false }

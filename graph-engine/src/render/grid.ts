@@ -224,12 +224,19 @@ export function gridPlan(
       labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
     }
   }
+  // A title equal to its axis default ('x' / 'y') counts as not authored, so
+  // plots without @titles do not change. An author who wants a title that is
+  // literally "x" can write "x " or "x (m)".
+  const authored = {
+    x: config.space.titles.x === 'x' ? '' : config.space.titles.x,
+    y: config.space.titles.y === 'y' ? '' : config.space.titles.y,
+  }
   const titles = config.axes
     ? titleLayout({
         bounds,
         widthPx: size.widthPx,
         heightPx: size.heightPx,
-        titles: config.space.titles,
+        titles: authored,
         labelBoxesPx: labelBoxesPx([...labelsX, ...labelsY], bounds, size.widthPx, size.heightPx),
       })
     : []
