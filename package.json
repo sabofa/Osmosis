@@ -9,6 +9,7 @@
     "document-engine",
     "scripts/mcp-batch",
     "theme-core",
+    "engine-host",
     "cli-core",
     "cli"
   ],
