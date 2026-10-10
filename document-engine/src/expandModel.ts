@@ -56,6 +56,12 @@ export function targetInMenu(target: EventTarget | null): boolean {
   return !!el && typeof el.closest === 'function' && !!el.closest('.document-viewer-zoom-menu, [role="menu"]')
 }
 
+// True when a menu is open anywhere under `root`: a popup is mounted or a
+// trigger reports aria-expanded (focus may still sit on the trigger button).
+export function menuOpenIn(root: { querySelector?: (sel: string) => unknown } | null): boolean {
+  return !!root && typeof root.querySelector === 'function' && !!root.querySelector('.document-viewer-zoom-menu, [aria-haspopup="menu"][aria-expanded="true"]')
+}
+
 // On collapse, focus returns to the graph's expand button only when focus was
 // in the viewer or had fallen to the body (not when the user moved elsewhere).
 export function restoreFocusOnCollapse(activeInViewer: boolean, activeIsBody: boolean): boolean {

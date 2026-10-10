@@ -71,6 +71,10 @@ const stubGraph: RenderGraph = (spec) => (
 // window.__graphMounts = {mounts, unmounts}; window.__graphGestures = events
 // that reached a stub (wheel/pointerdown/dblclick, with the stub's index);
 // window.__graphCtx[i] = the ctx the stub at index i last received.
+// Live regression (headless, real input): a double-click at the centre of the
+// locked 4th graph's plot expands it ([data-graph-expanded]) and
+// __graphGestures stays empty (the frame's capture handler runs before the
+// plot's lock block).
 const GRAPHS_MD = [
   '# Graph embeds',
   '',

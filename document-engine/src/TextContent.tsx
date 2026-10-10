@@ -93,12 +93,13 @@ function GraphFence({
   useGraphLock(plotRef, options.lock)
   const slotRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
-  const wasExpanded = useRef(false)
+  // Seeded with the mount value: a graph mounting already expanded must not steal focus.
+  const wasExpanded = useRef(expanded)
   // Focus the collapse button on expand; on collapse hand focus back to the
   // expand button when it was in the viewer or had fallen to the body.
   useEffect(() => {
     const btn = buttonRef.current
-    if (expanded && !wasExpanded.current) btn?.focus()
+    if (expanded && wasExpanded.current === false) btn?.focus()
     else if (!expanded && wasExpanded.current && btn) {
       const active = document.activeElement
       const viewer = btn.closest('.document-viewer')

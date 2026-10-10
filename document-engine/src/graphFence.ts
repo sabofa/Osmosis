@@ -23,7 +23,7 @@ export interface GraphFenceOptions {
 const MIN_HEIGHT = 80
 const MAX_HEIGHT = 2000
 const NUM = '-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)'
-const AXIS_RE = new RegExp(`^([xy]):(${NUM})\\.\\.(${NUM})$`)
+const AXIS_RE = new RegExp(`^([xy]):(${NUM})\\.\\.(${NUM})$`, 'i')
 
 function parseView(raw: string): GraphView | null {
   const axes: Partial<Record<'x' | 'y', [number, number]>> = {}
@@ -32,7 +32,7 @@ function parseView(raw: string): GraphView | null {
   for (const part of parts) {
     const m = AXIS_RE.exec(part)
     if (!m) return null
-    const axis = m[1] as 'x' | 'y'
+    const axis = m[1].toLowerCase() as 'x' | 'y'
     const lo = Number(m[2])
     const hi = Number(m[3])
     if (axes[axis] || !Number.isFinite(lo) || !Number.isFinite(hi) || !(lo < hi)) return null
@@ -42,12 +42,13 @@ function parseView(raw: string): GraphView | null {
 }
 
 // `view=x:0..1, y:0..1`: a token ending in a comma continues into the next
-// token (a trailing comma is otherwise never valid, so this is unambiguous).
+// token, but only when that next token looks like an axis `[xy]:` (so
+// `view=x:0..1, lock` keeps `lock` as its own option).
 function mergeCommaTokens(tokens: string[]): string[] {
   const out: string[] = []
   for (let i = 0; i < tokens.length; i++) {
     let t = tokens[i]
-    while (t.endsWith(',') && i + 1 < tokens.length) t += tokens[++i]
+    while (t.endsWith(',') && i + 1 < tokens.length && /^[xy]:/i.test(tokens[i + 1])) t += tokens[++i]
     out.push(t)
   }
   return out

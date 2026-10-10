@@ -11,6 +11,7 @@ import {
   escapeDecision,
   dblClickExpands,
   targetInMenu,
+  menuOpenIn,
   restoreFocusOnCollapse,
 } from './expandModel'
 
@@ -75,6 +76,13 @@ describe('escape and double-click decisions', () => {
     expect(targetInMenu(mk(false) as unknown as EventTarget)).toBe(false)
     expect(targetInMenu(null)).toBe(false)
     expect(targetInMenu({} as EventTarget)).toBe(false)
+  })
+  it('detects an open menu anywhere under a root (focus still on trigger)', () => {
+    const root = (hit: boolean) => ({ querySelector: (sel: string) => (hit && sel.includes('aria-expanded="true"') && sel.includes('document-viewer-zoom-menu') ? {} : null) })
+    expect(menuOpenIn(root(true))).toBe(true)
+    expect(menuOpenIn(root(false))).toBe(false)
+    expect(menuOpenIn(null)).toBe(false)
+    expect(menuOpenIn({})).toBe(false)
   })
   it('restores focus only from the viewer or body', () => {
     expect(restoreFocusOnCollapse(true, false)).toBe(true)

@@ -92,6 +92,14 @@ export function ZoomControl({
           aria-expanded={open}
           title="Zoom options"
           onClick={() => setOpen((o) => !o)}
+          onKeyDown={(e) => {
+            // Esc with the menu open but focus still on the trigger closes the menu only.
+            if (e.key === 'Escape' && open) {
+              e.stopPropagation()
+              e.preventDefault()
+              setOpen(false)
+            }
+          }}
         >
           {Math.round(scale * 100)}%
         </button>

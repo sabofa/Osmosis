@@ -35,6 +35,7 @@ import {
   canCollapseCommand,
   escapeDecision,
   targetInMenu,
+  menuOpenIn,
 } from './expandModel'
 import { useHostCommands } from './useHostCommands'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
@@ -458,7 +459,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   useEffect(() => {
     if (!anyExpanded) return
     const onKey = (e: KeyboardEvent) => {
-      if (escapeDecision(e.key, expandRef.current, targetInMenu(e.target)) !== 'collapse') return
+      if (escapeDecision(e.key, expandRef.current, targetInMenu(e.target) || menuOpenIn(rootRef.current)) !== 'collapse') return
       e.stopPropagation()
       e.preventDefault()
       setExpandState((s) => collapseGraph(s))

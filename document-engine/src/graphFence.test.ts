@@ -167,6 +167,18 @@ describe('lenient option syntax', () => {
     })
     expect(parseGraphInfo('graph view=x:0..1,').view).toBeUndefined()
   })
+  it('view axes are case-insensitive', () => {
+    expect(parseGraphInfo('graph view=X:0..1,Y:2..3').view).toEqual({ x: [0, 1], y: [2, 3] })
+    expect(parseGraphInfo('graph view=X:0..1, y:2..3').bounds).toBe('0,1,2,3')
+  })
+  it('a trailing comma does not swallow a following option', () => {
+    const p = parseGraphInfo('graph view=x:0..1, lock')
+    expect(p.lock).toBe(true)
+    expect(p.view).toBeUndefined()
+    const q = parseGraphInfo('graph view=x:0..1, y:0..1 lock')
+    expect(q.lock).toBe(true)
+    expect(q.view).toEqual({ x: [0, 1], y: [0, 1] })
+  })
 })
 
 describe('graphFenceModel options', () => {
