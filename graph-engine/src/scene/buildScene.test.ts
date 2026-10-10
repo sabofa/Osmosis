@@ -1740,3 +1740,78 @@ describe('implicit curves and regions through the quadtree', () => {
     })
   })
 })
+
+describe('log axes (P4 4.3)', () => {
+  const sceneIn = (spec: string, b: { xMin: number; xMax: number; yMin: number; yMax: number }) => {
+    const parsed = parseSpec(spec)
+    return buildScene(parsed.statements, b, parsed.config, 140, parsed.statementLines)
+  }
+  const chainsOf = (scene: ReturnType<typeof sceneIn>) => scene.objects.flatMap((o) => (o.kind === 'curve' ? o.chains.map(chainPoints) : []))
+  // largest distance, in px, of any vertex from the chord through the chain's end vertices
+  function deviationPx(points: Vec2[], pxPerUnit: number): number {
+    const a = points[0]
+    const b = points[points.length - 1]
+    const len = Math.hypot(b.x - a.x, b.y - a.y)
+    let worst = 0
+    for (const p of points) worst = Math.max(worst, (Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / len) * pxPerUnit)
+    return worst
+  }
+
+  it('y = e^(-x) with a log y axis is a straight line in (x, v)', () => {
+    const scene = sceneIn('@yscale: log\ny = e^(-x)', { xMin: -2, xMax: 8, yMin: -4, yMax: 2 })
+    expect(scene.errors).toEqual([])
+    const chains = chainsOf(scene)
+    expect(chains).toHaveLength(1)
+    // the sampler keeps a vertex per 4 px on any line it draws (y = 3x gives 601); the log curve is just such a line
+    const line = chainsOf(sceneIn('y = -0.4342944819032518*x', { xMin: -2, xMax: 8, yMin: -4, yMax: 2 }))
+    expect(chains[0].length).toBe(line[0].length)
+    expect(deviationPx(chains[0], 80)).toBeLessThan(0.25)
+  })
+
+  it('y = x^3 on log-log has slope 3', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\ny = x^3', { xMin: -1, xMax: 2, yMin: -3, yMax: 6 })
+    expect(scene.errors).toEqual([])
+    const chains = chainsOf(scene)
+    expect(chains).toHaveLength(1)
+    const pts = chains[0]
+    expect(pts.length).toBe(chainsOf(sceneIn('y = 3*x', { xMin: -1, xMax: 2, yMin: -3, yMax: 6 }))[0].length)
+    expect(deviationPx(pts, 800 / 3)).toBeLessThan(0.25)
+    const angle = Math.atan2(pts[pts.length - 1].y - pts[0].y, pts[pts.length - 1].x - pts[0].x)
+    expect((Math.abs(angle - Math.atan(3)) * 180) / Math.PI).toBeLessThan(0.5)
+  })
+
+  it('a log x axis draws ln(x), and ln(x - 1) starts at u = 0', () => {
+    const b = { xMin: -1, xMax: 2, yMin: -3, yMax: 3 }
+    const plain = sceneIn('@xscale: log\ny = ln(x)', b)
+    expect(plain.errors).toEqual([])
+    expect(chainsOf(plain).length).toBeGreaterThan(0)
+    const shifted = sceneIn('@xscale: log\ny = ln(x - 1)', b)
+    expect(shifted.errors).toEqual([])
+    const chains = chainsOf(shifted)
+    expect(chains.length).toBeGreaterThan(0)
+    expect(Math.min(...chains.flatMap((c) => c.map((p) => p.x)))).toBeGreaterThanOrEqual(-1e-9)
+  })
+
+  it('a parametric (10^t, 10^(2t)) on log-log is a line of slope 2', () => {
+    const scene = sceneIn('@xscale: log\n@yscale: log\n(10^t, 10^(2*t)) for t in [-1, 1]', { xMin: -1.5, xMax: 1.5, yMin: -3, yMax: 3 })
+    expect(scene.errors).toEqual([])
+    const pts = chainsOf(scene)[0]
+    const first = pts[0]
+    const last = pts[pts.length - 1]
+    expect((last.y - first.y) / (last.x - first.x)).toBeCloseTo(2, 6)
+    expect(deviationPx(pts, 800 / 3)).toBeLessThan(0.25)
+  })
+
+  it('polar on a log axis is refused on its own line and the others still draw', () => {
+    const scene = sceneIn('@xscale: log\ny = x\nr = 1 + cos(theta)\ny = 2*x', { xMin: -1, xMax: 2, yMin: -1, yMax: 2 })
+    expect(scene.errors).toEqual([{ line: 3, message: 'polar curves need linear axes; write the curve parametrically' }])
+    expect(chainsOf(scene)).toHaveLength(2)
+  })
+
+  it('scales undefined and {linear, linear} build the same scene', () => {
+    const parsed = parseSpec('y = sin(x)')
+    const a = buildScene(parsed.statements, bounds, { ...parsed.config, scales: undefined as never }, 140, parsed.statementLines)
+    const b = buildScene(parsed.statements, bounds, { ...parsed.config, scales: { x: 'linear', y: 'linear' } }, 140, parsed.statementLines)
+    expect(a).toEqual(b)
+  })
+})

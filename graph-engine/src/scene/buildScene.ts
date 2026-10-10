@@ -5,6 +5,7 @@ import type { MathScope } from '../math/scope'
 import type { GraphConfig } from '../parser/config'
 import type { FunctionTable } from '../parser/evalExpr'
 import type { Expr, Statement } from '../parser/types'
+import { logOf, throughScales } from '../plot/frame/rewrite'
 import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
 import { buildPlotScope } from '../plot/scope'
 import { FULL } from '../plot/sample/tuning'
@@ -20,6 +21,8 @@ import { formatCoord } from './format'
 import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 
 const FIELD_DIVISIONS = 18
+// A config built by hand (a test, a tool) may not say its scales: both linear.
+const LINEAR_SCALES = { x: 'linear', y: 'linear' } as const
 // The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
 // works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
 // view is. The height then follows the bounds' aspect.
@@ -189,7 +192,17 @@ function sampleStatement(spec: CurveSpec, statementIndex: number, color: string 
 }
 
 function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
-  return sampleStatement({ kind: 'explicit', independent: statement.independent, body: statement.body, domain: domainOf(statement) }, statementIndex, statement.color, line, ctx)
+  const scales = ctx.config.scales ?? LINEAR_SCALES
+  if (scales.x === 'linear' && scales.y === 'linear') {
+    return sampleStatement({ kind: 'explicit', independent: statement.independent, body: statement.body, domain: domainOf(statement) }, statementIndex, statement.color, line, ctx)
+  }
+  // A log axis is a change of variable: the independent variable now means u (or v), the body reads the
+  // world value 10^u, and a log output axis takes the log of what it gives (calc P4 4.3).
+  const domain = domainOf(statement)
+  const outputScale = statement.independent === 'x' ? scales.y : scales.x
+  const through = throughScales(statement.body, scales)
+  const body = outputScale === 'log' ? logOf(through) : through
+  return sampleStatement({ kind: 'explicit', independent: statement.independent, body, domain: domain ? throughScales(domain, scales) : null }, statementIndex, statement.color, line, ctx)
 }
 
 // The parameter is theta in the statement's own angle unit (the variable the body is written in, not
@@ -197,6 +210,7 @@ function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIn
 // write is a full turn in that unit: 360 under @angle: degrees, 2 pi otherwise (the parser's default,
 // flagged `fullTurn`, is in radians).
 function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  if (ctx.config.scales?.x === 'log' || ctx.config.scales?.y === 'log') throw new Error('polar curves need linear axes; write the curve parametrically')
   const range = statement.fullTurn && ctx.config.angle === 'degrees' ? ([0, 360] as [number, number]) : rangeOf(statement.from, statement.to, ctx.scope, 'theta')
   if (range === null) return []
   return sampleStatement({ kind: 'polar', body: statement.body, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
@@ -205,7 +219,10 @@ function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: n
 function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
   const range = rangeOf(statement.from, statement.to, ctx.scope, statement.param)
   if (range === null) return []
-  return sampleStatement({ kind: 'parametric', param: statement.param, fx: statement.fx, fy: statement.fy, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
+  const { x, y } = ctx.config.scales ?? LINEAR_SCALES
+  const fx = x === 'log' ? logOf(statement.fx) : statement.fx
+  const fy = y === 'log' ? logOf(statement.fy) : statement.fy
+  return sampleStatement({ kind: 'parametric', param: statement.param, fx, fy, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
 }
 
 function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
