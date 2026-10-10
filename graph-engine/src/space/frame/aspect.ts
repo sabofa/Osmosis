@@ -42,5 +42,10 @@ export function boxHalfExtents(box: Box3, aspect: Aspect | null, scene: SpaceSce
     const r: Vec3 = [chosen.x, chosen.y, chosen.z]
     return r.every((s) => s > 0 && Number.isFinite(s)) ? normalise(r) : AUTO
   }
+  if (chosen.kind === 'ratioXY') {
+    // The directive parser cannot tell 2D from 3D, so 3D refuses a two-ratio
+    // aspect here rather than reading it as `auto`.
+    throw new Error('@aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"')
+  }
   return [flat.x ? FLAT_HALF_EXTENT : AUTO[0], flat.y ? FLAT_HALF_EXTENT : AUTO[1], flat.z ? FLAT_HALF_EXTENT : AUTO[2]]
 }

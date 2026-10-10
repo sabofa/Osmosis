@@ -13,6 +13,8 @@ export type FrameStyle = 'box' | 'axes' | 'none'
 // `null` means "apply the SP5 default rule" (equal when the spec has no
 // z = f surface and the data spans agree within a factor of 4, else auto).
 export type Aspect = { kind: 'equal' } | { kind: 'auto' } | { kind: 'ratio'; x: number; y: number; z: number }
+  // 2D only (calc P4): the screen proportions of a plot's x and y units. 3D refuses it (frame/aspect.ts).
+  | { kind: 'ratioXY'; x: number; y: number }
 
 // A fixed tick step. `pi` is set when the author wrote the step as a rational
 // multiple of pi (pi/2, 2pi, pi/6), so ticks label as multiples of pi — exact

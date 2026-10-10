@@ -44,6 +44,16 @@ describe('parseSpaceDirective: one valid and one invalid case per SP7 row', () =
     refuse('aspect', 'square', /equal/)
   })
 
+  it('@aspect: a:b is the 2D ratio; zero and negative are refused; the format message names both forms', () => {
+    expect(apply('aspect', '2:1').space.aspect).toEqual({ kind: 'ratioXY', x: 2, y: 1 })
+    expect(apply('aspect', '0.5 : 1').space.aspect).toEqual({ kind: 'ratioXY', x: 0.5, y: 1 })
+    refuse('aspect', '2:0', /@aspect ratios must be positive/)
+    refuse('aspect', '0:0', /@aspect ratios must be positive/)
+    refuse('aspect', '-2:1', /@aspect must be/)
+    refuse('aspect', '1:2:3:4', /two ratios "a:b" \(2D\) or three ratios "a:b:c" \(3D\), got "1:2:3:4"/)
+    refuse('aspect', 'square', /@aspect must be "equal", "auto", two ratios "a:b" \(2D\) or three ratios "a:b:c" \(3D\), got "square"/)
+  })
+
   it('@projection', () => {
     expect(apply('projection', 'orthographic').space.projection).toBe('orthographic')
     refuse('projection', 'fisheye', /orthographic/)

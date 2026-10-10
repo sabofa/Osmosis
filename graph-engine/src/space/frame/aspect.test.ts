@@ -61,6 +61,12 @@ describe('boxHalfExtents', () => {
     expect(boxHalfExtents(box(0.2, 2, 1), { kind: 'auto' }, EMPTY, { x: true })).toEqual([0.15, 1, 0.7])
   })
 
+  it('ratioXY is 2D only: 3D refuses it with an error, never as auto', () => {
+    expect(() => boxHalfExtents(box(4, 2, 1), { kind: 'ratioXY', x: 2, y: 1 }, EMPTY)).toThrow(
+      '@aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"',
+    )
+  })
+
   it('V1: flat has no effect on equal or an explicit ratio', () => {
     expect(boxHalfExtents(box(4, 2, 1), { kind: 'equal' }, EMPTY, { z: true })).toEqual([1, 0.5, 0.25])
     expect(boxHalfExtents(box(4, 2, 1), { kind: 'ratio', x: 1, y: 1, z: 0.5 }, EMPTY, { z: true })).toEqual([1, 1, 0.5])

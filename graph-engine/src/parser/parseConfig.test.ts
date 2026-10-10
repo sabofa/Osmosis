@@ -240,6 +240,7 @@ describe('space directives and @param (S1, K7)', () => {
     const config = parse('@bounds3d: x [-3, 3], z [0, 10]')
     expect(config.space.bounds).toEqual({ x: { min: -3, max: 3 }, y: null, z: { min: 0, max: 10 } })
     expect(parse('@aspect: 1:1:0.5').space.aspect).toEqual({ kind: 'ratio', x: 1, y: 1, z: 0.5 })
+    expect(parse('@aspect: 2:1').space.aspect).toEqual({ kind: 'ratioXY', x: 2, y: 1 })
     expect(parse('@projection: perspective').space.projection).toBe('perspective')
     expect(parse('@frame: axes').space.frame).toBe('axes')
     expect(parse('@colormap: magma').space.colormap).toBe('magma')
