@@ -7,16 +7,15 @@ import type { FigureHitItem, FigureTarget } from './figure/hitItems'
 import { splitFigureSvg, type LayerSpec } from './figure/layers'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
-import { applyOverscan, applySvgViewBox } from './view2d/dom/appliers'
+import { applySvgViewBox } from './view2d/dom/appliers'
 import { CoordinateTool } from './view2d/dom/CoordinateTool'
 import { toleranceInContent } from './view2d/dom/domInput'
 import { startCamera } from './view2d/dom/startView'
 import { useView2d } from './view2d/dom/useView2d'
 import { focusCamera, formatFocus, type FocusSpec } from './view2d/focus'
-import { OVERSCAN } from './view2d/feel'
-import { growRect, liveTransform, liveTransformValue, type LiveTransform } from './view2d/liveTransform'
+import { SvgTiles } from './view2d/dom/svgTiles'
 import { formatZoom } from './view2d/readout'
-import type { Camera, Rect, Size } from './view2d/types'
+import type { Camera, Rect } from './view2d/types'
 import './FigureView.css'
 
 // What a click on the figure reports: the item picked, and what it names.
@@ -95,38 +94,39 @@ function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | 
   return { root, entries }
 }
 
-// Perf A/B switches for hands-on testing, read from the page's query string
-// (e.g. :5181/?live=0): `live=0` redraws the figure on every frame instead of
-// moving it with a CSS transform and committing now and then; `wc=0` leaves out
-// the `will-change` hint on the moved layer; `overscan=<fraction>` replaces
-// OVERSCAN. Absent: the defaults. To be removed once the lag is settled.
-const queryFlag = (name: string): string | null => {
-  try {
-    return new URLSearchParams(globalThis.location?.search ?? '').get(name)
-  } catch {
-    return null
-  }
+// The figure is drawn in two parts. Everything that scales with the view (the
+// paper, the shading, the lines and marks) is painted into tiles and kept, and
+// a moving view only places them (view2d/dom/svgTiles.ts): a styled figure is
+// far too dear to repaint on every frame of a drag. What keeps its size on the
+// screen (points and labels, which are few and plain) stays a live <svg> over
+// the tiles, given the window on every frame, so it is always sharp.
+const TILED: LayerSpec = { name: 'tiled', groups: ['paper', 'regions', 'auxiliary', 'primary', 'marks'], commit: 'rest', overscan: 0 }
+const LIVE: LayerSpec = { name: 'live', groups: ['points', 'labels'], commit: 'motion', overscan: 0 }
+
+// The part of the drawing's plane worth painting: the content frame and four
+// times its size again on every side (paper reaches well past the frame; the
+// view can zoom out to a tenth).
+const tileExtent = (frame: Rect): Rect => {
+  const m = 4 * Math.max(frame.width, frame.height)
+  return { x: frame.x - m, y: frame.y - m, width: frame.width + 2 * m, height: frame.height + 2 * m }
 }
-const LIVE = queryFlag('live') !== '0'
-const WILL_CHANGE = queryFlag('wc') !== '0'
-const OVERSCAN_OVERRIDE = queryFlag('overscan') !== null && Number.isFinite(Number(queryFlag('overscan'))) ? Number(queryFlag('overscan')) : null
 
 const NONE: readonly string[] = []
 
 export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const tilesHostRef = useRef<HTMLDivElement | null>(null)
 
-  // The renderer's one svg, split into stacked layers (figure/layers.ts): each
-  // is its own <svg>, moved, and redrawn, on its own terms.
-  const parts = useMemo(() => splitFigureSvg(svg), [svg])
+  const parts = useMemo(() => splitFigureSvg(svg, [TILED, LIVE]), [svg])
+  const tiledSvg = parts.find((part) => part.name === 'tiled')?.svg ?? null
 
   // Stable across renders, and that identity is load-bearing rather than a
   // micro-optimisation: React compares the dangerouslySetInnerHTML *object*,
   // not the string inside it, so a fresh literal re-writes the container's
-  // innerHTML on every render. That replaces the <svg> elements — throwing
-  // away the compensated label sizes and detaching every node this component
-  // is holding — on every single frame of a pan.
-  const markup = useMemo(() => ({ __html: parts.map((part) => part.svg).join('') }), [parts])
+  // innerHTML on every render. That replaces the <svg> element — throwing away
+  // the compensated label sizes and detaching every node this component is
+  // holding — on every single frame of a pan.
+  const markup = useMemo(() => ({ __html: parts.find((part) => part.name === 'live')?.svg ?? '' }), [parts])
 
   // The content frame: the view the renderer fitted, in drawing coordinates.
   // Everything else is relative to it: the zoom, the limits, and what "reset"
@@ -147,92 +147,54 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // there whenever the `coordinates` prop is on).
   const [toolOpen, setToolOpen] = useState(false)
 
-  // Apply the camera: the window itself, and the compensation that keeps text
-  // and dots the size they were drawn at. The last one applied is remembered
-  // so that a new set of <svg>s with the same view (a rebuilt spec) can be put
-  // back where the reader was.
+  // The last window applied, so a new drawing (a rebuilt spec) is put back
+  // where the reader was.
   const applied = useRef<{ zoom: number; visible: Rect; pxPerUnit: number } | null>(null)
-  // How far the live view is scaled from the drawing layer's last redraw (1 at
-  // a redraw), for what is measured against the live camera, not the drawing.
-  const liveScale = useRef(1)
   // The elements the look is on now, so a change touches only those.
   const lit = useRef<Element[]>([])
-  // Per layer svg: the window it was last drawn for (the screen's own aspect,
-  // without its overscan) and the label sizes written into it.
-  const layerState = useRef(new Map<SVGSVGElement, { committed: Rect | null; compensation: Compensation | null }>())
+  const compensation = useRef<Compensation | null>(null)
+  const tiles = useRef<SvgTiles | null>(null)
 
-  // The layer svgs, bottom first, each with the policy of its layer.
-  const layerRoots = useCallback((): { root: SVGSVGElement; spec: LayerSpec; top: boolean }[] => {
-    const roots = [...(containerRef.current?.querySelectorAll<SVGSVGElement>('svg[data-figure-layer]') ?? [])]
-    return roots.flatMap((root, i) => {
-      const spec = parts.find((part) => part.name === root.getAttribute('data-figure-layer'))?.spec
-      return spec ? [{ root, spec, top: i === roots.length - 1 }] : []
-    })
-  }, [parts])
+  const liveRoot = useCallback((): SVGSVGElement | null => containerRef.current?.querySelector<SVGSVGElement>('svg[data-figure-layer]') ?? null, [])
 
-  const stateOf = (root: SVGSVGElement) => {
-    let state = layerState.current.get(root)
-    if (!state) layerState.current.set(root, (state = { committed: null, compensation: null }))
-    return state
-  }
-
-  // A redraw of one layer: its svg is (re)drawn over `visible` and its
-  // overscan, clearing its live transform; its label sizes follow.
-  const commitLayer = (root: SVGSVGElement, spec: LayerSpec, visible: Rect, zoom: number, top: boolean) => {
-    const state = stateOf(root)
-    const overscan = LIVE ? (OVERSCAN_OVERRIDE ?? spec.overscan) : 0
-    applyOverscan(root, overscan)
-    applySvgViewBox(root, growRect(visible, overscan))
-    root.style.transform = ''
-    root.style.willChange = ''
-    state.committed = visible
-    state.compensation = compensate(root, zoom, state.compensation)
-    if (top) liveScale.current = 1
-  }
-
-  // Between redraws: the layer's drawing is moved on the compositor, from where
-  // it was last drawn to where the view is now.
-  const moveLayer = (root: SVGSVGElement, live: Rect, screen: Size, top: boolean) => {
-    const state = stateOf(root)
-    if (!state.committed) return
-    const transform = liveTransform(state.committed, live, screen)
-    root.style.willChange = WILL_CHANGE ? 'transform' : ''
-    root.style.transform = liveTransformValue(transform)
-    if (top) liveScale.current = transform.scale
-  }
-
-  // A commit of the view. A layer that is dear to redraw (its policy is 'rest')
-  // is redrawn only once the view has come to rest, and moved in between.
+  // Draw the window: the tiles placed, the live svg shown through it.
   const paint = useCallback(
-    (visible: Rect, zoom: number, settled = true) => {
+    (visible: Rect, zoom: number) => {
       const box = containerRef.current
-      const screen = box ? { width: box.clientWidth, height: box.clientHeight } : null
-      for (const { root, spec, top } of layerRoots()) {
-        if (spec.commit === 'motion' || settled || !stateOf(root).committed || !screen) commitLayer(root, spec, visible, zoom, top)
-        else moveLayer(root, visible, screen, top)
+      const root = liveRoot()
+      if (root) {
+        applySvgViewBox(root, visible)
+        compensation.current = compensate(root, zoom, compensation.current)
       }
+      if (box) tiles.current?.setView(visible, { width: box.clientWidth, height: box.clientHeight })
     },
-    [layerRoots],
+    [liveRoot],
   )
 
-  // Between commits of the view: every layer is moved from where it was last drawn.
-  const paintLive = useCallback(
-    (_transform: LiveTransform, live: Rect, screen: Size) => {
-      for (const { root, top } of layerRoots()) moveLayer(root, live, screen, top)
-    },
-    [layerRoots],
-  )
+  // The tiles of this drawing: made for each new drawing, and given the view
+  // at once.
+  useLayoutEffect(() => {
+    const host = tilesHostRef.current
+    if (!host || !tiledSvg || !content) return
+    const layer = new SvgTiles(tiledSvg, content, tileExtent(content))
+    host.appendChild(layer.canvas)
+    tiles.current = layer
+    const last = applied.current
+    if (last) paint(last.visible, last.zoom)
+    return () => {
+      layer.dispose()
+      if (tiles.current === layer) tiles.current = null
+    }
+  }, [tiledSvg, content, paint])
 
   const view = useView2d({
     frame: content,
     start,
     items,
-    onApply: (camera, visible, pxPerUnit, settled) => {
+    onApply: (camera, visible, pxPerUnit) => {
       applied.current = { zoom: camera.zoom, visible, pxPerUnit }
-      paint(visible, camera.zoom, settled)
+      paint(visible, camera.zoom)
     },
-    onLive: LIVE ? paintLive : undefined,
-    overscan: LIVE ? (OVERSCAN_OVERRIDE ?? OVERSCAN) : 0,
     onHover: setHovered,
     onSelect: (ids) => {
       setSelected(ids)
@@ -245,6 +207,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     trackCamera: coordinates === true && toolOpen,
   })
 
+  // A new live svg (a new drawing): shown through the window the reader is at.
   useLayoutEffect(() => {
     const last = applied.current
     if (last) paint(last.visible, last.zoom)
@@ -261,9 +224,9 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // Outermost only: a styled figure puts the identity on a group and on every
   // path inside it. Every selected item shows the selection look.
   useLayoutEffect(() => {
-    const roots = layerRoots().map((layer) => layer.root)
-    const top = roots[roots.length - 1]
+    const top = liveRoot()
     if (!top) return
+    const roots = [top]
     roots.forEach((root) => root.querySelectorAll('[data-figure-highlight]').forEach((overlay) => overlay.remove()))
     const clear = (element: Element) => element.classList.remove('figure-hovered', 'figure-selected')
     if (hovered === null && selected.length === 0) {
@@ -305,7 +268,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       element.classList.toggle('figure-selected', look.selected)
     }
     lit.current = [...looks.keys()]
-  }, [hovered, selected, items, itemsById, markup, layerRoots])
+  }, [hovered, selected, items, itemsById, markup, liveRoot])
 
   // The runtime focus: a change of the spec moves the view there, animated.
   // Compared by value, so a parent that rebuilds an identical spec each render
@@ -344,7 +307,7 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
     const lines = { cursor: '', centre: '', zoom: '', copyText: '' }
     if (open && camera) {
       const all = items ?? []
-      const tolerance = toleranceInContent('mouse', (applied.current?.pxPerUnit ?? 1) * liveScale.current)
+      const tolerance = toleranceInContent('mouse', applied.current?.pxPerUnit ?? 1)
       lines.cursor = cursorText(frame, view.pointer, itemForId(all, hovered))
       lines.centre = centreText(frame, camera, all, tolerance)
       lines.zoom = formatZoom(camera.zoom)
@@ -358,7 +321,10 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // svgEscape) — spec text never reaches the DOM unescaped.
   return (
     <div className={`figure-view figure-view-${theme}`}>
-      <div ref={setSurface} className="figure-view-surface" dangerouslySetInnerHTML={markup} />
+      <div ref={setSurface} className="figure-view-surface">
+        <div ref={tilesHostRef} className="figure-view-tiles" />
+        <div className="figure-view-live" dangerouslySetInnerHTML={markup} />
+      </div>
       {!view.atStart && (
         <button type="button" className="figure-view-reset" onClick={() => view.reset()}>
           Reset view

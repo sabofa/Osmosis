@@ -10,9 +10,8 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
-  /* The drawing is laid out larger than the screen (view2d's overscan), so
-     there is something to reveal while it moves. `clip`, where there is one,
-     also forbids scrolling it by script (focus, find-in-page). */
+  /* `clip`, where there is one, also forbids scrolling it by script (focus,
+     find-in-page). */
   overflow: clip;
   background: var(--surface, #fdf6ea);
 }
@@ -38,14 +37,26 @@
   cursor: grabbing;
 }
 
-/* "meet" on the svg's own preserveAspectRatio does the fitting; this just
-   stops the element from overflowing the box it was given. */
-.figure-view > .figure-view-surface > svg {
-  max-width: 100%;
-  max-height: 100%;
+/* The two parts of the figure, stacked: the painted tiles (a canvas, see
+   view2d/dom/svgTiles.ts) and, over them, the live svg of points and labels.
+   Both fill the surface; the live svg's "meet" on its own window does the
+   fitting. */
+.figure-view-tiles,
+.figure-view-live {
+  position: absolute;
+  inset: 0;
+}
+
+.figure-view-tiles > canvas {
+  display: block;
   width: 100%;
   height: 100%;
+}
+
+.figure-view-live > svg {
   display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* Stroke widths are written in view units, so they would thicken with the
