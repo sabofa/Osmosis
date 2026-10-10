@@ -3,7 +3,7 @@ import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-
 import type { DocumentTokens } from 'theme-core'
 import DocumentViewer from '../DocumentViewer'
 import type { ZoomMode } from '../zoomModel'
-import type { DocumentHighlight, DocumentLayer, RenderGraph } from '../types'
+import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
 
 // Dev-only harness: the viewer over a gaudy blurred scene, inside a "sheet"
 // whose opacity comes from the URL (?opacity=55&mode=dark&case=normal).
@@ -73,6 +73,29 @@ function tokensFor(mode: 'light' | 'dark'): DocumentTokens {
   return toDocumentTokens(resolve(m), m, mode)
 }
 
+// ?alphas=surface,callout,media (each 0..1) overrides tokens.alphas.
+function withAlphas(t: DocumentTokens, param: string | null): DocumentTokens {
+  if (!param) return t
+  const [surface, callout, media] = param.split(',').map(Number)
+  const ok = (n: number | undefined, d: number) => (n === undefined || Number.isNaN(n) ? d : Math.min(1, Math.max(0, n)))
+  return { ...t, alphas: { ...t.alphas, surface: ok(surface, t.alphas.surface), callout: ok(callout, t.alphas.callout), media: ok(media, t.alphas.media) } }
+}
+
+type Published = { cmds: { id: string; enabled: boolean; active: boolean }[]; layers: string[] }
+
+// ?host=1: stub DocumentHost that records what the viewer publishes.
+function makeHost(onChange: (p: Published) => void): DocumentHost {
+  const state: Published = { cmds: [], layers: [] }
+  return {
+    icons: { kind: 'default' },
+    toolbar: {
+      publishCommands: (cmds) => { state.cmds = cmds.map((c) => ({ id: c.id, enabled: c.enabled, active: c.active })); onChange({ ...state }) },
+      clear: () => { state.cmds = []; onChange({ ...state }) },
+    },
+    layers: (list) => { state.layers = list.map((l) => l.id); onChange({ ...state }) },
+  }
+}
+
 const SCENE = `
   repeating-linear-gradient(45deg, #ff2d95 0 40px, #ffe600 40px 80px, #00e5ff 80px 120px, #7cff3a 120px 160px)`
 
@@ -81,7 +104,10 @@ export default function ReviewPage(): ReactNode {
   const opacity = Math.min(100, Math.max(0, Number(q.get('opacity') ?? 100))) / 100
   const mode = q.get('mode') === 'dark' ? 'dark' : 'light'
   const kase = q.get('case') ?? 'normal'
-  const tokens = useMemo(() => tokensFor(mode), [mode])
+  const alphasParam = q.get('alphas')
+  const tokens = useMemo(() => withAlphas(tokensFor(mode), alphasParam), [mode, alphasParam])
+  const [published, setPublished] = useState<Published | null>(null)
+  const host = useMemo(() => (q.get('host') === '1' ? makeHost(setPublished) : undefined), [q])
   const hlQuote = q.get('hl')
   const [hl, setHl] = useState<DocumentHighlight[]>(hlQuote ? [{ id: 'pq', color: 'yellow', start: 0, end: [...hlQuote].length, quote: hlQuote }] : HIGHLIGHTS)
   // ?case=pdf&pdf=/review-shots/sample.pdf&zoom=fit-page|0.25|5&steps=in,in,out&bench=1
@@ -218,7 +244,15 @@ export default function ReviewPage(): ReactNode {
           overflow: 'hidden',
         }}
       >
+        {host && (
+          <pre data-testid="host-strip" style={{ margin: 0, padding: '6px 10px', fontSize: 12, fontFamily: 'monospace', whiteSpace: 'pre-wrap', borderBottom: '1px solid currentColor' }}>
+            {published
+              ? 'commands: ' + (published.cmds.map((c) => c.id + (c.enabled ? '' : ' [disabled]') + (c.active ? ' [active]' : '')).join(', ') || '(none)') + '\nlayers: ' + (published.layers.join(', ') || '(none)')
+              : 'host: nothing published'}
+          </pre>
+        )}
         <DocumentViewer
+          host={host}
           asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: MD, extractedText: MD }}
           initialZoom={initialZoom}
           tokens={tokens}
