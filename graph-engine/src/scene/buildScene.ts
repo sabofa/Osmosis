@@ -6,6 +6,7 @@ import type { GraphConfig } from '../parser/config'
 import type { FunctionTable } from '../parser/evalExpr'
 import type { Expr, Statement } from '../parser/types'
 import { logOf, throughScales } from '../plot/frame/rewrite'
+import { scaleOf } from '../plot/frame/scale'
 import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
 import { buildPlotScope } from '../plot/scope'
 import { FULL } from '../plot/sample/tuning'
@@ -23,6 +24,36 @@ import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 const FIELD_DIVISIONS = 18
 // A config built by hand (a test, a tool) may not say its scales: both linear.
 const LINEAR_SCALES = { x: 'linear', y: 'linear' } as const
+
+// Where a world point lands on the plane being viewed: itself when both axes are linear, else (log10 x, log10 y)
+// per log axis (NaN for a value <= 0 there). `place` is the same but says why it cannot, so a statement is skipped
+// with a note on its line rather than emitting NaN.
+// Documented limit: a straight world segment is not straight on a log plane. Segments, rays, vectors, polygon
+// edges and a scatter's regression line are drawn straight between their mapped endpoints.
+interface Plane {
+  log: boolean
+  scales: { x: 'linear' | 'log'; y: 'linear' | 'log' }
+  toPlane(p: Vec2): Vec2
+  place(p: Vec2): Vec2
+  forwardX(x: number): number
+  forwardY(y: number): number
+}
+
+function planeOf(config: GraphConfig): Plane {
+  const scales = config.scales ?? LINEAR_SCALES
+  const sx = scaleOf(scales.x)
+  const sy = scaleOf(scales.y)
+  const log = scales.x === 'log' || scales.y === 'log'
+  const toPlane = (p: Vec2): Vec2 => (log ? { x: sx.forward(p.x), y: sy.forward(p.y) } : p)
+  const place = (p: Vec2): Vec2 => {
+    if (!log) return p
+    const q = toPlane(p)
+    if (Number.isNaN(q.x)) throw new Error("a point at x ≤ 0 can't be drawn on a log axis")
+    if (Number.isNaN(q.y)) throw new Error("a point at y ≤ 0 can't be drawn on a log axis")
+    return q
+  }
+  return { log, scales: { x: scales.x, y: scales.y }, toPlane, place, forwardX: sx.forward, forwardY: sy.forward }
+}
 // The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
 // works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
 // view is. The height then follows the bounds' aspect.
@@ -409,10 +440,10 @@ function buildCircle(statement: Statement & { kind: 'circle' }, statementIndex: 
 // solved "triangle ABC:" statement has to draw as exactly the same picture —
 // a hand-typed polygon and a solved triangle should not be two shapes that
 // merely resemble each other.
-function buildPolygon(statement: Statement & { kind: 'polygon' }, scope: MathScope): SceneObject[] {
+function buildPolygon(statement: Statement & { kind: 'polygon' }, scope: MathScope, plane: Plane): SceneObject[] {
   const vertices = statement.vertices.map((v) => ({
     label: v.label,
-    position: { x: constant(v.x, scope), y: constant(v.y, scope) },
+    position: plane.place({ x: constant(v.x, scope), y: constant(v.y, scope) }),
   }))
   return polygonObjects(vertices, statement.color)
 }
@@ -437,21 +468,38 @@ function linearRegression(points: Vec2[]) {
   return { slope, intercept, r }
 }
 
-function buildScatter(statement: Statement & { kind: 'scatter' }, statementIndex: number, bounds: Bounds, scope: MathScope): { objects: SceneObject[]; regression: Scene['regression'] } {
+function buildScatter(
+  statement: Statement & { kind: 'scatter' },
+  statementIndex: number,
+  bounds: Bounds,
+  scope: MathScope,
+  plane: Plane,
+  note: (message: string) => void
+): { objects: SceneObject[]; regression: Scene['regression'] } {
   const points: Vec2[] = statement.points.map(([xExpr, yExpr]) => ({
     x: constant(xExpr, scope),
     y: constant(yExpr, scope),
   }))
-  const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: p, color: statement.color }))
+  // the fit is done on the world data; only what is drawn goes through the scales
+  const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: plane.place(p), color: statement.color }))
   if (points.length < 2) return { objects, regression: null }
 
   // The fitted line across the visible domain, as a tangent is: one two-vertex
   // chain from the left edge of the view to the right (the parameter is x).
+  // On a log plane the view is (u, v), so its edges are world 10^u; the line is computed in world
+  // coordinates and drawn straight between its mapped endpoints.
   const regression = linearRegression(points)
-  const line: Vec2[] = [
-    { x: bounds.xMin, y: regression.slope * bounds.xMin + regression.intercept },
-    { x: bounds.xMax, y: regression.slope * bounds.xMax + regression.intercept },
+  const x0 = plane.log ? scaleOf(plane.scales.x).inverse(bounds.xMin) : bounds.xMin
+  const x1 = plane.log ? scaleOf(plane.scales.x).inverse(bounds.xMax) : bounds.xMax
+  const world: Vec2[] = [
+    { x: x0, y: regression.slope * x0 + regression.intercept },
+    { x: x1, y: regression.slope * x1 + regression.intercept },
   ]
+  const line = world.map(plane.toPlane)
+  if (plane.log && line.some((p) => Number.isNaN(p.x) || Number.isNaN(p.y))) {
+    note("the fitted line leaves the positive range of a log axis; it is not drawn")
+    return { objects, regression }
+  }
   objects.push({
     kind: 'curve',
     id: { statement: statementIndex, object: 'regression' },
@@ -517,6 +565,7 @@ export function buildScene(
   const scope = plotScope.scope
   errors.push(...plotScope.errors)
   const namedPoints = collectNamedPoints(statements, scope)
+  const plane = planeOf(config)
   const curves: CurveContext = { view: viewOf(bounds, options), scope, config, quality: options?.quality ?? 'full', budget: options?.budget, stats, errors }
 
   // Geometry constructions resolve in one pass up front, in source order (see
@@ -567,7 +616,7 @@ export function buildScene(
       } else if (statement.kind === 'tangent') {
         objects.push(...buildTangent(statement, statementIndex, bounds, scope))
       } else if (statement.kind === 'scatter') {
-        const built = buildScatter(statement, statementIndex, bounds, scope)
+        const built = buildScatter(statement, statementIndex, bounds, scope, plane, (message) => errors.push({ line: lineOf(statementIndex), message }))
         objects.push(...built.objects)
         if (built.regression) regression = built.regression
       } else if (statement.kind === 'animatedPoint') {
@@ -576,10 +625,13 @@ export function buildScene(
         // frame, and the whole language (n!, |t|, sums, piecewise, f', multi-
         // parameter functions, @params) works in the path. The renderer calls
         // the closures per frame.
+        const fx = compileScalar(statement.fx, [statement.param], scope)
+        const fy = compileScalar(statement.fy, [statement.param], scope)
         objects.push({
           kind: 'animatedPoint',
-          fx: compileScalar(statement.fx, [statement.param], scope),
-          fy: compileScalar(statement.fy, [statement.param], scope),
+          // on a log axis the position is mapped per frame (NaN where the world value is <= 0)
+          fx: plane.scales.x === 'log' ? (t: number) => plane.forwardX(fx(t)) : fx,
+          fy: plane.scales.y === 'log' ? (t: number) => plane.forwardY(fy(t)) : fy,
           param: statement.param,
           from: constant(statement.from, scope),
           to: constant(statement.to, scope),
@@ -589,7 +641,7 @@ export function buildScene(
         objects.push({
           kind: 'point',
           label: statement.label,
-          position: { x: constant(statement.x, scope), y: constant(statement.y, scope) },
+          position: plane.place({ x: constant(statement.x, scope), y: constant(statement.y, scope) }),
           color: statement.color,
           // The author typed these coordinates; nothing about them was
           // sampled or converged to, so this is the most literal position
@@ -599,26 +651,27 @@ export function buildScene(
       } else if (statement.kind === 'segment') {
         objects.push({
           kind: 'segment',
-          from: { x: constant(statement.x1, scope), y: constant(statement.y1, scope) },
-          to: { x: constant(statement.x2, scope), y: constant(statement.y2, scope) },
+          from: plane.place({ x: constant(statement.x1, scope), y: constant(statement.y1, scope) }),
+          to: plane.place({ x: constant(statement.x2, scope), y: constant(statement.y2, scope) }),
           color: statement.color,
         })
       } else if (statement.kind === 'ray') {
         objects.push({
           kind: 'ray',
-          from: { x: constant(statement.x1, scope), y: constant(statement.y1, scope) },
-          to: { x: constant(statement.x2, scope), y: constant(statement.y2, scope) },
+          from: plane.place({ x: constant(statement.x1, scope), y: constant(statement.y1, scope) }),
+          to: plane.place({ x: constant(statement.x2, scope), y: constant(statement.y2, scope) }),
           color: statement.color,
         })
       } else if (statement.kind === 'vector') {
         const from = { x: constant(statement.x1, scope), y: constant(statement.y1, scope) }
         const to = { x: constant(statement.x2, scope), y: constant(statement.y2, scope) }
+        // |v| is the world vector's length, whatever the axes
         const magnitude = Math.hypot(to.x - from.x, to.y - from.y)
-        objects.push({ kind: 'ray', from, to, label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
+        objects.push({ kind: 'ray', from: plane.place(from), to: plane.place(to), label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
       } else if (statement.kind === 'circle') {
         objects.push(...buildCircle(statement, statementIndex, scope))
       } else if (statement.kind === 'polygon') {
-        objects.push(...buildPolygon(statement, scope))
+        objects.push(...buildPolygon(statement, scope, plane))
       } else if (statement.kind === 'construction' || statement.kind === 'triangle') {
         // Already solved in the construction pass above; emitted here so the
         // draw order follows the spec text and "@hide" still applies. A
@@ -637,8 +690,8 @@ export function buildScene(
       } else if (statement.kind === 'namedSegment') {
         objects.push({
           kind: 'segment',
-          from: resolvePoint(statement.from),
-          to: resolvePoint(statement.to),
+          from: plane.place(resolvePoint(statement.from)),
+          to: plane.place(resolvePoint(statement.to)),
           dashed: statement.style === 'dashed',
           color: statement.color,
         })
@@ -672,5 +725,5 @@ export function buildScene(
 
   objects.push(...buildFeaturePoints(statements, bounds, config, scope))
 
-  return { objects, errors, regression, stats }
+  return plane.log ? { objects, errors, regression, stats, scales: plane.scales } : { objects, errors, regression, stats }
 }

@@ -178,4 +178,7 @@ export interface Scene {
   // classifying and sampling), for a status line or a test; absent when the scene
   // did not come from buildScene.
   stats?: { points: number; intervals: number }
+  // Set only when an axis is log: the objects then live in transformed coordinates (u = log10 x, v = log10 y)
+  // on that axis, and a reader (hover, labels) inverts through these. Absent for linear/linear scenes.
+  scales?: { x: 'linear' | 'log'; y: 'linear' | 'log' }
 }

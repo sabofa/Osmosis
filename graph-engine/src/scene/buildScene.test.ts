@@ -1939,3 +1939,54 @@ describe('log axes: implicit curves and regions (P4 4.4)', () => {
     expect(a).toEqual(b)
   })
 })
+
+describe('log axes: the remaining objects (P4 4.5a)', () => {
+  const B = { xMin: -1, xMax: 3, yMin: -1, yMax: 3 }
+  const sceneIn = (spec: string) => {
+    const parsed = parseSpec(spec)
+    return buildScene(parsed.statements, B, parsed.config, 140, parsed.statementLines)
+  }
+  const LOG = '@xscale: log\n@yscale: log\n'
+
+  it('a point (100, 10) on log-log lands at (2, 1) and stays exact', () => {
+    const scene = sceneIn(`${LOG}(100, 10)`)
+    expect(scene.errors).toEqual([])
+    const point = scene.objects.find((o) => o.kind === 'point')
+    expect(point).toMatchObject({ position: { x: 2, y: 1 }, exact: true })
+  })
+
+  it('a point at x <= 0 on a log x axis is not drawn and says so on its line', () => {
+    const scene = sceneIn('@xscale: log\n(0, 5)')
+    expect(scene.objects.filter((o) => o.kind === 'point')).toEqual([])
+    expect(scene.errors).toHaveLength(1)
+    expect(scene.errors[0].message).toBe("a point at x ≤ 0 can't be drawn on a log axis")
+    const y = sceneIn('@yscale: log\n(5, -1)')
+    expect(y.errors[0].message).toBe("a point at y ≤ 0 can't be drawn on a log axis")
+  })
+
+  it('a segment (1,1)-(100,10) has endpoints (0,0) and (2,1)', () => {
+    const scene = sceneIn(`${LOG}(1, 1) -- (100, 10)`)
+    expect(scene.errors).toEqual([])
+    expect(scene.objects.find((o) => o.kind === 'segment')).toMatchObject({ from: { x: 0, y: 0 }, to: { x: 2, y: 1 } })
+  })
+
+  it('Scene.scales is present only when an axis is log', () => {
+    expect(sceneIn(`${LOG}(100, 10)`).scales).toEqual({ x: 'log', y: 'log' })
+    expect(sceneIn('@yscale: log\n(1, 10)').scales).toEqual({ x: 'linear', y: 'log' })
+    expect('scales' in sceneIn('(100, 10)')).toBe(false)
+  })
+
+  it('a vector keeps its world length in the label; a scatter fits in world coordinates and maps the line', () => {
+    const v = sceneIn(`${LOG}vector: (1, 1) -> (10, 1)`)
+    expect(v.objects.find((o) => o.kind === 'ray')).toMatchObject({ from: { x: 0, y: 0 }, to: { x: 1, y: 0 }, label: '|v| = 9' })
+    const s = sceneIn(`${LOG}scatter: (1,2), (10,20), (100,200)`)
+    expect(s.errors).toEqual([])
+    expect(s.regression?.slope).toBeCloseTo(2, 6)
+    const pts = s.objects.filter((o) => o.kind === 'point').map((o) => (o.kind === 'point' ? o.position : null))
+    expect(pts[1]).toMatchObject({ x: 1, y: expect.closeTo(Math.log10(20), 9) })
+  })
+
+  it('a point on linear axes is unchanged', () => {
+    expect(sceneIn('(100, 10)').objects[0]).toMatchObject({ position: { x: 100, y: 10 } })
+  })
+})
