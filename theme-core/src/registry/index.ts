@@ -1,4 +1,5 @@
 import type { TokenDef } from './types.js'
+import { ALPHA_TOKENS } from './alpha.js'
 import { COLOUR_TOKENS } from './colour.js'
 import { COMPONENT_TOKENS } from './component.js'
 import { DOC_TOKENS, GRAPH_TOKENS } from './engines.js'
@@ -20,6 +21,7 @@ export const TOKENS: readonly TokenDef[] = [
   ...SURFACE_TOKENS,
   ...GRAPH_TOKENS,
   ...DOC_TOKENS,
+  ...ALPHA_TOKENS,
   ...COMPONENT_TOKENS,
 ]
 

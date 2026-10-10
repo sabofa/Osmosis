@@ -1,3 +1,4 @@
+import { LAYER_TOKENS } from '../layerTokens.js'
 import { def, hex, mixTo, type DeriveCtx, type TokenDef, type TokenType } from './types.js'
 
 /**
@@ -11,7 +12,9 @@ export const FEATURE_KINDS = [
 
 type Row = [string, string, (c: DeriveCtx) => string]
 
-const alias = (to: string) => (c: DeriveCtx): string => c.get(to)
+const layerFloor = (token: string): number => LAYER_TOKENS.find((t) => t.token === token)!.floor
+
+const alias =(to: string) => (c: DeriveCtx): string => c.get(to)
 
 function build(g: 'graph' | 'document', type: TokenType, modeDependent: boolean, rows: Row[]): TokenDef[] {
   return rows.map(([name, meaning, derive]) => def(name, g, type, meaning, derive, { modeDependent }))
@@ -35,7 +38,7 @@ export const GRAPH_TOKENS: TokenDef[] = [
   ]),
   ...build('graph', 'number', false, [
     ['graph-region-alpha', 'Opacity of shaded regions (inequalities, areas under curves).', () => '0.18'],
-  ]),
+  ]).map((t) => ({ ...t, min: layerFloor('graph-region-alpha'), max: 1 })),
 ]
 
 export const DOC_TOKENS: TokenDef[] = [

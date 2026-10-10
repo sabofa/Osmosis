@@ -4,7 +4,7 @@ import { tokenByName } from './registry/index.js'
 
 export type Owner = 'workspace' | 'ambience' | 'shared'
 
-const SHARED_TOKENS: ReadonlySet<string> = new Set(['font-math', 'doc-font-body', 'doc-measure'])
+const SHARED_TOKENS: ReadonlySet<string> = new Set(['font-math', 'doc-font-body', 'doc-measure', 'doc-sheet-alpha'])
 const WORKSPACE_GROUPS: ReadonlySet<string> = new Set(['type', 'shape', 'space', 'elevation', 'motion', 'component'])
 const AMBIENCE_GROUPS: ReadonlySet<string> = new Set(['colour', 'surface', 'graph', 'document'])
 
