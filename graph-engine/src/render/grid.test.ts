@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { labelBoxesPx } from './labelLayout'
 import { gridPlan, niceStep, resolveStep, shouldLabel } from './grid'
 import { defaultConfig } from '../parser/config'
 
@@ -258,4 +259,31 @@ describe('gridPlan step agreement and hand-built configs', () => {
     const plan = gridPlan(bounds, defaultConfig(), size, m, m)
     expect(plan.titles).toEqual([])
   })
+})
+
+describe('gridPlan labels at a deep-zoom window', () => {
+  const lo = 999.99999999
+  const hi = 1000.00000001
+  const bounds = { xMin: lo, xMax: hi, yMin: lo, yMax: hi }
+  const size = { widthPx: 900, heightPx: 600 }
+  const plan = gridPlan(bounds, defaultConfig(), size, { x: 4e-10, y: 2e-10 }, { x: 1e-9, y: 1e-9 })
+  const parse = (s: string) => Number(s.replace('−', '-').replace(/×10(.*)$/, (_, e: string) => 'e' + e.replace(/[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (c) => '-0123456789'['⁻⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(c)])))
+
+  for (const axis of ['labelsX', 'labelsY'] as const) {
+    it(`${axis}: distinct, complete, non-overlapping`, () => {
+      const ls = plan[axis]
+      expect(ls.length).toBeGreaterThan(2)
+      expect(new Set(ls.map((l) => l.label)).size).toBe(ls.length)
+      for (const l of ls) expect(Math.abs(parse(l.label) - l.value)).toBeLessThan(1e-10) // step is 1e-9
+      const boxes = labelBoxesPx(ls, bounds, size.widthPx, size.heightPx)
+      const key = axis === 'labelsX' ? 'x' : 'y'
+      const sorted = [...boxes].sort((a, b) => a[key] - b[key])
+      for (let i = 1; i < sorted.length; i++) {
+        const a = sorted[i - 1]
+        const b = sorted[i]
+        const clear = axis === 'labelsX' ? a.x + a.w <= b.x : a.y + a.h <= b.y
+        expect(clear).toBe(true)
+      }
+    })
+  }
 })

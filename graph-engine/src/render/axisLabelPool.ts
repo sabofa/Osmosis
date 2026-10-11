@@ -3,6 +3,8 @@ import * as THREE from 'three'
 const CANVAS_W = 96
 const CANVAS_H = 32
 const FONT_SIZE_PX = 24
+// Longest tick label drawn in full; anything past this is clipped rather than growing the texture without bound.
+export const MAX_LABEL_CHARS = 24
 
 interface LabelEntry {
   sprite: THREE.Sprite
@@ -55,9 +57,13 @@ export class AxisLabelPool {
   private redraw(entry: LabelEntry, text: string) {
     const { ctx, canvas } = entry
     const font = `${FONT_SIZE_PX}px ui-monospace, SFMono-Regular, Menlo, monospace`
-    if (this.fit) {
-      ctx.font = font
-      canvas.width = Math.max(CANVAS_H, Math.ceil(ctx.measureText(text).width) + 4) // resets the context state
+    // Canvases are sized from the measured text, so no label is clipped by a fixed width. Tick labels never go
+    // narrower than CANVAS_W (their sprite scale is defined against it) nor wider than MAX_LABEL_CHARS of text.
+    ctx.font = font
+    const measured = Math.ceil(ctx.measureText(this.fit ? text : text.slice(0, MAX_LABEL_CHARS)).width) + 4
+    const wantW = this.fit ? Math.max(CANVAS_H, measured) : Math.max(CANVAS_W, measured)
+    if (this.fit || wantW !== canvas.width) {
+      canvas.width = wantW // resets the context state
       const material = entry.sprite.material as THREE.SpriteMaterial
       entry.texture.dispose()
       entry.texture = new THREE.CanvasTexture(canvas)
@@ -106,7 +112,8 @@ export class AxisLabelPool {
     const entry = this.entries[index] ?? this.createEntry()
     if (entry.text !== text) this.redraw(entry, text)
     entry.sprite.position.set(x, y, 0.01)
-    entry.sprite.scale.set(scaleX, scaleY, 1)
+    // scaleX is the world width of a default-width (CANVAS_W) label; a wider canvas scales up with it, so glyphs keep their size.
+    entry.sprite.scale.set((scaleX * entry.canvas.width) / CANVAS_W, scaleY, 1)
     entry.sprite.visible = true
   }
 

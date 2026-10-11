@@ -187,6 +187,42 @@ function axisLines(
   return linearLines(min, max, step, ticks)
 }
 
+const LABEL_GAP_PX = 6
+
+// Of the ladder 1, 2, 5, 10, 20, 50, ... the smallest k for which the labels at every k-th tick (counted in whole
+// steps from zero when the step is known, so the survivors are the round values) keep clear of each other once
+// pushed inside the view. Returns the shifted survivors; at the coarsest k that still collides, the greedy
+// leftovers are dropped so no two drawn boxes overlap.
+function thinLabels(
+  labels: GridLabel[],
+  step: number,
+  inside: (ls: GridLabel[]) => GridLabel[],
+  bounds: Bounds,
+  size: { widthPx: number; heightPx: number },
+): GridLabel[] {
+  if (labels.length < 2) return inside(labels)
+  const clear = (ls: GridLabel[]) => {
+    const boxes = labelBoxesPx(ls, bounds, size.widthPx, size.heightPx)
+    const kept: number[] = []
+    for (let i = 0; i < boxes.length; i++) {
+      const prev = kept.length ? boxes[kept[kept.length - 1]] : null
+      const b = boxes[i]
+      const hit = prev && prev.x < b.x + b.w + LABEL_GAP_PX && b.x < prev.x + prev.w + LABEL_GAP_PX && prev.y < b.y + b.h + 2 && b.y < prev.y + prev.h + 2
+      if (!hit) kept.push(i)
+    }
+    return kept
+  }
+  let best: GridLabel[] = []
+  for (let k = 1; ; k = k === 1 ? 2 : String(k)[0] === '2' ? k * 2.5 : k * 2) {
+    const pick = labels.filter((l, i) => (step > 0 ? Math.round(l.value / step) % k === 0 : i % k === 0))
+    const shifted = inside(pick)
+    const kept = clear(shifted)
+    best = kept.map((i) => shifted[i])
+    if (kept.length === shifted.length || pick.length <= 1) return shifted
+    if (k > labels.length * 2) return best
+  }
+}
+
 // Everything the grid draws, as data: line positions and positioned labels.
 // `bounds` are the camera's (the plane being viewed); on a log axis that plane is
 // (log10 x, log10 y), so ticks are computed on the world values and drawn at
@@ -227,10 +263,12 @@ export function gridPlan(
       labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
     }
   }
-  // Keep every label box inside the view: a tick at the edge slides inward instead of being cut off.
+  // Keep every label box inside the view (a tick at the edge slides inward instead of being cut off), then thin
+  // each axis to the finest every-k-th tick whose label boxes do not touch: long labels get fewer ticks, never overlap.
   const inside = <T extends { label: string; at: { x: number; y: number } }>(ls: T[]) => keepLabelsInside(ls, bounds, size.widthPx, size.heightPx)
-  const shiftedX = inside(labelsX)
-  const shiftedY = inside(labelsY)
+  const thin = (ls: GridLabel[], step: number) => thinLabels(ls, step, inside, bounds, size)
+  const shiftedX = thin(labelsX, ticks.step?.x ?? 0)
+  const shiftedY = thin(labelsY, ticks.step?.y ?? 0)
   labelsX.splice(0, labelsX.length, ...shiftedX)
   labelsY.splice(0, labelsY.length, ...shiftedY)
   // A title equal to its axis default ('x' / 'y') counts as not authored, so
