@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { EditorState } from '@codemirror/state'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { insertNewlineContinueMarkup } from '@codemirror/lang-markdown'
-import { editorExtensions, cursorInListItem, listIndentKeymap, lineOpsKeymap } from './extensions'
+import { EditorView } from '@codemirror/view'
+import { editorExtensions, cursorInListItem, listIndentKeymap, lineOpsKeymap, typingAttributes, defaultLang } from './extensions'
 
 const mk = (doc: string, pos = doc.length, readOnly = false) =>
   EditorState.create({ doc, selection: { anchor: pos }, extensions: editorExtensions({ readOnly }) })
@@ -87,5 +88,25 @@ describe('readOnly compartment', () => {
     s = s.update({ effects: comp.reconfigure(readOnlyExtension(false)) }).state
     expect(s.readOnly).toBe(false)
     expect(s.doc.toString()).toBe('x')
+  })
+})
+
+describe('typing attributes', () => {
+  const attrs = (lang?: string) => {
+    const st = EditorState.create({ extensions: [typingAttributes(lang)] })
+    return st.facet(EditorView.contentAttributes).reduce<Record<string, string>>((a, f) => Object.assign(a, typeof f === 'function' ? {} : f), {})
+  }
+  it('turns the browser helpers on', () => {
+    expect(attrs('en-GB')).toEqual({ spellcheck: 'true', autocorrect: 'on', autocapitalize: 'sentences', lang: 'en-GB' })
+  })
+  it('lang defaults to the page language, else en', () => {
+    expect(defaultLang()).toBe('en')
+    expect(attrs().lang).toBe('en')
+  })
+  it('the full set carries them and the autocorrect option is a switch', () => {
+    const on = EditorState.create({ extensions: editorExtensions({ lang: 'fr' }) })
+    expect(on.facet(EditorView.inputHandler).length).toBeGreaterThan(1)
+    const off = EditorState.create({ extensions: editorExtensions({ autocorrect: false }) })
+    expect(off.facet(EditorView.inputHandler).length).toBe(on.facet(EditorView.inputHandler).length - 1)
   })
 })

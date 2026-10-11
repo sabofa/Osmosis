@@ -6,7 +6,8 @@ import { EditorView } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import type { DocumentHighlight, RenderGraph } from '../types'
 import { highlightKey, highlightSpans, setHighlightSpans } from './highlightDecos'
-import { editorExtensions, readOnlyExtension, setLivePreview } from './extensions'
+import { editorExtensions, readOnlyExtension, setLivePreview, setEditorLang } from './extensions'
+import { setAutocorrect } from './autocorrect'
 import { editorKeymap } from './editorCommands'
 import {
   diffRange, remapHighlightsThroughChanges, toHostEol, normalizeEol,
@@ -30,6 +31,10 @@ export interface MarkdownEditorProps {
   autoFocus?: boolean
   // Render markdown in place, revealing raw marks at the caret (default true).
   livePreview?: boolean
+  // Word-style autocorrect while typing (smart quotes, dashes, ellipsis, (c); default true).
+  autocorrect?: boolean
+  // Spell-check language (default: the page's lang attribute, else 'en').
+  lang?: string
   // Renders ```graph fences in place off-caret (the host's graph engine).
   renderGraph?: RenderGraph
   // Extra hooks for those graphs (their error sink).
@@ -116,6 +121,8 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             readOnly: propsRef.current.readOnly,
             readOnlyCompartment: readOnlyRef.current!,
             livePreview: propsRef.current.livePreview !== false,
+            autocorrect: propsRef.current.autocorrect !== false,
+            lang: propsRef.current.lang,
             live: {
               renderGraph: () => propsRef.current.renderGraph,
               onGraphErrors: (m) => propsRef.current.graphCtx?.onErrors?.(m),
@@ -199,6 +206,23 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     appliedLpRef.current = on
     setLivePreview(view, on)
   }, [props.livePreview])
+
+  const appliedAcRef = useRef(props.autocorrect !== false)
+  useEffect(() => {
+    const view = viewRef.current
+    const on = props.autocorrect !== false
+    if (!view || on === appliedAcRef.current) return
+    appliedAcRef.current = on
+    setAutocorrect(view, on)
+  }, [props.autocorrect])
+
+  const appliedLangRef = useRef(props.lang)
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || props.lang === appliedLangRef.current) return
+    appliedLangRef.current = props.lang
+    setEditorLang(view, props.lang)
+  }, [props.lang])
 
   return <div ref={hostRef} data-component="markdown-editor" />
 }

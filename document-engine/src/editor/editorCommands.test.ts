@@ -55,7 +55,10 @@ describe('editorCommandSpecs', () => {
   })
   it('keymap covers every shortcut including the redo alternate', () => {
     const keys = editorKeymap().map((k) => k.key)
-    expect(keys).toEqual(['Mod-b', 'Mod-i', 'Mod-e', 'Mod-k', 'Mod-z', 'Mod-Shift-z', 'Mod-y', 'Mod-f', 'Mod-h'])
+    expect(keys).toEqual([
+      'Mod-b', 'Mod-i', 'Mod-Shift-x', 'Mod-e', 'Mod-k', 'Mod-Shift-l', 'Mod-Shift-8', 'Mod-Shift-7',
+      'Mod-z', 'Mod-Shift-z', 'Mod-y', 'Mod-f', 'Mod-h', 'Mod-\\','Mod-Alt-0', 'Mod-Alt-1', 'Mod-Alt-2', 'Mod-Alt-3', 'Mod-Alt-4',
+    ])
   })
 })
 

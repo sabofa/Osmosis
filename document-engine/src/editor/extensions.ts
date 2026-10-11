@@ -1,8 +1,8 @@
 // CodeMirror 6 extension set for the Markdown source editor. Every colour,
 // font and size is a var(--de-*) reference; the host owns the sheet.
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
 import {
-  EditorView, keymap, drawSelection, rectangularSelection, crosshairCursor, type KeyBinding,
+  EditorView, ViewPlugin, type ViewUpdate, keymap, drawSelection, rectangularSelection, crosshairCursor, type KeyBinding,
 } from '@codemirror/view'
 import {
   history, defaultKeymap, historyKeymap, indentMore, indentLess,
@@ -16,6 +16,9 @@ import { tags as t } from '@lezer/highlight'
 import { livePreview } from './livePreview'
 import { liveOptions, type LiveOptions } from './liveWidgets'
 import { highlightExtensions } from './highlightDecos'
+import { autocorrectSlot } from './autocorrect'
+import { structureKeymap } from './structureKeys'
+import { wordSelectionStyle } from './selectionFeel'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
@@ -27,6 +30,10 @@ export interface EditorExtensionOptions {
   livePreview?: boolean
   // Widget hooks for live preview (graph renderer and its error sink).
   live?: LiveOptions
+  // Word-style autocorrect while typing: smart quotes, dashes, ellipsis, (c) (default true).
+  autocorrect?: boolean
+  // Document language for spell checking (default: the page's, else 'en').
+  lang?: string
 }
 
 const LIST_NODES = new Set(['ListItem', 'BulletList', 'OrderedList'])
@@ -107,6 +114,77 @@ export function setLivePreview(view: EditorView, on: boolean): void {
   view.dispatch({ effects: lpCompartment.reconfigure(livePreviewBundle(on)) })
 }
 
+/** The language the browser spell-checks the editor in. */
+export function defaultLang(): string {
+  try {
+    return (typeof document !== 'undefined' && document.documentElement.lang) || 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+const typingCompartment = new Compartment()
+/** Content attributes that turn the browser's own typing helpers on (spelling, sentence caps). */
+export function typingAttributes(lang?: string): Extension {
+  return EditorView.contentAttributes.of({
+    spellcheck: 'true', autocorrect: 'on', autocapitalize: 'sentences', lang: lang || defaultLang(),
+  })
+}
+/** Change the spell-check language of a mounted view. */
+export function setEditorLang(view: EditorView, lang: string | undefined): void {
+  view.dispatch({ effects: typingCompartment.reconfigure(typingAttributes(lang)) })
+}
+
+/** The nearest ancestor that actually scrolls (the host's page), or null for the window. */
+function scrollingAncestor(view: EditorView): HTMLElement | null {
+  for (let el = view.dom.parentElement; el && el !== document.body; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return el
+  }
+  return null
+}
+
+// Word-like comfortable scrolling: while TYPING, the caret is kept about a
+// third of the viewport away from the bottom edge (arrow keys, clicks and
+// drag-selecting keep CodeMirror's plain "scroll just enough"). Not done with
+// scrollMargins (that would also widen the drag-select autoscroll zone) nor
+// scrollPastEnd (the host's page scrolls, not .cm-scroller, so it would size
+// off the whole document); the end-of-document room is content padding.
+export const COMFORT_BOTTOM = 0.35
+
+const typingPlugin = ViewPlugin.fromClass(class {
+  typing = false
+  update(u: ViewUpdate) {
+    if (u.docChanged) this.typing = u.transactions.some((tr) => tr.isUserEvent('input') || tr.isUserEvent('delete'))
+    else if (u.selectionSet) this.typing = false
+  }
+})
+
+/** Scroll the caret up to the comfortable line when typing has reached the bottom edge. */
+export function comfortScrollBy(view: EditorView, caretBottom: number): number {
+  const el = scrollingAncestor(view)
+  const top = el ? el.getBoundingClientRect().top : 0
+  const height = el ? el.clientHeight : window.innerHeight
+  const room = top + height - caretBottom
+  const want = height * COMFORT_BOTTOM
+  if (room >= want || room < -height) return 0
+  const dy = Math.ceil(want - room)
+  if (el) el.scrollTop += dy
+  else window.scrollBy(0, dy)
+  return dy
+}
+
+const comfortScroll: Extension = [
+  typingPlugin,
+  EditorView.scrollHandler.of((view, range, target) => {
+    if (target.y !== 'nearest' || !view.plugin(typingPlugin)?.typing) return false
+    // Layout may not be read mid-update: the line's box comes from the height map.
+    const block = view.lineBlockAt(range.head)
+    comfortScrollBy(view, view.documentTop + block.bottom)
+    return false // CodeMirror's own scroll still runs and finds the caret in view
+  }),
+]
+
 export const editorTheme = EditorView.theme({
   '&': {
     backgroundColor: 'transparent',
@@ -119,7 +197,8 @@ export const editorTheme = EditorView.theme({
   '.cm-content': {
     maxWidth: 'var(--de-measure)',
     marginInline: 'auto',
-    padding: '1em 0.5em',
+    // the bottom room lets the last lines scroll up to the comfortable caret position
+    padding: '1em 0.5em 35vh',
     caretColor: 'var(--de-text)',
   },
   '.cm-line': { padding: '0' },
@@ -169,6 +248,12 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     EditorView.clickAddsSelectionRange.of((e) => e.altKey || e.ctrlKey || e.metaKey),
     search({ top: true }),
     EditorView.lineWrapping,
+    typingCompartment.of(typingAttributes(opts.lang)),
+    comfortScroll,
+    wordSelectionStyle,
+    autocorrectSlot(opts.autocorrect !== false),
+    // Above the Markdown keymap's own Enter / Backspace, below autocorrect's revert.
+    Prec.highest(keymap.of(structureKeymap)),
     liveOptions.of(opts.live ?? {}),
     lpCompartment.of(livePreviewBundle(opts.livePreview !== false)),
     highlightExtensions,

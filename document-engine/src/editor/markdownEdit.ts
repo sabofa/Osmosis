@@ -260,7 +260,14 @@ export function toggleLinePrefix(prefix: LinePrefix): MarkdownEdit {
 
 // -------------------------------------------------------------------- headings
 
-/** Cycle the cursor line's heading level: none -> # ... ###### -> none. */
+// A quote and/or list marker at the start of a line (heading and quote/list are exclusive).
+const BLOCK_MARKER = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/
+
+/**
+ * Cycle the cursor line's heading level: none -> # ... ###### -> none. A quote
+ * or list line is restyled, not wrapped: its marker is replaced by the heading
+ * mark (as Word's styles do), never `# > x` or `# - x`.
+ */
 export function cycleHeading(delta: 1 | -1): MarkdownEdit {
   return (doc, sel) => {
     const ls = lineStartOf(doc, sel.from)
@@ -272,7 +279,11 @@ export function cycleHeading(delta: 1 | -1): MarkdownEdit {
     const insert = next === 0 ? '' : '#'.repeat(next) + ' '
     const indent = mt ? mt[1].length : 0
     const oldLen = mt ? mt[2].length + mt[3].length : 0
-    const changes: EditChange[] = [{ from: ls + indent, to: ls + indent + oldLen, insert }]
+    let changes: EditChange[] = [{ from: ls + indent, to: ls + indent + oldLen, insert }]
+    if (!mt) {
+      const bm = BLOCK_MARKER.exec(line)
+      if (bm && /[>\-*+\d]/.test(bm[0])) changes = [{ from: ls, to: ls + bm[0].length, insert }]
+    }
     return { changes, selection: mapSel(sel, changes) }
   }
 }

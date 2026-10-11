@@ -38,12 +38,12 @@ export function editorCommandSpecs(): EditorCommandSpec[] {
   return [
     { id: 'bold', label: 'Bold', group: 'text', icon: 'doc-bold', shortcut: 'Mod-b' },
     { id: 'italic', label: 'Italic', group: 'text', icon: 'doc-italic', shortcut: 'Mod-i' },
-    { id: 'strike', label: 'Strikethrough', group: 'text', icon: 'doc-strike' },
+    { id: 'strike', label: 'Strikethrough', group: 'text', icon: 'doc-strike', shortcut: 'Mod-Shift-x' },
     { id: 'code', label: 'Code', group: 'text', icon: 'doc-code', shortcut: 'Mod-e' },
     { id: 'link', label: 'Link', group: 'text', icon: 'doc-link', shortcut: 'Mod-k' },
     { id: 'heading-cycle', label: 'Heading level', group: 'block', icon: 'doc-heading' },
-    { id: 'bullet-list', label: 'Bulleted list', group: 'block', icon: 'doc-list-bullet' },
-    { id: 'numbered-list', label: 'Numbered list', group: 'block', icon: 'doc-list-number' },
+    { id: 'bullet-list', label: 'Bulleted list', group: 'block', icon: 'doc-list-bullet', shortcut: 'Mod-Shift-l', altShortcut: 'Mod-Shift-8' },
+    { id: 'numbered-list', label: 'Numbered list', group: 'block', icon: 'doc-list-number', shortcut: 'Mod-Shift-7' },
     { id: 'task-list', label: 'Task list', group: 'block', icon: 'doc-list-task' },
     { id: 'quote', label: 'Quote', group: 'block', icon: 'doc-quote' },
     { id: 'undo', label: 'Undo', group: 'history', icon: 'doc-undo', shortcut: 'Mod-z' },
@@ -284,6 +284,16 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
   return false
 }
 
+export const CLEAR_FORMAT_KEY = 'Mod-\\'
+
+/** Apply a block style unless the caret line already has it (Word keeps Heading 1 on Ctrl+Alt+1). */
+function setStyleKeepingIt(view: EditorView, style: SettableBlockStyle): boolean {
+  if (view.state.readOnly) return false
+  const sel = view.state.selection.main
+  if (sel.empty && currentBlockStyle(view.state) === style) return true
+  return runBlockStyle(view, style)
+}
+
 /** Key bindings for every spec shortcut; first in the keymap so they win. */
 export function editorKeymap(): KeyBinding[] {
   const out: KeyBinding[] = []
@@ -294,5 +304,14 @@ export function editorKeymap(): KeyBinding[] {
   }
   // Word's Replace; the ribbon button advertises it, so it must really be bound.
   out.push({ key: 'Mod-h', preventDefault: true, run: (v) => runEditorCommand(v, 'replace') })
+  // Word's Clear Formatting (Ctrl+Space in Word; the backslash key is free in CodeMirror).
+  out.push({ key: CLEAR_FORMAT_KEY, preventDefault: true, run: (v) => runEditorCommand(v, 'clear-format') })
+  // Word's Heading 1-4 and Normal. They set the style (never toggle it off, like Word).
+  const styles: [string, SettableBlockStyle][] = [
+    ['Mod-Alt-0', 'normal'], ['Mod-Alt-1', 'h1'], ['Mod-Alt-2', 'h2'], ['Mod-Alt-3', 'h3'], ['Mod-Alt-4', 'h4'],
+  ]
+  for (const [key, style] of styles) {
+    out.push({ key, preventDefault: true, run: (v) => setStyleKeepingIt(v, style) })
+  }
   return out
 }

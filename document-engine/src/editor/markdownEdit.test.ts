@@ -205,6 +205,20 @@ describe('cycleHeading', () => {
   it('affects only the cursor line', () => {
     expect(run(up, 'a\nb|\nc').doc).toBe('a\n# b\nc')
   })
+  it('a quote or list line is restyled, never wrapped', () => {
+    expect(run(up, '> qu|ote').doc).toBe('# quote')
+    expect(run(up, '- it|em').doc).toBe('# item')
+    expect(run(up, '1. it|em').doc).toBe('# item')
+    expect(run(up, '- [ ] ta|sk').doc).toBe('# task')
+    expect(run(up, '> - ne|sted').doc).toBe('# nested')
+    expect(run(up, '  - in|dented').doc).toBe('# indented')
+    expect(run(down, '- it|em').doc).toBe('###### item')
+    expect(run(up, '- it|em').sel).toBe('# it|em')
+  })
+  it('cycles on from a restyled line and leaves emphasis stars alone', () => {
+    expect(run(up, '**bo|ld**').doc).toBe('# **bold**')
+    expect(run(up, '- a|\n- b').doc).toBe('# a\n- b')
+  })
   it('empty doc and empty heading', () => {
     expect(run(up, '|').doc).toBe('# ')
     expect(run(up, '#|').doc).toBe('## ')

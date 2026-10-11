@@ -197,7 +197,7 @@ export function buildRibbon({ mode, state, handlers: h }: BuildRibbonInput): Rib
     toggle('italic', 'Italic', 'doc-italic', edit, m.italic, { shortcut: 'Mod-i' }),
   )
   if (rich) fontItems.push(toggle('underline', 'Underline', 'doc-underline', edit, rs.underline, { shortcut: 'Mod-u' }))
-  fontItems.push(toggle('strike', 'Strikethrough', 'doc-strike', edit, m.strike))
+  fontItems.push(toggle('strike', 'Strikethrough', 'doc-strike', edit, m.strike, { shortcut: 'Mod-Shift-x' }))
   if (rich) {
     fontItems.push(
       toggle('subscript', 'Subscript', 'doc-subscript', edit, rs.subscript, { shortcut: 'Mod-=' }),
@@ -218,12 +218,12 @@ export function buildRibbon({ mode, state, handlers: h }: BuildRibbonInput): Rib
       } as RibbonColor,
     )
   }
-  fontItems.push(sep('font-clear'), button('clear-format', 'Clear formatting', 'doc-clear-format', edit))
+  fontItems.push(sep('font-clear'), button('clear-format', 'Clear formatting', 'doc-clear-format', edit, { shortcut: 'Mod-\\' }))
   const font = group('font', 'Font', fontItems)
 
   const paragraphItems: RibbonItem[] = [
-    toggle('bullet-list', 'Bullets', 'doc-list-bullet', edit, m.bullet),
-    toggle('numbered-list', 'Numbering', 'doc-list-number', edit, m.numbered),
+    toggle('bullet-list', 'Bullets', 'doc-list-bullet', edit, m.bullet, { shortcut: 'Mod-Shift-l' }),
+    toggle('numbered-list', 'Numbering', 'doc-list-number', edit, m.numbered, { shortcut: 'Mod-Shift-7' }),
     toggle('task-list', 'Tasks', 'doc-list-task', edit, m.task),
     toggle('quote', 'Quote', 'doc-quote', edit, m.quote),
     sep('para-indent'),
