@@ -1,6 +1,6 @@
 // CodeMirror 6 extension set for the Markdown source editor. Every colour,
 // font and size is a var(--de-*) reference; the host owns the sheet.
-import { EditorState, type Compartment, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap, drawSelection, rectangularSelection, crosshairCursor, type KeyBinding,
 } from '@codemirror/view'
@@ -13,6 +13,7 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete'
 import { indentOnInput, syntaxHighlighting, HighlightStyle, syntaxTree } from '@codemirror/language'
 import { search, searchKeymap } from '@codemirror/search'
 import { tags as t } from '@lezer/highlight'
+import { livePreview } from './livePreview'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
@@ -20,6 +21,8 @@ export interface EditorExtensionOptions {
   readOnlyCompartment?: Compartment
   // Extra bindings, listed before every built-in one so they win.
   extraKeymap?: KeyBinding[]
+  // Render markdown in place, revealing raw marks at the caret (default true).
+  livePreview?: boolean
 }
 
 const LIST_NODES = new Set(['ListItem', 'BulletList', 'OrderedList'])
@@ -71,6 +74,34 @@ export const markdownHighlightStyle = HighlightStyle.define([
   { tag: t.operator, color: 'var(--de-syntax-operator)' },
   { tag: [t.punctuation, t.bracket, t.separator], color: 'var(--de-syntax-punctuation)' },
 ])
+
+// With live preview, heading sizes come from line decorations (livePreview.ts),
+// so the highlight style must not scale the heading text a second time.
+export const liveHighlightStyle = HighlightStyle.define([
+  { tag: [t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6], fontFamily: 'var(--de-font-display)', fontWeight: '700' },
+  { tag: t.strong, fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.strikethrough, textDecoration: 'line-through' },
+  { tag: [t.quote, t.comment, t.lineComment, t.blockComment], color: 'var(--de-text-muted)' },
+  { tag: [t.processingInstruction, t.meta, t.contentSeparator], color: 'var(--de-text-muted)' },
+  { tag: t.keyword, color: 'var(--de-syntax-keyword)' },
+  { tag: [t.string, t.special(t.string)], color: 'var(--de-syntax-string)' },
+  { tag: [t.number, t.bool, t.null], color: 'var(--de-syntax-number)' },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: 'var(--de-syntax-function)' },
+  { tag: [t.typeName, t.className], color: 'var(--de-syntax-type)' },
+  { tag: t.operator, color: 'var(--de-syntax-operator)' },
+  { tag: [t.punctuation, t.bracket, t.separator], color: 'var(--de-syntax-punctuation)' },
+])
+
+const lpCompartment = new Compartment()
+/** Highlight style plus (when on) the live-preview plugin: one swappable slot. */
+export function livePreviewBundle(on: boolean): Extension {
+  return on ? [livePreview(), syntaxHighlighting(liveHighlightStyle)] : syntaxHighlighting(markdownHighlightStyle)
+}
+/** Turn live preview on or off for a mounted view. */
+export function setLivePreview(view: EditorView, on: boolean): void {
+  view.dispatch({ effects: lpCompartment.reconfigure(livePreviewBundle(on)) })
+}
 
 export const editorTheme = EditorView.theme({
   '&': {
@@ -134,7 +165,7 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     EditorView.clickAddsSelectionRange.of((e) => e.altKey || e.ctrlKey || e.metaKey),
     search({ top: true }),
     EditorView.lineWrapping,
-    syntaxHighlighting(markdownHighlightStyle),
+    lpCompartment.of(livePreviewBundle(opts.livePreview !== false)),
     editorTheme,
     // Earlier keymaps win: list Tab, line ops, search, brackets, then defaults.
     keymap.of([

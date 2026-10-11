@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import { Annotation, Compartment, EditorState, Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { DocumentHighlight } from '../types'
-import { editorExtensions, readOnlyExtension } from './extensions'
+import { editorExtensions, readOnlyExtension, setLivePreview } from './extensions'
 import { editorKeymap } from './editorCommands'
 import {
   diffRange, remapHighlightsThroughChanges, toHostEol, normalizeEol,
@@ -26,6 +26,8 @@ export interface MarkdownEditorProps {
   onViewUpdate?(view: EditorView): void
   readOnly?: boolean
   autoFocus?: boolean
+  // Render markdown in place, revealing raw marks at the caret (default true).
+  livePreview?: boolean
 }
 
 const externalSync = Annotation.define<boolean>()
@@ -94,6 +96,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
           editorExtensions({
             readOnly: propsRef.current.readOnly,
             readOnlyCompartment: readOnlyRef.current!,
+            livePreview: propsRef.current.livePreview !== false,
             extraKeymap: editorKeymap(),
           }),
           EditorView.domEventHandlers({
@@ -158,6 +161,15 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     appliedReadOnlyRef.current = ro
     view.dispatch({ effects: readOnlyRef.current!.reconfigure(readOnlyExtension(ro)) })
   }, [props.readOnly])
+
+  const appliedLpRef = useRef(props.livePreview !== false)
+  useEffect(() => {
+    const view = viewRef.current
+    const on = props.livePreview !== false
+    if (!view || on === appliedLpRef.current) return
+    appliedLpRef.current = on
+    setLivePreview(view, on)
+  }, [props.livePreview])
 
   return <div ref={hostRef} data-component="markdown-editor" />
 }

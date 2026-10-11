@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-core'
 import type { DocumentTokens } from 'theme-core'
 import { EditorView } from '@codemirror/view'
+import { setLivePreview } from '../editor/extensions'
 import DocumentViewer from '../DocumentViewer'
 import Ribbon from '../ribbon/Ribbon'
 import { buildRibbon, DEFAULT_RICH_STATE, type RichState, type RibbonValueId, type RibbonValue } from '../ribbon/ribbonModel'
@@ -223,6 +224,15 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
   w.__doc = { text, changes: (w.__doc?.changes ?? 0) }
   w.__hl = hl.map((h) => ({ id: h.id, start: h.start, end: h.end, quote: h.quote }))
   w.__setDoc = (s: string) => setText(s)
+  // ?lp=0 mounts the raw (non-live-preview) editor for comparison.
+  const lpOff = new URLSearchParams(location.search).get('lp') === '0'
+  useEffect(() => {
+    if (!lpOff) return
+    let raf = 0
+    const tryOff = () => { const v = eg().__view(); if (v) setLivePreview(v, false); else raf = requestAnimationFrame(tryOff) }
+    tryOff()
+    return () => cancelAnimationFrame(raf)
+  }, [lpOff])
   return (
     <div
       data-testid="editor-wrapper"

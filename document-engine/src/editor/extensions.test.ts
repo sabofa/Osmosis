@@ -57,7 +57,7 @@ describe('editorExtensions', () => {
 })
 
 describe('editor files colour/font literal guard', () => {
-  for (const f of ['./extensions.ts', './MarkdownEditor.tsx', './editorSync.ts']) {
+  for (const f of ['./extensions.ts', './MarkdownEditor.tsx', './editorSync.ts', './livePreview.ts']) {
     it(`${f} has no colour or font literals`, () => {
       const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8')
       expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/)
