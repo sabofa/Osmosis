@@ -17,6 +17,13 @@ export interface OutlineHeading {
 const ATX_RE = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 const SETEXT_RE = /^ {0,3}(=+|-+)[ \t]*$/
+// A thematic break; never the start of a paragraph (so `***` then `---` is not a setext heading).
+const THEMATIC_RE = /^ {0,3}([-*_])(?: *\1){2,} *$/
+// Setext headings (`Title` over `===` / `---`) are an OUTLINE-ONLY reading: the
+// read-mode viewer (markdown.ts) renders ATX headings h1..h6 but shows a
+// setext pair as plain paragraph text, so jumping to one lands on that text.
+// (Rendering them would also turn a leading `---` front-matter block into an
+// h2, so the viewer deliberately leaves them alone.)
 const NOT_PARAGRAPH_RE = /^(?: {4,}|\t|[ \t]*(?:[-*+]|\d+[.)])[ \t]|[ \t]*>)/
 
 // Removes inline markdown from heading text, keeping the words.
@@ -71,6 +78,17 @@ export function extractHeadings(text: string): OutlineHeading[] {
   }
 
   const raw: { level: number; text: string; offset: number }[] = []
+  // A leading front matter block (`---` on line 0 ... closing `---` or `...`)
+  // is metadata, not headings or paragraph text.
+  let first = 0
+  if (/^---[ \t]*$/.test(lines[0] ?? '')) {
+    for (let j = 1; j < lines.length; j++) {
+      if (/^(?:---|\.\.\.)[ \t]*$/.test(lines[j])) {
+        first = j + 1
+        break
+      }
+    }
+  }
   let fence: { ch: string; len: number } | null = null
   // First line of the paragraph being collected (for setext headings).
   let para: number | null = null
@@ -80,7 +98,7 @@ export function extractHeadings(text: string): OutlineHeading[] {
     paraLines.length = 0
   }
 
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = first; i < lines.length; i++) {
     const line = lines[i]
     if (fence) {
       const m = FENCE_RE.exec(line)
@@ -126,7 +144,7 @@ export function extractHeadings(text: string): OutlineHeading[] {
       endPara()
       continue
     }
-    if (NOT_PARAGRAPH_RE.test(line)) {
+    if (THEMATIC_RE.test(line) || NOT_PARAGRAPH_RE.test(line)) {
       endPara()
       continue
     }

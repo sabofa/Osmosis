@@ -190,7 +190,14 @@ describe('DocumentViewer.css guard', () => {
   it('has no literal NN% inside color-mix other than alpha-var calc, 0%, and allow-listed shadows', () => {
     // Allow-list: the drop shadow of the floating panel (line ~227) is chrome
     // depth, not a layer, so it keeps its fixed 25% ink mix. Nothing else.
-    const allowed = ['0 2px 10px color-mix(in srgb, var(--de-text) 25%, transparent)']
+    // Plus two named, deliberately fixed rules that must stay legible at any
+    // layer alpha: the quote rule (--de-quote-rule default) and the highlight
+    // popover background (96% page-ish, not alpha-driven).
+    const allowed = [
+      '0 2px 10px color-mix(in srgb, var(--de-text) 25%, transparent)',
+      'var(--de-quote-rule, color-mix(in srgb, var(--de-text) 30%, transparent))',
+      'var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) 96%, transparent))',
+    ]
     let rest = stripped
     for (const a of allowed) rest = rest.split(a).join('')
     const bareRest = rest.replace(/calc\(var\(--de-alpha-(surface|callout|media)\) \* \d+%\)/g, '')
@@ -198,6 +205,19 @@ describe('DocumentViewer.css guard', () => {
     expect(mixes.length).toBeGreaterThan(0)
     for (const m of mixes) {
       expect(m, m).not.toMatch(/(?<![\d.])(?!0%)\d+(\.\d+)?%/)
+    }
+  })
+  it('quote rule and popover backgrounds do not depend on layer alphas', () => {
+    expect(stripped).toContain('var(--de-quote-rule, color-mix(in srgb, var(--de-text) 30%, transparent))')
+    const quoteRule = stripped.match(/\.document-viewer-md-quote \{[^}]*\}/)?.[0] ?? ''
+    expect(quoteRule).toContain('--de-quote-rule')
+    expect(quoteRule).not.toContain('--de-alpha')
+    const popover = stripped.match(/\.document-viewer-highlight-action \{[^}]*\}/)?.[0] ?? ''
+    expect(popover).toContain('background')
+    expect(popover).not.toContain('--de-alpha')
+    for (const f of ['./ViewerControls.css', './ribbon/Ribbon.css']) {
+      const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8')
+      expect(src, f).not.toMatch(/calc\(var\(--de-alpha-callout\) \* \d+%\)/)
     }
   })
   it('layer alphas flow through the alpha vars', () => {

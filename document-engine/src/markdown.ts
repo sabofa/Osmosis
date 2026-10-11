@@ -10,7 +10,7 @@
 // can't land exactly on a stripped character (an acceptable, rare edge
 // case), but everything else resolves exactly like plain text did.
 
-export type BlockType = 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'oli' | 'math' | 'fence' | 'quote'
+export type BlockType = 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'p' | 'li' | 'oli' | 'math' | 'fence' | 'quote'
 
 // One source line's visible slice (absolute offsets into the raw text).
 export interface Seg {
@@ -43,7 +43,14 @@ export interface MdBlock {
   callout?: Callout
 }
 
-const HEADING_RE = /^(#{1,3})\s+/
+// ATX headings: up to 3 spaces of indent, 1..6 hashes (same reading as outline.ts).
+const HEADING_RE = /^ {0,3}(#{1,6})(?:\s+|$)/
+// Quotes nest at most this deep; deeper `>` is plain paragraph text.
+export const MAX_QUOTE_DEPTH = 8
+// A thematic break (`---`, `* * *`, `___`) ends a lazy quote continuation.
+const THEMATIC_RE = /^ {0,3}([-*_])( *\1){2,} *$/
+const TABLE_ROW_RE = /^\s*\|/
+const HTMLISH_RE = /^\s*</
 const OLI_RE = /^\d+\.\s+/
 const LI_RE = /^[-*]\s+/
 const FENCE_OPEN_RE = /^\s*```(.*)$/
@@ -52,8 +59,8 @@ const MATH_FENCE_RE = /^\s*\$\$/
 const QUOTE_RE = /^ {0,3}> ?/
 const CALLOUT_RE = /^\[!([A-Za-z][\w-]*)\][+-]?[ \t]*/
 
-function isBlockStart(t: string): boolean {
-  return HEADING_RE.test(t) || OLI_RE.test(t) || LI_RE.test(t) || FENCE_OPEN_RE.test(t) || MATH_FENCE_RE.test(t) || QUOTE_RE.test(t)
+function isBlockStart(t: string, quotes = true): boolean {
+  return HEADING_RE.test(t) || OLI_RE.test(t) || LI_RE.test(t) || FENCE_OPEN_RE.test(t) || MATH_FENCE_RE.test(t) || (quotes && QUOTE_RE.test(t))
 }
 
 function hasMathClose(lines: { text: string }[], from: number): boolean {
@@ -81,7 +88,7 @@ export function parseBlocks(text: string): MdBlock[] {
     if (lineEnd === len) break
     pos = lineEnd + 1
   }
-  return parseLines(lines, len, false)
+  return parseLines(lines, len, false, 0)
 }
 
 // Content of one quote line with the `>` marker (and one following space)
@@ -112,7 +119,14 @@ function takeQuote(lines: Line[], i: number): { taken: Line[]; next: number } {
       j++
       continue
     }
-    if (lastParagraph && l.text.trim().length > 0 && !isBlockStart(l.text)) {
+    if (
+      lastParagraph &&
+      l.text.trim().length > 0 &&
+      !isBlockStart(l.text) &&
+      !THEMATIC_RE.test(l.text) &&
+      !TABLE_ROW_RE.test(l.text) &&
+      !HTMLISH_RE.test(l.text)
+    ) {
       let text = l.text
       if (text.endsWith('\r')) text = text.slice(0, -1)
       taken.push({ start: l.start, end: l.start + text.length, text })
@@ -126,7 +140,8 @@ function takeQuote(lines: Line[], i: number): { taken: Line[]; next: number } {
 
 // `nested`: the lines are quote content, so block extents are not contiguous
 // in the raw text and multi-line blocks carry `segs`.
-function parseLines(lines: Line[], len: number, nested: boolean): MdBlock[] {
+function parseLines(lines: Line[], len: number, nested: boolean, depth: number): MdBlock[] {
+  const quotes = depth < MAX_QUOTE_DEPTH
   const blocks: MdBlock[] = []
   let i = 0
   while (i < lines.length) {
@@ -135,7 +150,7 @@ function parseLines(lines: Line[], len: number, nested: boolean): MdBlock[] {
       i++
       continue
     }
-    if (QUOTE_RE.test(line.text)) {
+    if (quotes && QUOTE_RE.test(line.text)) {
       const { taken, next } = takeQuote(lines, i)
       let body = taken
       let callout: Callout | undefined
@@ -149,7 +164,7 @@ function parseLines(lines: Line[], len: number, nested: boolean): MdBlock[] {
         type: 'quote',
         start: taken[0].start,
         end: taken[taken.length - 1].end,
-        children: parseLines(body, len, true),
+        children: parseLines(body, len, true, depth + 1),
       }
       if (callout) q.callout = callout
       blocks.push(q)
@@ -227,7 +242,7 @@ function parseLines(lines: Line[], len: number, nested: boolean): MdBlock[] {
     while (i < lines.length) {
       const next = lines[i]
       if (next.text.trim().length === 0) break
-      if (isBlockStart(next.text) && !(MATH_FENCE_RE.test(next.text) && !hasMathClose(lines, i))) break
+      if (isBlockStart(next.text, quotes) && !(MATH_FENCE_RE.test(next.text) && !hasMathClose(lines, i))) break
       pEnd = next.end
       segs.push({ start: next.start, end: next.end })
       i++
@@ -404,6 +419,9 @@ export const BLOCK_TAG: Record<BlockType, string> = {
   h1: 'h1',
   h2: 'h2',
   h3: 'h3',
+  h4: 'h4',
+  h5: 'h5',
+  h6: 'h6',
   p: 'p',
   li: 'div',
   oli: 'div',
@@ -416,6 +434,9 @@ export const BLOCK_CLASS: Record<BlockType, string> = {
   h1: '',
   h2: '',
   h3: '',
+  h4: '',
+  h5: '',
+  h6: '',
   p: '',
   li: 'document-viewer-md-li',
   oli: 'document-viewer-md-li',

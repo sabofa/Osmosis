@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseBlocks, parseInline, parseInlineSegs, type MdBlock } from './markdown'
+import { MAX_QUOTE_DEPTH, parseBlocks, parseInline, parseInlineSegs, type MdBlock } from './markdown'
 
 describe('parseBlocks', () => {
   it('strips heading markers but keeps offsets pointing at the raw source', () => {
@@ -226,5 +226,66 @@ describe('blockquotes', () => {
     expect(text.slice(bold.start + 1, bold.start + 3)).toBe('ol')
     for (const r of runs) expect(text.slice(r.start, r.end)).not.toContain('>')
     expect(runs.find((r) => r.br)).toBeTruthy()
+  })
+})
+
+function quoteDepth(blocks: ReturnType<typeof parseBlocks>): number {
+  let d = 0
+  let cur = blocks.find((b) => b.type === 'quote')
+  while (cur) {
+    d++
+    cur = (cur.children ?? []).find((b) => b.type === 'quote')
+  }
+  return d
+}
+
+describe('quote nesting bound', () => {
+  it('does not throw on 5000 nested markers and stops at the depth cap', () => {
+    const text = '>'.repeat(5000) + ' x'
+    const blocks = parseBlocks(text)
+    expect(quoteDepth(blocks)).toBe(MAX_QUOTE_DEPTH)
+  })
+
+  it('allows depth 8 but treats the 9th marker as plain text', () => {
+    const eight = parseBlocks('> '.repeat(8) + 'x')
+    expect(quoteDepth(eight)).toBe(8)
+    let inner = eight[0]
+    while (inner.children?.[0]?.type === 'quote') inner = inner.children[0]
+    expect(inner.children![0].type).toBe('p')
+    const text9 = '> '.repeat(9) + 'x'
+    const nine = parseBlocks(text9)
+    expect(quoteDepth(nine)).toBe(8)
+    let deepest = nine[0]
+    while (deepest.children?.[0]?.type === 'quote') deepest = deepest.children[0]
+    const p = deepest.children![0]
+    expect(p.type).toBe('p')
+    expect(text9.slice(p.segs![0].start, p.segs![0].end)).toBe('> x')
+  })
+})
+
+describe('lazy continuation limits', () => {
+  it.each([['---'], ['* * *'], ['___'], ['| a | b |'], ['<div>'], ['```js']])('does not swallow %s', (line) => {
+    const blocks = parseBlocks(`> quoted\n${line}`)
+    expect(blocks[0].type).toBe('quote')
+    expect(blocks[0].end).toBe('> quoted'.length)
+  })
+  it('still continues a plain lazy line', () => {
+    const blocks = parseBlocks('> quoted\nlazy')
+    expect(blocks.map((b) => b.type)).toEqual(['quote'])
+  })
+})
+
+describe('ATX headings h1..h6', () => {
+  it('reads h4-h6 and up to 3 spaces of indent with exact offsets (CRLF + emoji)', () => {
+    const text = '😀\r\n\r\n#### Four\r\n  ##### Five 😀\r\n###### Six'
+    const blocks = parseBlocks(text)
+    expect(blocks.map((b) => b.type)).toEqual(['p', 'h4', 'h5', 'h6'])
+    expect(text.slice(blocks[1].start, blocks[1].end).replace(/\r$/, '')).toBe('Four')
+    expect(text.slice(blocks[2].start, blocks[2].end).replace(/\r$/, '')).toBe('Five 😀')
+    expect(text.slice(blocks[3].start, blocks[3].end)).toBe('Six')
+  })
+  it('does not read 7 hashes or 4-space indent as headings', () => {
+    expect(parseBlocks('####### x')[0].type).toBe('p')
+    expect(parseBlocks('    # x')[0].type).toBe('p')
   })
 })

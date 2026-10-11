@@ -32,6 +32,23 @@ describe('extractHeadings', () => {
   it('a rule or list is not setext', () => {
     expect(h('text\n\n---\n\n- item\n---\n')).toEqual([])
   })
+  it('skips a leading front matter block (closed by --- or ...)', () => {
+    expect(h('---\ntitle: x\n# not a heading\n---\n# Real')).toEqual([[1, 'Real', 33]])
+    expect(h('---\na: b\n...\n# Real')).toEqual([[1, 'Real', 13]])
+    // unterminated: not front matter, the rest reads as normal text
+    expect(h('---\n# Real')).toEqual([[1, 'Real', 4]])
+    // only at line 0: later, it is a rule plus a setext pair
+    expect(h('x\n\n---\na: b\n---\n# R')).toEqual([[2, 'a: b', 7], [1, 'R', 16]])
+  })
+  it('a thematic break never starts a paragraph for setext', () => {
+    expect(h('***\n---\n# H')).toEqual([[1, 'H', 8]])
+    expect(h('___\n===\n# H')).toEqual([[1, 'H', 8]])
+    expect(h('- - -\n---')).toEqual([])
+    expect(h('para\n---')).toEqual([[2, 'para', 0]])
+  })
+  it('front matter with CRLF and emoji keeps offsets in the LF text', () => {
+    expect(h('---\r\ntitle: 😀\r\n---\r\n# R')).toEqual([[1, 'R', 17]])
+  })
   it('CRLF: offsets are in the LF text', () => {
     const lf = '# A\n\nbody\n## B'
     const crlf = lf.replace(/\n/g, '\r\n')

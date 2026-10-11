@@ -14,7 +14,7 @@
   --r-selected: color-mix(in srgb, var(--de-accent) 7%, transparent);
   --r-pressed-hover: color-mix(in srgb, var(--de-accent) 22%, transparent);
   --r-radius: calc(var(--de-radius-sm) * 0.5);
-  --r-surface: color-mix(in srgb, var(--de-page) calc(var(--de-alpha-callout) * 100%), transparent);
+  --r-surface: color-mix(in srgb, var(--de-page) 96%, transparent);
 
   position: relative;
   z-index: 3;

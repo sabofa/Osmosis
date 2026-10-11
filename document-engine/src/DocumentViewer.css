@@ -108,7 +108,10 @@
 
 .document-viewer-markdown h1,
 .document-viewer-markdown h2,
-.document-viewer-markdown h3 {
+.document-viewer-markdown h3,
+.document-viewer-markdown h4,
+.document-viewer-markdown h5,
+.document-viewer-markdown h6 {
   margin: 0.7em 0 0.35em;
   font-family: var(--de-font-display);
   line-height: 1.3;
@@ -117,7 +120,10 @@
 
 .document-viewer-markdown h1:first-child,
 .document-viewer-markdown h2:first-child,
-.document-viewer-markdown h3:first-child {
+.document-viewer-markdown h3:first-child,
+.document-viewer-markdown h4:first-child,
+.document-viewer-markdown h5:first-child,
+.document-viewer-markdown h6:first-child {
   margin-top: 0;
 }
 
@@ -131,6 +137,19 @@
 
 .document-viewer-markdown h3 {
   font-size: 1.08em;
+}
+
+.document-viewer-markdown h4 {
+  font-size: 1em;
+}
+
+.document-viewer-markdown h5,
+.document-viewer-markdown h6 {
+  font-size: 0.92em;
+}
+
+.document-viewer-markdown h6 {
+  color: var(--de-text-muted);
 }
 
 /* Document typography hooks (contract: src/typography.md). Blocks carry
@@ -213,7 +232,8 @@
 .document-viewer-markdown .document-viewer-md-quote {
   margin: 0 0 0.9em;
   padding-inline-start: 1em;
-  border-inline-start: 3px solid color-mix(in srgb, var(--de-text) calc(var(--de-alpha-callout) * 30%), transparent);
+  /* Fixed mix on purpose: the rule must stay visible whatever the layer alphas are. */
+  border-inline-start: 3px solid var(--de-quote-rule, color-mix(in srgb, var(--de-text) 30%, transparent));
   color: var(--de-text-muted);
 }
 
@@ -415,7 +435,7 @@
    The zoom/settings controls are quiet and live in ViewerControls.css. */
 
 .document-viewer-highlight-action {
-  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
+  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) 96%, transparent));
   color: var(--color-text, var(--de-chrome-text));
   border: var(--border-width, 0px) solid var(--menu-border, var(--de-chrome-border));
   border-top: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);

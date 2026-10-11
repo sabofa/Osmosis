@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { ResolvedMarker } from './viewerModel'
 import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
-import { parseBlocks, parseInline, parseInlineSegs, BLOCK_TAG, BLOCK_CLASS, type InlineRun, type MdBlock, type Seg } from './markdown'
+import { MAX_QUOTE_DEPTH, parseBlocks, parseInline, parseInlineSegs, BLOCK_TAG, BLOCK_CLASS, type InlineRun, type MdBlock, type Seg } from './markdown'
 import { renderMath } from './mathRender'
 import { documentRoles, type BlockRole } from './documentRoles'
 import {
@@ -326,8 +326,10 @@ export default function TextContent({
   documentRoles(blocks).forEach((r, i) => roleOf.set(blocks[i], r))
   let graphOrdinal = 0
 
-  function renderBlock(block: MdBlock): ReactNode {
+  // `depth` bounds the render recursion (the parser already caps quote nesting).
+  function renderBlock(block: MdBlock, depth = 0): ReactNode {
     if (block.type === 'quote') {
+      if (depth > MAX_QUOTE_DEPTH + 1) return null
       const co = block.callout
       const titled = !!co && co.titleEnd > co.titleStart
       return (
@@ -344,7 +346,7 @@ export default function TextContent({
                 : co.kind.charAt(0).toUpperCase() + co.kind.slice(1)}
             </div>
           )}
-          {(block.children ?? []).map(renderBlock)}
+          {(block.children ?? []).map((c) => renderBlock(c, depth + 1))}
         </blockquote>
       )
     }
@@ -407,7 +409,7 @@ export default function TextContent({
 
   return (
     <div className="document-viewer-text document-viewer-markdown" ref={rootRef}>
-      {blocks.map(renderBlock)}
+      {blocks.map((b) => renderBlock(b))}
     </div>
   )
 }
