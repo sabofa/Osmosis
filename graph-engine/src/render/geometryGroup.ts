@@ -105,6 +105,20 @@ function computeCurveWidths(points: Vec2[], pixelToWorld: (px: number) => number
   const n = points.length
   const stride = Math.max(4, Math.round(n / 40))
   const raw: number[] = new Array(n)
+  // The curve's own scale, so the "degenerate leg" and "nearly straight" floors below mean the same thing at a 1e-8
+  // window as at a 20-unit one (absolute 1e-9 / 1e-6 floors flattened every leg of a deep-zoom curve to no turn).
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const p of points) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const extent = Math.max(maxX - minX, maxY - minY, 0)
+  const legEps = extent * 1e-10
   for (let i = 0; i < n; i++) {
     const a = points[Math.max(0, i - stride)]
     const p = points[i]
@@ -121,16 +135,16 @@ function computeCurveWidths(points: Vec2[], pixelToWorld: (px: number) => number
     // fixes that without changing the curvature estimate for any curve long
     // enough for both neighbors to be real, distinct points.
     let d = 0
-    if (distAP > 1e-9 && distPC > 1e-9) {
+    if (distAP > legEps && distPC > legEps && distAP > 0 && distPC > 0) {
       const ang1 = Math.atan2(p.y - a.y, p.x - a.x)
       const ang2 = Math.atan2(c.y - p.y, c.x - p.x)
       d = Math.abs(ang2 - ang1)
       if (d > Math.PI) d = 2 * Math.PI - d
     }
     const arcLen = distAP + distPC
-    raw[i] = arcLen > 1e-9 ? d / arcLen : 0
+    raw[i] = arcLen > legEps && arcLen > 0 ? d / arcLen : 0
   }
-  let maxRaw = 1e-6
+  let maxRaw = extent > 0 ? 1e-5 / extent : 1e-6
   for (const d of raw) if (d > maxRaw) maxRaw = d
 
   const widths: number[] = new Array(n)

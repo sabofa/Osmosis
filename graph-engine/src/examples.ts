@@ -1476,13 +1476,14 @@ y = x^3`,
 @titles: x "time (s)", y "height (m)"
 y = x^2`,
   },
-  // A 1e-8 window around x = 1000. A render check only: it needs the origin-relative
-  // rendering (calc 5.5) to draw a clean parabola and honest tick labels.
+  // A 2e-8 window around (1000, 1000), equal aspect. A render check only: it needs the origin-relative
+  // rendering (calc 5.5) to draw a clean parabola and honest tick labels. (y = x^2 itself would not do: at
+  // x = 1000 its slope is 2000, so at equal aspect it is a near-vertical line however deep the zoom.)
   {
     label: 'Frame: deep zoom',
     group: 'Frame',
-    spec: `@bounds: 999.99999999, 1000.00000001, 999999.99998, 1000000.00002
-y = x^2`,
+    spec: `@bounds: 999.99999999, 1000.00000001, 999.99999999, 1000.00000001
+y = 1000 + 100000000 * (x - 1000)^2`,
   },
   {
     label: 'Frame: locked',
