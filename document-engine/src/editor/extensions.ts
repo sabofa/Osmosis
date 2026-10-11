@@ -21,6 +21,7 @@ import { structureKeymap } from './structureKeys'
 import { compositionGuard } from './compositionGuard'
 import { altGraphObserver } from './editorCommands'
 import { wordSelectionStyle } from './selectionFeel'
+import { smoothCaret, smoothCaretCompartment, type SmoothCaretOptions } from './smoothCaret'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
@@ -36,6 +37,8 @@ export interface EditorExtensionOptions {
   autocorrect?: boolean
   // Document language for spell checking (default: the page's, else 'en').
   lang?: string
+  // Word-style gliding, softly fading caret (default on); false = CodeMirror's own.
+  smoothCaret?: boolean | SmoothCaretOptions
 }
 
 const LIST_NODES = new Set(['ListItem', 'BulletList', 'OrderedList'])
@@ -284,6 +287,7 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     closeBrackets(),
     indentOnInput(),
     drawSelection(),
+    smoothCaretCompartment.of(smoothCaret(typeof opts.smoothCaret === 'object' ? opts.smoothCaret : { enabled: opts.smoothCaret !== false })),
     EditorState.allowMultipleSelections.of(true),
     rectangularSelection(),
     crosshairCursor(),
