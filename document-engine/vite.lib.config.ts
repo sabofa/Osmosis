@@ -34,7 +34,13 @@ export default defineConfig({
       // pdfjs-dist is externalized (not bundled) so both `web` and `server`
       // resolve their own single copy via the workspace hoist rather than
       // shipping two separate bundled builds of a large library.
-      external: ['react', 'react-dom', 'react/jsx-runtime', 'pdfjs-dist', /^pdfjs-dist\//],
+      // CodeMirror/lezer are externalized too: @codemirror/state and /view
+      // rely on instanceof checks, so a second bundled copy in a host would
+      // break extensions. They are regular dependencies, hoisted once.
+      external: [
+        'react', 'react-dom', 'react/jsx-runtime', 'pdfjs-dist', /^pdfjs-dist\//,
+        /^@codemirror\//, /^@lezer\//,
+      ],
     },
   },
 })
