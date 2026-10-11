@@ -670,23 +670,31 @@
   margin: 0 0 10px;
 }
 
-.ws-md-text {
+.ws-md-edit {
   flex: 1;
   min-height: 240px;
-  padding: 12px;
+  display: flex;
+  flex-direction: column;
   border: 2px solid var(--line-strong);
   border-radius: 10px;
-  outline: none;
-  resize: none;
-  background: var(--surface);
-  color: var(--ink);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.55;
+  overflow: hidden;
 }
 
-.ws-md-text:focus-visible {
+.ws-md-edit:focus-within {
   border-color: var(--accent);
+}
+
+/* The engine viewer fills the edit frame; its own bar sits on top. */
+.ws-md-edit > .document-text-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-md-edit > .document-text-view > * {
+  flex: 1;
+  min-height: 0;
 }
 
 .ws-md-view {

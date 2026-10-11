@@ -9,10 +9,13 @@ export default function DocumentTextView({
   text,
   interaction = 'annotate',
   chrome = 'full',
+  onTextChange,
 }: {
   text: string
-  interaction?: 'view' | 'annotate'
+  interaction?: 'view' | 'annotate' | 'edit'
   chrome?: 'full' | 'embedded'
+  // With interaction='edit': the engine's Markdown editor over `text`.
+  onTextChange?: (text: string) => void
 }) {
   const tokens = useDocumentTokens()
   const asset = useMemo(() => textAsset(text), [text])
@@ -29,6 +32,7 @@ export default function DocumentTextView({
             if (errors.length > 0) console.warn('document render errors', errors)
           }}
           renderGraph={renderGraph}
+          onTextChange={onTextChange}
         />
       </Suspense>
     </div>

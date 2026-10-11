@@ -3,10 +3,11 @@ import DocumentTextView from '../components/DocumentTextView'
 import ConflictBanner from './ConflictBanner'
 import type { FileViewProps } from './fileTypes'
 import { useFileDraft } from './useFileDraft'
+import { isSaveKey, canSave } from './saveKey'
 
 // The interim editor for a markdown file: read it rendered, or edit it as text
-// in a textarea. It is a placeholder: the document engine's views and edit mode
-// take its place when they register the "markdown" format. The saving (the
+// in the document engine's Markdown editor (host-less for now, so the engine draws
+// its own command row). The saving (the
 // version an edit started from, the conflict choice, the draft that survives a
 // tab switch) is useFileDraft's, the same for every format that Ben and the
 // tutor can both write; this is only the markdown view over it.
@@ -71,18 +72,18 @@ export default function MarkdownFile({ nodeId, body, version, onSaved }: FileVie
       )}
 
       {editing ? (
-        <textarea
-          className="ws-md-text"
-          value={f.draft ?? ''}
-          spellCheck={false}
-          onChange={(e) => f.setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        <div
+          className="ws-md-edit"
+          // Capture, so a save works wherever focus is inside the editor.
+          onKeyDownCapture={(e) => {
+            if (isSaveKey(e)) {
               e.preventDefault()
-              if (f.dirty && !f.busy && !f.conflict) void f.save()
+              if (canSave(f)) void f.save()
             }
           }}
-        />
+        >
+          <DocumentTextView text={f.draft ?? ''} interaction="edit" onTextChange={f.setDraft} />
+        </div>
       ) : (
         <div className="ws-md-view">
           {(f.draft ?? f.saved.body).trim() === '' ? <div className="ws-note">This file is empty.</div> : <DocumentTextView text={f.draft ?? f.saved.body} interaction="annotate" />}
