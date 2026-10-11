@@ -7,8 +7,9 @@ import type { DocumentHighlight } from '../types'
 import { editorExtensions, readOnlyExtension } from './extensions'
 import { editorKeymap } from './editorCommands'
 import {
-  decideValueSync, decideQueuedApply, diffRange, remapHighlightsThroughChanges,
-  detectEol, normalizeEol, toHostEol, rememberEmitted, type Eol,
+  diffRange, remapHighlightsThroughChanges, toHostEol, normalizeEol,
+  initGlue, glueOnProp, glueOnEmit, glueOnFlush, glueOnCompositionEnd, glueOnUnmount,
+  type GlueState, type GlueStep, type TimerCmd,
 } from './editorSync'
 
 export interface MarkdownEditorProps {
@@ -25,10 +26,6 @@ export interface MarkdownEditorProps {
 }
 
 const externalSync = Annotation.define<boolean>()
-
-// Retry cadence for a value that arrived mid-composition (about a second in all).
-const RETRY_MS = 25
-const MAX_RETRIES = 40
 
 /**
  * Write an external value in as the smallest single change, outside undo
@@ -49,13 +46,15 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
   const propsRef = useRef(props)
   propsRef.current = props
   const composingRef = useRef(false)
-  const queuedRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Texts we emitted via onChange: a parent that mirrors them hands them back later.
-  const emittedRef = useRef<string[]>([])
-  // The host's line ending; the editor itself works on LF-only text.
-  const eolRef = useRef<Eol>(detectEol(props.value))
-  const readOnlyRef = useRef(new Compartment())
+  // Flush / retry / echo bookkeeping lives in a pure state machine (editorSync).
+  const glueRef = useRef<GlueState | null>(null)
+  if (glueRef.current === null) glueRef.current = initGlue(props.value)
+  const runFlushRef = useRef<((step: GlueStep) => void) | null>(null)
+  // Exact host texts around an external dispatch, for the highlight remap.
+  const pendingHostsRef = useRef<{ oldHost: string; newHost: string } | null>(null)
+  const readOnlyRef = useRef<Compartment | null>(null)
+  if (readOnlyRef.current === null) readOnlyRef.current = new Compartment()
   const appliedReadOnlyRef = useRef(!!props.readOnly)
   const highlightsRef = useRef<DocumentHighlight[]>(props.highlights ?? [])
   highlightsRef.current = props.highlights ?? highlightsRef.current
@@ -67,25 +66,28 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
       if (timerRef.current !== null) clearTimeout(timerRef.current)
       timerRef.current = null
     }
-    // Apply the queued value once the composition has fully settled.
-    const flushQueued = (tries: number) => {
-      timerRef.current = null
-      const q = queuedRef.current
-      const v = viewRef.current
-      if (q === null || !v) return
-      const composing = composingRef.current || v.composing
-      const d = decideQueuedApply(normalizeEol(q), v.state.doc.toString(), composing, emittedRef.current.includes(q))
-      if (d === 'retry') {
-        // A new composition began: its own compositionend re-arms the flush.
-        if (!composingRef.current && tries < MAX_RETRIES) timerRef.current = setTimeout(() => flushQueued(tries + 1), RETRY_MS)
-        return
-      }
-      queuedRef.current = null
-      if (d === 'apply') {
-        eolRef.current = detectEol(q, eolRef.current)
-        applyValue(v, normalizeEol(q))
-      }
+    const runTimer = (t: TimerCmd) => {
+      if (!t) return
+      clearTimer()
+      if (t.kind === 'arm') timerRef.current = setTimeout(() => flushQueued(t.tries), t.ms)
     }
+    const run = (step: GlueStep) => {
+      glueRef.current = step.state
+      const v = viewRef.current
+      if (step.apply && v) {
+        pendingHostsRef.current = { oldHost: step.apply.oldHost, newHost: step.apply.newHost }
+        try { applyValue(v, step.apply.internal) } finally { pendingHostsRef.current = null }
+      }
+      runTimer(step.timer)
+    }
+    // Apply the queued value once the composition has fully settled.
+    function flushQueued(tries: number) {
+      timerRef.current = null
+      const v = viewRef.current
+      if (!v) return
+      run(glueOnFlush(glueRef.current!, v.state.doc.toString(), composingRef.current, v.composing, tries))
+    }
+    runFlushRef.current = run
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -93,7 +95,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
         extensions: [
           editorExtensions({
             readOnly: propsRef.current.readOnly,
-            readOnlyCompartment: readOnlyRef.current,
+            readOnlyCompartment: readOnlyRef.current!,
             extraKeymap: editorKeymap(),
           }),
           EditorView.domEventHandlers({
@@ -106,8 +108,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
               composingRef.current = false
               propsRef.current.onCompositionChange?.(false)
               // After CodeMirror's own compositionend handling has settled.
-              clearTimer()
-              timerRef.current = setTimeout(() => flushQueued(0), 0)
+              runTimer(glueOnCompositionEnd())
               return false
             },
           }),
@@ -117,18 +118,24 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             if (!u.docChanged) return
             let newText: string | null = null
             const current = () => (newText ??= u.state.doc.toString())
+            const external = u.transactions.some((tr) => tr.annotation(externalSync))
+            const g = glueRef.current!
+            const oldText = u.startState.doc.toString()
+            // Exact host texts: the external prop value, or the text we emit.
+            const newHost = external ? pendingHostsRef.current?.newHost ?? toHostEol(current(), g.eol) : toHostEol(current(), g.eol)
+            let oldHost = external ? pendingHostsRef.current?.oldHost ?? g.lastHost : g.lastHost
+            if (normalizeEol(oldHost) !== oldText) oldHost = toHostEol(oldText, g.eol)
             const hs = highlightsRef.current
             if (hs.length && p.onHighlightsChange) {
-              const next = remapHighlightsThroughChanges(u.startState.doc.toString(), current(), hs, u.changes, eolRef.current)
+              const next = remapHighlightsThroughChanges(oldText, current(), hs, u.changes, g.eol, { oldHost, newHost })
               if (next) {
                 highlightsRef.current = next
                 p.onHighlightsChange(next)
               }
             }
-            if (!u.transactions.some((tr) => tr.annotation(externalSync))) {
-              const out = toHostEol(current(), eolRef.current)
-              rememberEmitted(emittedRef.current, out)
-              p.onChange(out)
+            if (!external) {
+              glueRef.current = glueOnEmit(g, newHost)
+              p.onChange(newHost)
             }
           }),
         ],
@@ -139,6 +146,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     if (propsRef.current.autoFocus) view.focus()
     return () => {
       clearTimer()
+      glueRef.current = glueOnUnmount(glueRef.current!).state
       view.destroy()
       viewRef.current = null
     }
@@ -147,16 +155,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
-    const internal = normalizeEol(props.value)
-    const d = decideValueSync(internal, view.state.doc.toString(), composingRef.current || view.composing)
-    if (d === 'queue') {
-      // Our own typing coming back around is not an external change.
-      queuedRef.current = emittedRef.current.includes(props.value) ? null : props.value
-      return
-    }
-    queuedRef.current = null
-    eolRef.current = detectEol(props.value, eolRef.current)
-    if (d === 'apply') applyValue(view, internal)
+    runFlushRef.current?.(glueOnProp(glueRef.current!, props.value, view.state.doc.toString(), composingRef.current, view.composing))
   }, [props.value])
 
   useEffect(() => {
@@ -164,7 +163,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     const ro = !!props.readOnly
     if (!view || ro === appliedReadOnlyRef.current) return
     appliedReadOnlyRef.current = ro
-    view.dispatch({ effects: readOnlyRef.current.reconfigure(readOnlyExtension(ro)) })
+    view.dispatch({ effects: readOnlyRef.current!.reconfigure(readOnlyExtension(ro)) })
   }, [props.readOnly])
 
   return <div ref={hostRef} data-component="markdown-editor" />

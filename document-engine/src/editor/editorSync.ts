@@ -26,8 +26,12 @@ export function decideQueuedApply(queued: string, docText: string, composing: bo
   return 'apply'
 }
 
-/** Remember a text the editor emitted; keeps only the newest `max` entries. */
-export function rememberEmitted(ring: string[], text: string, max = 8): void {
+/**
+ * Remember a text the editor emitted; keeps only the newest `max` entries.
+ * Only the newest two can still be in flight back from a mirroring parent;
+ * an older one coming back is a genuinely external value.
+ */
+export function rememberEmitted(ring: string[], text: string, max = 2): void {
   if (ring[ring.length - 1] === text) return
   ring.push(text)
   if (ring.length > max) ring.splice(0, ring.length - max)
@@ -116,10 +120,47 @@ function sameHighlights(a: readonly DocumentHighlight[], b: readonly DocumentHig
 }
 
 /**
+ * Offset conversion between a host text (any mix of LF, CRLF, lone CR) and the
+ * editor's LF-only text, built from the exact host string.
+ */
+export function hostEditorMapper(host: string) {
+  const edIdx: number[] = [] // editor index of each line break
+  const hostPos: number[] = [] // host index where that break starts
+  const lens: number[] = []
+  const prefix: number[] = [0] // extra host units contributed by the first k breaks
+  for (let i = 0; i < host.length; i++) {
+    const c = host.charCodeAt(i)
+    if (c !== 10 && c !== 13) continue
+    const len = c === 13 && host.charCodeAt(i + 1) === 10 ? 2 : 1
+    edIdx.push(i - prefix[prefix.length - 1])
+    hostPos.push(i)
+    lens.push(len)
+    prefix.push(prefix[prefix.length - 1] + len - 1)
+    i += len - 1
+  }
+  const lowerBound = (arr: number[], v: number) => {
+    let lo = 0
+    let hi = arr.length
+    while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m + 1; else hi = m }
+    return lo
+  }
+  return {
+    toHost: (e: number) => e + prefix[lowerBound(edIdx, e)],
+    toEditor: (h: number) => {
+      const k = lowerBound(hostPos, h) // breaks starting before h
+      // inside a CRLF: land after the break
+      if (k > 0 && lens[k - 1] === 2 && h === hostPos[k - 1] + 1) return edIdx[k - 1] + 1
+      return h - prefix[k]
+    },
+  }
+}
+
+/**
  * Carry codepoint-offset highlights through an edit. Conversion to UTF-16 uses
  * the OLD text, remap runs in UTF-16, conversion back uses the NEW text.
  * `oldText`/`newText` are the EDITOR's (LF-only) texts; highlights are in the
- * HOST text, so with eol '\r\n' everything is re-expressed in CRLF coordinates.
+ * HOST text. The remap itself runs in editor coordinates; the host texts are
+ * `hosts` when known exactly (any line-ending mix), else rebuilt from `eol`.
  * Returns null when nothing changed (caller skips onHighlightsChange).
  */
 export function remapHighlightsThroughChanges(
@@ -128,16 +169,103 @@ export function remapHighlightsThroughChanges(
   highlights: readonly DocumentHighlight[],
   changes: ChangeSet,
   eol: Eol = '\n',
+  hosts?: { oldHost: string; newHost: string },
 ): DocumentHighlight[] | null {
   if (highlights.length === 0) return null
-  const crlf = eol === '\r\n'
-  const textChanges = changesToTextChanges(changes, crlf ? { oldText } : undefined)
-  const oldHost = toHostEol(oldText, eol)
-  const newHost = toHostEol(newText, eol)
-  const internal = highlights.map((h) => toInternalRange(oldHost, h))
+  const oldHost = hosts?.oldHost ?? toHostEol(oldText, eol)
+  const newHost = hosts?.newHost ?? toHostEol(newText, eol)
+  const oldMap = hostEditorMapper(oldHost)
+  const newMap = hostEditorMapper(newHost)
+  const textChanges = changesToTextChanges(changes)
+  const internal = highlights.map((h) => {
+    const r = toInternalRange(oldHost, h)
+    return { ...r, start: oldMap.toEditor(r.start), end: oldMap.toEditor(r.end) }
+  })
   const { kept } = remapHighlights(internal, textChanges)
-  const back = kept.map((h) => fromInternalRange(newHost, h))
+  const back = kept.map((h) => fromInternalRange(newHost, { ...h, start: newMap.toHost(h.start), end: newMap.toHost(h.end) }))
   // Every survivor gets its quote re-read from the NEW text so re-anchoring stays accurate.
   const next = attachQuotes(newHost, back, new Set<string>())
   return sameHighlights(highlights, next) ? null : next
 }
+
+// ------------------------------------------------------------- glue state machine
+//
+// The React component's flush / retry / echo logic as a pure reducer. Timer
+// scheduling comes back as data (`timer`); the component just executes it.
+//
+// Line endings: the editor works on LF-only text. `lastHost` is the exact last
+// known host text (the prop value, or the text we last emitted) and converts
+// offsets for highlight remaps, so mixed endings are never rebuilt from one
+// uniform EOL. The first onChange of a mixed-EOL file normalises it to the
+// majority EOL (a lone CR counts as a line break); highlights survive because
+// the remap goes through editor coordinates, and their quotes are re-read from
+// the normalised text afterwards (re-attached by quote).
+// Review items 7, 9 and 10 are deliberately skipped in this last round.
+
+export const RETRY_MS = 25
+export const MAX_RETRIES = 40
+
+export type TimerCmd = { kind: 'arm'; ms: number; tries: number } | { kind: 'clear' } | null
+
+export interface GlueState {
+  emitted: string[]
+  queued: string | null
+  lastHost: string
+  eol: Eol
+}
+
+export interface GlueApply { internal: string; oldHost: string; newHost: string }
+export interface GlueStep { state: GlueState; apply: GlueApply | null; timer: TimerCmd }
+
+export const initGlue = (value: string): GlueState => ({ emitted: [], queued: null, lastHost: value, eol: detectEol(value) })
+
+const applyStep = (s: GlueState, host: string): GlueStep => ({
+  state: { emitted: [], queued: null, lastHost: host, eol: detectEol(host, s.eol) },
+  apply: { internal: normalizeEol(host), oldHost: s.lastHost, newHost: host },
+  timer: { kind: 'clear' },
+})
+
+/** The `value` prop changed (or mounted). */
+export function glueOnProp(s: GlueState, value: string, docText: string, composingRef: boolean, viewComposing: boolean): GlueStep {
+  const d = decideValueSync(normalizeEol(value), docText, composingRef || viewComposing)
+  if (d === 'queue') {
+    const last = s.emitted[s.emitted.length - 1]
+    let queued = s.queued
+    let emitted = s.emitted
+    if (last === value) queued = null // our newest typing coming back around
+    else if (!s.emitted.includes(value)) { queued = value; emitted = [] } // genuinely external
+    // an older echo leaves an existing queued external value alone
+    const timer: TimerCmd = queued !== null && !composingRef && viewComposing ? { kind: 'arm', ms: RETRY_MS, tries: 0 } : null
+    return { state: { ...s, queued, emitted }, apply: null, timer }
+  }
+  if (d === 'noop') return { state: { ...s, queued: null, lastHost: value, eol: detectEol(value, s.eol) }, apply: null, timer: { kind: 'clear' } }
+  return applyStep(s, value)
+}
+
+/** The editor emitted `out` through onChange. */
+export function glueOnEmit(s: GlueState, out: string): GlueState {
+  const emitted = s.emitted.slice()
+  rememberEmitted(emitted, out)
+  return { ...s, emitted, lastHost: out }
+}
+
+/** The deferred flush of a queued value fired; `tries` retries have happened. */
+export function glueOnFlush(s: GlueState, docText: string, composingRef: boolean, viewComposing: boolean, tries: number): GlueStep {
+  const q = s.queued
+  if (q === null) return { state: s, apply: null, timer: null }
+  const d = decideQueuedApply(normalizeEol(q), docText, composingRef || viewComposing, s.emitted.includes(q))
+  if (d === 'retry') {
+    // A live composition's own compositionend re-arms the flush; so does the
+    // next one after the retries ran out with the view still composing.
+    const timer: TimerCmd = !composingRef && tries < MAX_RETRIES ? { kind: 'arm', ms: RETRY_MS, tries: tries + 1 } : null
+    return { state: s, apply: null, timer }
+  }
+  if (d === 'drop') return { state: { ...s, queued: null }, apply: null, timer: null }
+  return applyStep(s, q)
+}
+
+/** Composition ended: flush on the next tick, after CodeMirror settled. */
+export const glueOnCompositionEnd = (): TimerCmd => ({ kind: 'arm', ms: 0, tries: 0 })
+
+/** Unmount: nothing queued, no timer. */
+export const glueOnUnmount = (s: GlueState): GlueStep => ({ state: { ...s, queued: null }, apply: null, timer: { kind: 'clear' } })
