@@ -155,6 +155,9 @@ export function SettingsMenu({
   const DownloadIcon = resolveIcon('doc-download', icons)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const count = onDownload ? 2 : 1
   useScrollbarWidth(rootRef)
 
   useEffect(() => {
@@ -166,19 +169,68 @@ export function SettingsMenu({
     return () => document.removeEventListener('pointerdown', handlePointerDown)
   }, [open])
 
+  // Focus the first item as the menu opens.
+  useEffect(() => {
+    if (open) itemRefs.current[0]?.focus()
+  }, [open])
+
+  function close(refocus: boolean) {
+    setOpen(false)
+    if (refocus) triggerRef.current?.focus()
+  }
+
+  function onMenuKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const current = itemRefs.current.findIndex((el) => el === document.activeElement)
+    const action = menuKeyAction(e.key, current, count)
+    if (!action) return
+    if (e.key === 'Escape') e.stopPropagation()
+    if (e.key !== 'Tab') e.preventDefault()
+    if (action.kind === 'focus') itemRefs.current[action.index]?.focus()
+    else close(action.refocus)
+  }
+
   return (
     <div className="document-viewer-settings" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
-      <button type="button" aria-label="Document settings" title="Document settings" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button
+        type="button"
+        ref={triggerRef}
+        aria-label="Document settings"
+        title="Document settings"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape' && open) {
+            e.stopPropagation()
+            e.preventDefault()
+            setOpen(false)
+          }
+        }}
+      >
         <MenuIcon size={14} />
       </button>
       {open && (
-        <div className="document-viewer-settings-menu" role="menu" aria-label="Document settings">
-          <button type="button" role="menuitem" onClick={onToggleOverlays}>
+        <div className="document-viewer-settings-menu" role="menu" aria-label="Document settings" onKeyDown={onMenuKeyDown}>
+          <button
+            type="button"
+            role="menuitem"
+            ref={(el) => {
+              itemRefs.current[0] = el
+            }}
+            onClick={onToggleOverlays}
+          >
             <EyeIcon size={13} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}
           </button>
           {onDownload && (
-            <button type="button" role="menuitem" onClick={onDownload}>
+            <button
+              type="button"
+              role="menuitem"
+              ref={(el) => {
+                itemRefs.current[1] = el
+              }}
+              onClick={onDownload}
+            >
               <DownloadIcon size={13} />
               Download
             </button>

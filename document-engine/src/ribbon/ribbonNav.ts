@@ -28,6 +28,48 @@ export function rovingIndex(key: string, current: number, count: number): number
   }
 }
 
+/**
+ * Arrow navigation among popover items where some may be disabled: `disabled[i]`
+ * says item i cannot take focus. Returns the next ENABLED index (no wrap), or
+ * null for keys that are not navigation / when nothing is enabled. A current
+ * index of -1 (focus not on an item) enters from the matching end.
+ */
+export function nextEnabledIndex(key: string, current: number, disabled: readonly boolean[]): number | null {
+  const enabled: number[] = []
+  disabled.forEach((d, i) => {
+    if (!d) enabled.push(i)
+  })
+  if (!enabled.length) return null
+  const pos = enabled.indexOf(current)
+  if (pos < 0) {
+    switch (key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+      case 'Home':
+        return enabled[0]
+      case 'ArrowLeft':
+      case 'ArrowUp':
+      case 'End':
+        return enabled[enabled.length - 1]
+      default:
+        return null
+    }
+  }
+  const next = rovingIndex(key, pos, enabled.length)
+  return next === null ? null : enabled[next]
+}
+
+/** Which item takes focus when a popover opens: the selected one, else the first enabled; -1 if none. */
+export function firstFocusIndex(disabled: readonly boolean[], selected = -1): number {
+  if (selected >= 0 && selected < disabled.length && !disabled[selected]) return selected
+  return disabled.findIndex((d) => !d)
+}
+
+/** Tab leaves a menu/listbox popover (closing it) but moves within a dialog popover, which only Esc closes. */
+export function tabClosesPopover(role: string): boolean {
+  return role !== 'dialog'
+}
+
 /** "Mod-Shift-z" -> "Ctrl+Shift+Z" (or the Mac spelling). */
 export function prettyShortcut(shortcut: string, mac = false): string {
   return shortcut

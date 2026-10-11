@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rovingIndex, prettyShortcut, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook } from './ribbonNav'
+import { rovingIndex, nextEnabledIndex, firstFocusIndex, tabClosesPopover, prettyShortcut, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook } from './ribbonNav'
 import { STYLE_OPTIONS } from './ribbonModel'
 
 describe('rovingIndex', () => {
@@ -98,5 +98,45 @@ describe('clampNumber', () => {
     expect(clampNumber(2, 8, 96)).toBe(8)
     expect(clampNumber(11, 8, 96)).toBe(11)
     expect(clampNumber(NaN, 8, 96)).toBeNull()
+  })
+})
+
+describe('nextEnabledIndex', () => {
+  const off = [false, true, false, false]
+  it('skips disabled items in both directions and stops at the ends', () => {
+    expect(nextEnabledIndex('ArrowRight', 0, off)).toBe(2)
+    expect(nextEnabledIndex('ArrowLeft', 2, off)).toBe(0)
+    expect(nextEnabledIndex('ArrowDown', 3, off)).toBe(3)
+    expect(nextEnabledIndex('ArrowUp', 0, off)).toBe(0)
+    expect(nextEnabledIndex('Home', 3, [true, false, false])).toBe(1)
+    expect(nextEnabledIndex('End', 0, [false, false, true])).toBe(1)
+  })
+  it('enters from the matching end when focus is not on an enabled item', () => {
+    expect(nextEnabledIndex('ArrowDown', -1, off)).toBe(0)
+    expect(nextEnabledIndex('ArrowUp', -1, off)).toBe(3)
+    expect(nextEnabledIndex('ArrowRight', 1, off)).toBe(0)
+  })
+  it('ignores other keys and all-disabled lists', () => {
+    expect(nextEnabledIndex('a', 0, off)).toBeNull()
+    expect(nextEnabledIndex('ArrowDown', 0, [true, true])).toBeNull()
+    expect(nextEnabledIndex('ArrowDown', 0, [])).toBeNull()
+  })
+})
+
+describe('firstFocusIndex', () => {
+  it('prefers the selected item, else the first enabled', () => {
+    expect(firstFocusIndex([false, false, false], 2)).toBe(2)
+    expect(firstFocusIndex([true, false, false])).toBe(1)
+    expect(firstFocusIndex([false, true], 1)).toBe(0)
+    expect(firstFocusIndex([true, true])).toBe(-1)
+    expect(firstFocusIndex([])).toBe(-1)
+  })
+})
+
+describe('tabClosesPopover', () => {
+  it('only a dialog keeps Tab inside; menus and lists close', () => {
+    expect(tabClosesPopover('dialog')).toBe(false)
+    expect(tabClosesPopover('menu')).toBe(true)
+    expect(tabClosesPopover('listbox')).toBe(true)
   })
 })

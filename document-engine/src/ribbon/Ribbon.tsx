@@ -14,9 +14,9 @@ import {
   type RibbonNumber, type RibbonColor, type RibbonSelect, type RibbonGallery,
 } from './ribbonModel'
 import {
-  rovingIndex, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
+  rovingIndex, nextEnabledIndex, firstFocusIndex, tabClosesPopover, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
 } from './ribbonNav'
-import { subscribeRibbonNotices } from './ribbonNotice'
+import { subscribeRibbonNotices, type RibbonNotices } from './ribbonNotice'
 import './Ribbon.css'
 
 export interface RibbonProps {
@@ -26,6 +26,8 @@ export interface RibbonProps {
   onDone?: () => void
   /** Accessible name of the whole ribbon. */
   label?: string
+  /** A private notice channel (createRibbonNotices); default: the shared module channel. */
+  notices?: RibbonNotices
 }
 
 interface Ctx {
@@ -98,6 +100,8 @@ function useRoving(ref: RefObject<HTMLElement | null>) {
     const list = controls()
     const cur = list.find((e) => e.dataset.rv === active.current) ?? list[0]
     root.querySelectorAll<HTMLElement>('[data-rv]').forEach((e) => {
+      // controls inside an open popover keep their natural tab order
+      if (e.closest('[data-pop-root]')) return
       e.tabIndex = e === cur ? 0 : -1
     })
   }, [ref, controls])
@@ -155,9 +159,19 @@ function Popover({
   }, [anchor, ctx.boundary])
   // Focus the selected (or first) item once the popover is placed and visible.
   const placed = pos !== null
+  const popItems = (): HTMLElement[] => {
+    const root = ref.current
+    if (!root) return []
+    return Array.from(root.querySelectorAll<HTMLElement>('[data-pop], [data-rv]')).filter((e) => e.closest('[data-pop-root]') === root)
+  }
+  const isOff = (e: HTMLElement) => (e as HTMLButtonElement).disabled === true
   useEffect(() => {
     if (!placed) return
-    ref.current?.querySelector<HTMLElement>('[aria-selected="true"], [data-pop]')?.focus()
+    const items = popItems()
+    const sel = items.findIndex((e) => e.getAttribute('aria-selected') === 'true')
+    const at = firstFocusIndex(items.map(isOff), sel)
+    items[at]?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placed])
   useEffect(() => {
     const down = (e: PointerEvent) => {
@@ -182,13 +196,14 @@ function Popover({
       return
     }
     if (e.key === 'Tab') {
-      onClose(true)
+      // a dialog popover lets Tab walk its controls (and out); menus and lists close
+      if (tabClosesPopover(role)) onClose(true)
       return
     }
-    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-pop]') ?? [])
-    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')
+    const items = popItems()
+    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-pop], [data-rv]')
     if (!items.length || (e.target as HTMLElement).tagName === 'INPUT') return
-    const next = rovingIndex(e.key, target ? items.indexOf(target) : -1, items.length)
+    const next = nextEnabledIndex(e.key, target ? items.indexOf(target) : -1, items.map(isOff))
     if (next === null) return
     e.preventDefault()
     e.stopPropagation()
@@ -204,6 +219,11 @@ function Popover({
       aria-label={label}
       style={style}
       onKeyDown={onKeyDown}
+      onBlur={(e) => {
+        // focus walked out of the popover (and not back onto its own trigger): close without stealing it back
+        const to = e.relatedTarget as Node | null
+        if (to && !ref.current?.contains(to) && !anchor.current?.contains(to)) onClose(false)
+      }}
       onMouseDown={(e) => {
         // keep editor focus, except where the field itself needs the pointer
         if (!/^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName)) e.preventDefault()
@@ -272,7 +292,7 @@ function ButtonControl({ item, ctx }: { item: Extract<RibbonControl, { kind: 'bu
 }
 
 // Opens a popover under a trigger; the trigger keeps focus handling uniform.
-function usePopover(ctx: Ctx) {
+function usePopover() {
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLSpanElement | null>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
@@ -280,13 +300,12 @@ function usePopover(ctx: Ctx) {
     setOpen(false)
     if (refocus) trigger.current?.focus()
   }, [])
-  void ctx
   return { open, setOpen, anchor, trigger, close }
 }
 
 function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
-  const pop = usePopover(ctx)
+  const pop = usePopover()
   const current = item.options.find((o) => o.value === item.value)
   const showText = !ctx.compact
   const showIcon = ctx.compact || item.id !== 'font-family'
@@ -309,6 +328,7 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown' && !pop.open) {
             e.preventDefault()
+            e.stopPropagation() // inside a popover, opening this list wins over moving focus
             pop.setOpen(true)
           }
         }}
@@ -336,7 +356,7 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
 
 function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
-  const pop = usePopover(ctx)
+  const pop = usePopover()
   const pick = (v: string) => {
     pop.close(false)
     ctx.run(() => item.onChange(v))
@@ -475,7 +495,7 @@ function NumberInput({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
 
 function NumberControl({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
-  const pop = usePopover(ctx)
+  const pop = usePopover()
   if (!ctx.compact) {
     return (
       <span className="de-rnum-wrap" data-component="ribbon-button">
@@ -516,7 +536,7 @@ function NumberControl({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
 
 function ColorControl({ item, ctx }: { item: RibbonColor; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
-  const pop = usePopover(ctx)
+  const pop = usePopover()
   const pick = (v: string | null) => {
     pop.close(false)
     ctx.run(() => item.onChange(v))
@@ -622,7 +642,7 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
   // Each control is 28px + 2px gap; the row has 8px padding each side.
   const capacity = Math.floor((width - 16) / 30)
   const { shown, overflow } = overflowSplit(all, capacity, (c) => controlSlots(c.kind))
-  const pop = usePopover(ctx)
+  const pop = usePopover()
   return (
     <div
       ref={ref}
@@ -668,7 +688,7 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
   )
 }
 
-export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: RibbonProps) {
+export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', notices }: RibbonProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = useWidth(rootRef)
   const wasNarrow = useRef(false)
@@ -677,7 +697,7 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: 
   const [notice, setNotice] = useState<string | null>(null)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const off = subscribeRibbonNotices((m) => {
+    const off = (notices ? notices.subscribe : subscribeRibbonNotices)((m) => {
       setNotice(m)
       clearTimeout(timer)
       timer = setTimeout(() => setNotice(null), 4000)
@@ -686,7 +706,7 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: 
       off()
       clearTimeout(timer)
     }
-  }, [])
+  }, [notices])
   const uid = useId()
   const [tabId, setTabId] = useState<string>(ribbon.tabs[0]?.id ?? '')
   const tab = ribbon.tabs.find((t) => t.id === tabId) ?? ribbon.tabs[0]

@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view'
 import MarkdownEditor from './editor/MarkdownEditor'
 import Ribbon from './ribbon/Ribbon'
 import { buildEditorRibbon } from './ribbon/ribbonState'
+import { createRibbonNotices } from './ribbon/ribbonNotice'
 import { ribbonToToolbarCommands } from './ribbon/ribbonModel'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
@@ -621,8 +622,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // The editor's ribbon, rebuilt from the live editor state on every render
   // (which the rAF-throttled view-update tick drives). Hosted: it is flattened
   // to the ToolbarCommand list; unhosted: drawn in place below.
+  // This viewer's own notice channel, so two viewers on a page never show each other's messages.
+  const ribbonNotices = useMemo(() => createRibbonNotices(), [])
   const editorRibbon = useMemo(
-    () => (hasEditor ? buildEditorRibbon(editorView, { readOnly: props.editorReadOnly }) : null),
+    () => (hasEditor ? buildEditorRibbon(editorView, { readOnly: props.editorReadOnly, notify: ribbonNotices.notify }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hasEditor, editorView, props.editorReadOnly, editorTick]
   )
@@ -699,16 +702,29 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // zoom is accounted for). Edit mode: caret to the heading line, revealed.
   const scrollTarget = props.scrollToHeadingId
   const scrollNonce = scrollTarget?.nonce
+  // Act once per nonce: re-running for another reason (view -> edit while the
+  // host still passes the old {id, nonce}) must not jump or steal focus. The
+  // nonce present at mount counts as already handled.
+  const handledNonce = useRef<number | undefined>(scrollNonce)
   useEffect(() => {
     if (!scrollTarget || !isText) return
+    if (scrollTarget.nonce === handledNonce.current) return
+    if (gate.gated) {
+      handledNonce.current = scrollTarget.nonce
+      return
+    }
     const heading = extractHeadings(text).find((x) => x.id === scrollTarget.id)
-    if (!heading) return
+    if (!heading) {
+      handledNonce.current = scrollTarget.nonce
+      return
+    }
     if (hasEditor) {
       if (!editorView) return
       const doc = editorView.state.doc.toString()
       const pos = Math.min(cpToUtf16(doc, heading.offset), doc.length)
       editorView.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 }) })
       editorView.focus()
+      handledNonce.current = scrollTarget.nonce
       return
     }
     const root = contentRef.current?.querySelector<HTMLElement>('.document-viewer-text')
@@ -720,9 +736,13 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       return el ? Number(el.getAttribute('data-start')) : null
     })
     const idx = headingBlockIndex(starts, lineRangeAt(text, heading.offset).end)
-    if (idx < 0) return
+    if (idx < 0) {
+      handledNonce.current = scrollTarget.nonce
+      return
+    }
     const top = blocks[idx].getBoundingClientRect().top - scroller.getBoundingClientRect().top
     scroller.scrollTop += top - 8
+    handledNonce.current = scrollTarget.nonce
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollNonce, hasEditor && !!editorView])
   const showEditorBar = hasEditor && caps.editorBar
@@ -747,7 +767,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           {gate.placeholder}
         </div>
       )}
-      {showEditorBar && editorRibbon && <Ribbon ribbon={editorRibbon} icons={iconRef} onDone={focusEditor} />}
+      {showEditorBar && editorRibbon && <Ribbon ribbon={editorRibbon} icons={iconRef} onDone={focusEditor} notices={ribbonNotices} />}
       <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}${paged ? ' document-viewer-scroll-fit' : ''}`} ref={scrollRef}>
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}${gate.contentHidden ? ' document-viewer-content-hidden' : ''}`}
