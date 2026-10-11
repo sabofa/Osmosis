@@ -167,3 +167,25 @@ export function clampNumber(n: number, min: number, max: number): number | null 
   if (!Number.isFinite(n)) return null
   return Math.min(max, Math.max(min, n))
 }
+
+/** The slice of an element rovingOwner needs (so it is testable without a DOM). */
+export interface RovingNode {
+  hasAttribute(name: string): boolean
+  parentElement: RovingNode | null
+}
+
+/**
+ * The element a roving/popover key event belongs to: walking up from `target`,
+ * the first node carrying one of `attrs` ("data-rv", "data-pop"). Adapter
+ * territory ends the walk: a node inside `[data-adapter-slot]` / `[data-adapter]`
+ * that does not carry the attribute itself is NOT part of the roving set, even
+ * when a roving control encloses it (adapter-injected buttons opt in with
+ * data-rv). Returns null for "not ours: leave the key alone".
+ */
+export function rovingOwner<T extends RovingNode>(target: T | null, attrs: readonly string[] = ['data-rv']): T | null {
+  for (let el: RovingNode | null = target; el; el = el.parentElement) {
+    if (attrs.some((a) => el!.hasAttribute(a))) return el as T
+    if (el.hasAttribute('data-adapter-slot') || el.hasAttribute('data-adapter')) return null
+  }
+  return null
+}

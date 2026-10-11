@@ -16,3 +16,14 @@ export type {
   GraphView,
 } from './types'
 export type { OutlineHeading } from './outline'
+export type {
+  DocumentAdapter,
+  AdapterContext,
+  AdapterBlock,
+  BlockDecoration,
+  AdapterEvent,
+  AdapterChromeHooks,
+  ChromePart,
+  ChromePartKind,
+  PartDecoration,
+} from './adapter/types'

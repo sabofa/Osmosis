@@ -7,7 +7,14 @@ import type { ReactNode } from 'react'
  * referentially stable (memoised): the viewer re-publishes whenever the
  * identity of `toolbar` or `layers` changes.
  */
-export type DocumentHost = Pick<import('engine-host').EngineHost, 'icons' | 'toolbar' | 'layers'>
+export type DocumentHost = Pick<import('engine-host').EngineHost, 'icons' | 'toolbar' | 'layers'> & {
+  /**
+   * The theme adapter (src/adapter/types.ts). Additive and optional. engine-host
+   * should add `adapter?: DocumentAdapter` to EngineHost once it adopts the
+   * types; until then the shell passes it on the host object it hands the viewer.
+   */
+  adapter?: import('./adapter/types').DocumentAdapter
+}
 
 export interface DocumentViewerAsset {
   type: 'text' | 'file'
