@@ -18,12 +18,14 @@ export interface DemoState {
   unmounts: number
   clicks: number
   highlightCalls: number
+  /** css() calls: the adapter derivation (must not repeat on re-render with an inline host). */
+  cssCalls: number
   events: unknown[]
 }
 
 export function demoState(): DemoState {
   const w = window as unknown as { __demo?: DemoState }
-  return (w.__demo ??= { inits: 0, cleanups: 0, disposes: 0, mounts: 0, unmounts: 0, clicks: 0, highlightCalls: 0, events: [] })
+  return (w.__demo ??= { inits: 0, cleanups: 0, disposes: 0, mounts: 0, unmounts: 0, clicks: 0, highlightCalls: 0, cssCalls: 0, events: [] })
 }
 
 export const demoAdapter: DocumentAdapter = {
@@ -42,6 +44,7 @@ export const demoAdapter: DocumentAdapter = {
     return { ...vars, '--demo-var': 'on' }
   },
   css() {
+    demoState().cssCalls++
     return '.document-viewer { --demo-css: 1; }'
   },
   highlightCss(_color, defaultCss) {
@@ -100,6 +103,30 @@ export const demoAdapter: DocumentAdapter = {
   },
 }
 
+function Thrower(): ReactNode {
+  throw new Error('bad adapter: render throws on purpose')
+}
+
+// ?adapter=bad: every way a renderPart / decoratePart result can be unrenderable.
+// The viewer must stay intact: settings (renderPart -> `{}`) and zoom (renderPart
+// -> a component that throws while rendering) fall back to the default node,
+// ribbon-group (decoratePart before -> a throwing component) loses only its
+// decoration. Each is logged once.
+export const badAdapter: DocumentAdapter = {
+  id: 'bad',
+  chrome: {
+    renderPart(part) {
+      if (part.kind === 'settings') return {} as unknown as ReactNode
+      if (part.kind === 'zoom') return <Thrower />
+      return null
+    },
+    decoratePart(part) {
+      if (part.kind === 'ribbon-group') return { before: <Thrower />, after: <Thrower /> }
+      return null
+    },
+  },
+}
+
 // window.__demoSet(false) removes the adapter from the viewer (init cleanup /
 // dispose / part cleanups must run), __demoSet(true) puts it back;
 // window.__demoGate(false) unmounts the whole viewer (real unmount).
@@ -112,10 +139,11 @@ if (typeof window !== 'undefined') {
 }
 const subscribe = (f: () => void) => { store.subs.add(f); return () => { store.subs.delete(f) } }
 
-/** The adapter selected by ?adapter=demo (and not switched off), else undefined. */
+/** The adapter selected by ?adapter=demo|bad (and not switched off), else undefined. */
 export function useDemoAdapter(): DocumentAdapter | undefined {
   const on = useSyncExternalStore(subscribe, () => store.on)
-  return on && new URLSearchParams(location.search).get('adapter') === 'demo' ? demoAdapter : undefined
+  const which = new URLSearchParams(location.search).get('adapter')
+  return on && which === 'demo' ? demoAdapter : on && which === 'bad' ? badAdapter : undefined
 }
 
 /** Renders children unless window.__demoGate(false) unmounted them. */

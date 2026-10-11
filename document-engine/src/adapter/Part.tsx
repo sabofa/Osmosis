@@ -13,7 +13,7 @@
 //   when the adapter defines mountPart. React never gives them children.
 import { createElement, Fragment, useCallback, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { ChromePart } from './types'
-import { partAttr, SLOT_PART_KINDS, useAdapterHooks } from './useAdapter'
+import { AdapterBoundary, partAttr, SLOT_PART_KINDS, useAdapterHooks } from './useAdapter'
 
 export interface PartBase {
   /** The component's own ref to its root (object or callback; kept in sync). */
@@ -64,6 +64,8 @@ export function usePart(part: ChromePart, base: PartBase = {}): PartHandle {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hooks, part.kind, part.id, st?.active, st?.disabled, st?.open])
 
+  const adapter = hooks.adapter
+  const boundary = (node: ReactNode, hook: string) => createElement(AdapterBoundary, { adapter, hook, fallback: null }, node)
   const slots = hooks.hasMount && SLOT_PART_KINDS.includes(part.kind)
   const props: Record<string, unknown> = { ...(deco?.attrs ?? {}), ref: setRef, 'data-part': partAttr(part) }
   const className = joinClass(base.className, deco?.className)
@@ -77,7 +79,7 @@ export function usePart(part: ChromePart, base: PartBase = {}): PartHandle {
           Fragment,
           null,
           slots ? createElement('span', { 'data-adapter-slot': 'before', 'data-adapter': '', key: 'sb' }) : null,
-          deco?.before ? createElement('span', { 'data-adapter': '', key: 'b', style: { display: 'contents' } }, deco.before) : null,
+          deco?.before ? createElement('span', { 'data-adapter': '', key: 'b', style: { display: 'contents' } }, boundary(deco.before, 'chrome.decoratePart.before')) : null,
         )
       : null
   const trail =
@@ -85,9 +87,13 @@ export function usePart(part: ChromePart, base: PartBase = {}): PartHandle {
       ? createElement(
           Fragment,
           null,
-          deco?.after ? createElement('span', { 'data-adapter': '', key: 'a', style: { display: 'contents' } }, deco.after) : null,
+          deco?.after ? createElement('span', { 'data-adapter': '', key: 'a', style: { display: 'contents' } }, boundary(deco.after, 'chrome.decoratePart.after')) : null,
           slots ? createElement('span', { 'data-adapter-slot': 'after', 'data-adapter': '', key: 'sa' }) : null,
         )
       : null
-  return { props, lead, trail, wrap: (node) => hooks.render(part, node) }
+  return { props, lead, trail, wrap: (node) => {
+      const r = hooks.render(part, node)
+      // Only an adapter-made replacement needs the boundary; the default node renders as it always did.
+      return r === node ? node : createElement(AdapterBoundary, { adapter, hook: 'chrome.renderPart', fallback: node }, r)
+    } }
 }

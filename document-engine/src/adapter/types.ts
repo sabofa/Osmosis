@@ -79,14 +79,15 @@ export interface AdapterChromeHooks {
    * After a part's element is mounted (and again when the adapter or the part's
    * state changes; not on every render). Free DOM access, including the empty
    * `[data-adapter-slot="before|after"]` spans of ribbon / ribbon-group /
-   * ribbon-item parts, which React never touches. Return a cleanup.
+   * ribbon-item parts, which React never touches. Return a cleanup SYNCHRONOUSLY: an async hook is tolerated (its rejection is reported) but its resolved cleanup is ignored.
    */
-  mountPart?(el: HTMLElement, part: ChromePart, ctx: AdapterContext): void | (() => void)
+  mountPart?(el: HTMLElement, part: ChromePart, ctx: AdapterContext): void | (() => void) | Promise<unknown>
 }
 
 export interface DocumentAdapter {
   id: string
-  init?(ctx: AdapterContext): void | (() => void)
+  /** Return a cleanup synchronously (an async init's resolved value is ignored). */
+  init?(ctx: AdapterContext): void | (() => void) | Promise<unknown>
   tokens?(tokens: DocumentTokens, ctx: AdapterContext): DocumentTokens
   cssVars?(vars: Record<string, string>, ctx: AdapterContext): Record<string, string>
   css?(ctx: AdapterContext): string

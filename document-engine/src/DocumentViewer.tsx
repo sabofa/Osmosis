@@ -528,7 +528,8 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       el.removeEventListener('scroll', onScroll)
       cancelAnimationFrame(raf)
     }
-  }, [adapter, emitAdapter])
+    // isPdf / isImage: switching prose <-> PDF may swap the scroll element, so re-attach.
+  }, [adapter, emitAdapter, isPdf, isImage])
   // 'edit' (kind 'type') once per loaded asset; 'save' is host-driven, so not emitted here.
   const editedRef = useRef(false)
   useEffect(() => {

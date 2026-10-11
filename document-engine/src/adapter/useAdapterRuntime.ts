@@ -15,7 +15,7 @@ export function validTokens(t: unknown): t is DocumentTokens {
 export function makeContext(
   rootRef: RefObject<HTMLElement | null>,
   tokens: DocumentTokens,
-  p: { interaction: Interaction; chrome: Chrome; kind: AdapterContext['kind']; host: unknown },
+  p: { interaction: Interaction; chrome: Chrome; kind: AdapterContext['kind']; host?: unknown; getHost?: () => unknown },
 ): AdapterContext {
   const ctx = {
     mode: tokens.mode,
@@ -24,8 +24,9 @@ export function makeContext(
     kind: p.kind,
     tokens,
     alphas: tokens.alphas,
-    host: p.host,
   } as AdapterContext
+  // host is read lazily (latest value) so a host object that changes identity every render never invalidates the context.
+  Object.defineProperty(ctx, 'host', { enumerable: true, get: () => (p.getHost ? p.getHost() : p.host) })
   // root is read lazily: child layout effects run before the viewer's own ref is attached.
   Object.defineProperty(ctx, 'root', { enumerable: true, get: () => rootRef.current as HTMLElement })
   return ctx
@@ -45,6 +46,56 @@ export interface AdapterRuntime {
   emit(e: AdapterEvent): void
 }
 
+type RuntimeParams = { interaction: Interaction; chrome: Chrome; kind: AdapterContext['kind']; getHost: () => unknown }
+
+/** Everything the viewer derives from the adapter. Pure; `getHost` is read lazily by the context. */
+export function deriveAdapterRuntime(
+  adapter: DocumentAdapter | null | undefined,
+  rootRef: RefObject<HTMLElement | null>,
+  input: DocumentTokens,
+  p: RuntimeParams,
+): Omit<AdapterRuntime, 'emit'> {
+  let tokens = input
+  if (adapter && typeof adapter.tokens === 'function') {
+    const ctxIn = makeContext(rootRef, input, p)
+    const out = safeCall<unknown>(adapter, 'tokens', () => adapter.tokens!(input, ctxIn), input)
+    if (validTokens(out)) tokens = out
+  }
+  const ctx = makeContext(rootRef, tokens, p)
+  const base = tokensToCssVars(tokens)
+  const vars =
+    adapter && typeof adapter.cssVars === 'function'
+      ? sanitizeVars(safeCall<unknown>(adapter, 'cssVars', () => adapter.cssVars!({ ...base }, ctx), base), base)
+      : base
+  let cssText = ''
+  if (adapter) {
+    const a = typeof adapter.css === 'function' ? safeCall<unknown>(adapter, 'css', () => adapter.css!(ctx), '') : ''
+    const c = typeof adapter.chrome?.css === 'function' ? safeCall<unknown>(adapter, 'chrome.css', () => adapter.chrome!.css!(ctx), '') : ''
+    cssText = [a, c].filter((s): s is string => typeof s === 'string' && s.trim() !== '').join('\n')
+  }
+  const state: AdapterState | null = adapter ? { adapter, ctx } : null
+  const highlightHook =
+    adapter && typeof adapter.highlightCss === 'function'
+      ? (id: string, defaultCss: string): string => {
+          const r = safeCall<unknown>(adapter, 'highlightCss', () => adapter.highlightCss!(id, defaultCss, ctx), defaultCss)
+          return typeof r === 'string' ? r : defaultCss
+        }
+      : undefined
+  return { tokens, vars, cssText, state, highlightHook }
+}
+
+/**
+ * The memo dependencies of the derivation: only values the derivation really
+ * reads. `host` is deliberately absent (the shell may pass a fresh inline object
+ * every render; the context reads it lazily through a ref).
+ */
+export function runtimeDeps(
+  adapter: DocumentAdapter | null | undefined, rootRef: RefObject<HTMLElement | null>, input: DocumentTokens,
+  p: { interaction: Interaction; chrome: Chrome; kind: AdapterContext['kind'] },
+): unknown[] {
+  return [adapter, rootRef, input, p.interaction, p.chrome, p.kind]
+}
+
 export function useAdapterRuntime(
   adapter: DocumentAdapter | null | undefined,
   rootRef: RefObject<HTMLElement | null>,
@@ -52,49 +103,35 @@ export function useAdapterRuntime(
   p: { interaction: Interaction; chrome: Chrome; kind: AdapterContext['kind']; host: unknown },
 ): AdapterRuntime {
   const { interaction, chrome, kind, host } = p
-  const derived = useMemo(() => {
-    let tokens = input
-    if (adapter && typeof adapter.tokens === 'function') {
-      const ctxIn = makeContext(rootRef, input, { interaction, chrome, kind, host })
-      const out = safeCall<unknown>(adapter, 'tokens', () => adapter.tokens!(input, ctxIn), input)
-      if (validTokens(out)) tokens = out
-    }
-    const ctx = makeContext(rootRef, tokens, { interaction, chrome, kind, host })
-    const base = tokensToCssVars(tokens)
-    const vars =
-      adapter && typeof adapter.cssVars === 'function'
-        ? sanitizeVars(safeCall<unknown>(adapter, 'cssVars', () => adapter.cssVars!({ ...base }, ctx), base), base)
-        : base
-    let cssText = ''
-    if (adapter) {
-      const a = typeof adapter.css === 'function' ? safeCall<unknown>(adapter, 'css', () => adapter.css!(ctx), '') : ''
-      const c = typeof adapter.chrome?.css === 'function' ? safeCall<unknown>(adapter, 'chrome.css', () => adapter.chrome!.css!(ctx), '') : ''
-      cssText = [a, c].filter((s): s is string => typeof s === 'string' && s.trim() !== '').join('\n')
-    }
-    const state: AdapterState | null = adapter ? { adapter, ctx } : null
-    const highlightHook =
-      adapter && typeof adapter.highlightCss === 'function'
-        ? (id: string, defaultCss: string): string => {
-            const r = safeCall<unknown>(adapter, 'highlightCss', () => adapter.highlightCss!(id, defaultCss, ctx), defaultCss)
-            return typeof r === 'string' ? r : defaultCss
-          }
-        : undefined
-    return { tokens, vars, cssText, state, highlightHook }
-  }, [adapter, input, rootRef, interaction, chrome, kind, host])
+  const hostRef = useRef(host)
+  hostRef.current = host
+  const getHost = useCallback(() => hostRef.current, [])
+  const derived = useMemo(
+    () => deriveAdapterRuntime(adapter, rootRef, input, { interaction, chrome, kind, getHost }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    runtimeDeps(adapter, rootRef, input, { interaction, chrome, kind }),
+  )
 
   // Latest adapter/context for handlers that must not resubscribe.
   const latest = useRef({ adapter, state: derived.state })
   latest.current = { adapter, state: derived.state }
 
   // init once per adapter identity; its cleanup, then dispose(), on unmount / swap.
+  // Cleanups must be RETURNED SYNCHRONOUSLY from init (an async init's resolved
+  // cleanup is ignored). dispose() only runs for an adapter whose init ran.
+  // React StrictMode (dev) replays mount effects: init -> cleanup -> dispose -> init
+  // runs once on mount; adapters must tolerate that (init/dispose are re-entrant).
+  // That synthetic cleanup is not distinguishable from a real unmount here.
   useEffect(() => {
     if (!adapter) return
     const ctx = latest.current.state?.ctx
-    let cleanup: void | (() => void)
-    if (ctx && typeof adapter.init === 'function') cleanup = safeCall<void | (() => void)>(adapter, 'init', () => adapter.init!(ctx), undefined)
+    let cleanup: void | Promise<unknown> | (() => void)
+    let inited = false
+    if (ctx && typeof adapter.init === 'function') cleanup = safeCall<void | Promise<unknown> | (() => void)>(adapter, 'init', () => adapter.init!(ctx), undefined)
+    inited = true
     return () => {
       if (typeof cleanup === 'function') safeCall(adapter, 'init.cleanup', () => { (cleanup as () => void)() }, undefined)
-      if (typeof adapter.dispose === 'function') safeCall(adapter, 'dispose', () => { adapter.dispose!() }, undefined)
+      if (inited && typeof adapter.dispose === 'function') safeCall(adapter, 'dispose', () => { adapter.dispose!() }, undefined)
     }
   }, [adapter])
 

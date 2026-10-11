@@ -268,7 +268,12 @@ function edRange(needle: string, text: string): { start: number; end: number; qu
   return { start, end: start + cp(needle), quote: needle }
 }
 
-function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHost | undefined }): ReactNode {
+// ?inlinehost=1: the host object is a fresh copy on every render (the adapter runtime must not re-derive).
+const freshHost = (host: DocumentHost | undefined): DocumentHost | undefined =>
+  host && new URLSearchParams(location.search).has('inlinehost') ? { ...host } : host
+
+function EditorCase({ tokens, host: hostIn }: { tokens: DocumentTokens; host: DocumentHost | undefined }): ReactNode {
+  const host = freshHost(hostIn)
   const [text, setText] = useState(EDITOR_MD)
   const [hl, setHl] = useState<DocumentHighlight[]>(() => [
     { id: 'above', color: 'yellow', ...edRange('Intro line', EDITOR_MD) },
@@ -637,7 +642,7 @@ export default function ReviewPage(): ReactNode {
           <EditorCase tokens={tokens} host={host} />
         ) : (
         <DemoGate><DocumentViewer
-          host={host}
+          host={freshHost(host)}
           adapter={demoAdapter}
           asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: kase === 'graphs' ? GRAPHS_MD : MD, extractedText: kase === 'graphs' ? GRAPHS_MD : MD }}
           initialZoom={initialZoom}
