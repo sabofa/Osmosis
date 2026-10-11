@@ -223,6 +223,46 @@ function thinLabels(
   }
 }
 
+// Per-axis thinning ignores the other axis, so x labels and y labels can overprint (typically in the corner).
+// While an x box and a y box overlap, drop one: a minor loses to a major; otherwise the y label goes (x labels
+// own the bottom row). An axis never loses its last label.
+function resolveCrossAxis(
+  xs: GridLabel[],
+  ys: GridLabel[],
+  bounds: Bounds,
+  size: { widthPx: number; heightPx: number },
+): { x: GridLabel[]; y: GridLabel[] } {
+  let x = xs
+  let y = ys
+  const PAD = 2
+  for (let guard = 0; guard < 1000 && x.length && y.length; guard++) {
+    const bx = labelBoxesPx(x, bounds, size.widthPx, size.heightPx)
+    const by = labelBoxesPx(y, bounds, size.widthPx, size.heightPx)
+    let hit: [number, number] | null = null
+    outer: for (let i = 0; i < bx.length; i++) {
+      for (let j = 0; j < by.length; j++) {
+        const a = bx[i]
+        const b = by[j]
+        if (a.x < b.x + b.w + PAD && b.x < a.x + a.w + PAD && a.y < b.y + b.h + PAD && b.y < a.y + a.h + PAD) {
+          hit = [i, j]
+          break outer
+        }
+      }
+    }
+    if (!hit) break
+    const [i, j] = hit
+    let dropY = !(x[i].kind === 'minor' && y[j].kind === 'major')
+    if (dropY && y.length < 2) dropY = false
+    if (!dropY && x.length < 2) {
+      if (y.length < 2) break // both axes down to their only label: keep both
+      dropY = true
+    }
+    if (dropY) y = y.filter((_, k) => k !== j)
+    else x = x.filter((_, k) => k !== i)
+  }
+  return { x, y }
+}
+
 // Everything the grid draws, as data: line positions and positioned labels.
 // `bounds` are the camera's (the plane being viewed); on a log axis that plane is
 // (log10 x, log10 y), so ticks are computed on the world values and drawn at
@@ -269,8 +309,9 @@ export function gridPlan(
   const thin = (ls: GridLabel[], step: number) => thinLabels(ls, step, inside, bounds, size)
   const shiftedX = thin(labelsX, ticks.step?.x ?? 0)
   const shiftedY = thin(labelsY, ticks.step?.y ?? 0)
-  labelsX.splice(0, labelsX.length, ...shiftedX)
-  labelsY.splice(0, labelsY.length, ...shiftedY)
+  const resolved = resolveCrossAxis(shiftedX, shiftedY, bounds, size)
+  labelsX.splice(0, labelsX.length, ...resolved.x)
+  labelsY.splice(0, labelsY.length, ...resolved.y)
   // A title equal to its axis default ('x' / 'y') counts as not authored, so
   // plots without @titles do not change. An author who wants a title that is
   // literally "x" can write "x " or "x (m)".

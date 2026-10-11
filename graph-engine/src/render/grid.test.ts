@@ -287,3 +287,24 @@ describe('gridPlan labels at a deep-zoom window', () => {
     })
   }
 })
+
+describe('gridPlan: x and y labels never overlap each other', () => {
+  const size = { widthPx: 1200, heightPx: 800 }
+  const check = (b: { xMin: number; xMax: number; yMin: number; yMax: number }, scales: { x?: 'log' | 'linear'; y?: 'log' | 'linear' }, m: { x: number; y: number }) => {
+    const config = defaultConfig()
+    Object.assign(config.scales, scales)
+    const plan = gridPlan(b, config, size, m, m)
+    expect(plan.labelsX.length).toBeGreaterThan(0)
+    expect(plan.labelsY.length).toBeGreaterThan(0)
+    const bx = labelBoxesPx(plan.labelsX, b, size.widthPx, size.heightPx)
+    const by = labelBoxesPx(plan.labelsY, b, size.widthPx, size.heightPx)
+    for (const a of bx)
+      for (const c of by) {
+        const hit = a.x < c.x + c.w && c.x < a.x + a.w && a.y < c.y + c.h && c.y < a.y + a.h
+        expect(hit).toBe(false)
+      }
+  }
+  it('log-log 0.1..10 x 0.01..1000', () => check({ xMin: -1, xMax: 1, yMin: -2, yMax: 3 }, { x: 'log', y: 'log' }, { x: 0.01, y: 0.01 }))
+  it('semi-log 0..10 x 1e-4..10', () => check({ xMin: 0, xMax: 10, yMin: -4, yMax: 1 }, { y: 'log' }, { x: 0.01, y: 0.01 }))
+  it('deep zoom', () => check({ xMin: 999.99999999, xMax: 1000.00000001, yMin: 999.99999999, yMax: 1000.00000001 }, {}, { x: 4e-10, y: 2e-10 }))
+})
