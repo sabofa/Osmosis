@@ -46,6 +46,12 @@ Removed: `liveTransform.ts` (commitDue, overscan, scale drift), `onLive`/`oversc
 
 ## Open, in order
 
+0. **QUEUED, do not start until the inventory sends a start message** (Learn `spec/osmosis/workspace/frontend/08-port-review.md` §7.2; low priority; it may go to a terminal builder per AGENT-SYSTEM §0):
+   - (a) consume `host.tokens.alphas` (the 06 layer alphas, on `main` since `0ec634b`) for the paper, grid and content planes;
+   - (b) a graph frame plus legend and caption, like the demo's figure block (Learn `frontend/live/`).
+
+   **Prerequisite:** `main` (`0ec634b`, deployed) has the tile renderer (`07cea0a`), but NOT `63b50e1` (the planes and the `paperAlpha`/`gridAlpha` props), `cb67a70` or `a661ccd` (the region-highlight bridge fix). These must reach main first, with Ben's go.
+
 1. **Hover and selection look**, not yet checked by eye on tiles. The overlay is drawn into the live svg from hit shapes, and the outermost-class step now only finds elements in the live svg (labels and points).
 2. **The old list's leftovers:**
    - H5 (reduced motion) is moot: nothing is committed any more.
