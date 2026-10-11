@@ -522,3 +522,33 @@ describe('GeometryGroupManager', () => {
     })
   })
 })
+
+// On a plot whose axes have different px-per-unit, the ribbon's on-screen thickness must follow the curvature
+// taper (by design: thin on straight runs, heavy through a turn) and nothing else: the same on-screen shape drawn
+// on equal axes gets the same pixel thickness at every vertex, in the same direction-independent way.
+describe('GeometryGroupManager: ribbon thickness on unequal axes', () => {
+  const W = 1200
+  const H = 700
+  const sample = (n: number) => Array.from({ length: n }, (_, i) => ({ x: (i / (n - 1)) * 2 * Math.PI, y: Math.sin((i / (n - 1)) * 2 * Math.PI) }))
+  const pxWidths = (pts: Vec2[], per: Vec2): number[] => {
+    const mgr = new GeometryGroupManager()
+    mgr.update([{ kind: 'curve', points: pts, color: null }], palette, (px) => px * per.x, { x: 0, y: 0 }, (px) => ({ x: px * per.x, y: px * per.y }))
+    const pos = (mgr.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array as Float32Array
+    return pts.map((_, i) => Math.hypot((pos[i * 6] - pos[i * 6 + 3]) / per.x, (pos[i * 6 + 1] - pos[i * 6 + 4]) / per.y))
+  }
+
+  it('is the same px thickness as the equal-axes drawing of the same on-screen shape', () => {
+    const pts = sample(300)
+    const per = { x: (2 * Math.PI) / W, y: 2.4 / H }
+    const stretched = pxWidths(pts, per)
+    // the identical on-screen shape on equal axes: y expressed in x-pixel units
+    const equal = pxWidths(pts.map((p) => ({ x: p.x, y: (p.y * per.x) / per.y })), { x: per.x, y: per.x })
+    stretched.forEach((w, i) => expect(w).toBeCloseTo(equal[i], 3))
+  })
+
+  it('has the curvature taper range as its only variation (about 1.2 px on flanks to 9.4 px at a peak)', () => {
+    const w = pxWidths(sample(300), { x: (2 * Math.PI) / W, y: 2.4 / H })
+    expect(Math.max(...w)).toBeCloseTo(9.36, 1)
+    expect(Math.min(...w)).toBeLessThan(2.5)
+  })
+})
