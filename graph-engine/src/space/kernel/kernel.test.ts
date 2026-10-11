@@ -10,6 +10,18 @@ function kernelOf(spec: string) {
   return createSpaceKernel(parsed.statements, parsed.config, parsed.statementLines)
 }
 
+describe('createSpaceKernel and @aspect', () => {
+  const surface = 'z = x^2 + y^2 for x in [-1, 1], y in [-1, 1]'
+  it('refuses the 2D ratio a:b with the 3D message', () => {
+    expect(() => kernelOf(`@aspect: 2:1\n${surface}`)).toThrow(
+      '@aspect "a:b" is for 2D plots; a 3D space takes "equal", "auto" or three ratios "a:b:c"',
+    )
+  })
+  it('still builds equal, auto and three ratios', () => {
+    for (const a of ['equal', 'auto', '2:1:1']) expect(kernelOf(`@aspect: ${a}\n${surface}`).scene().marks.length).toBeGreaterThan(0)
+  })
+})
+
 function sceneOf(spec: string): SpaceScene {
   return kernelOf(spec).scene()
 }

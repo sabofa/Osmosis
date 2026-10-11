@@ -1,16 +1,40 @@
 import { applyStyleDirective } from '../style/resolve'
 import { parseFocus } from '../view2d/focus'
 import { GIVENS_POSITIONS, VIEW_NAMES, type FeatureKind, type GivensPosition, type GraphConfig, type ViewName } from './config'
-import { parseSpaceDirective } from '../space/grammar/directives'
+import { piMultiple, parseSpaceDirective } from '../space/grammar/directives'
+import type { TickStep } from '../space/config'
+import { parseExprString } from './parseExpr'
 
 export function isConfigLine(rawLine: string): boolean {
   return rawLine.trim().startsWith('@')
+}
+
+// A positive rational multiple of pi, read by space's own reader; null for
+// anything else (including text that is not an expression at all).
+function piStep(value: string): TickStep | null {
+  try {
+    const pi = piMultiple(parseExprString(value))
+    return pi ? { value: (pi.num * Math.PI) / pi.den, pi } : null
+  } catch {
+    return null
+  }
 }
 
 function parseBoolean(value: string): boolean | null {
   if (value === 'on') return true
   if (value === 'off') return false
   return null
+}
+
+// A log axis cannot show a range that reaches zero or below. Run from both
+// @bounds and @xscale/@yscale, so the directive order does not matter.
+function checkLogBounds(scales: GraphConfig['scales'], b: { xMin: number; xMax: number; yMin: number; yMax: number }): void {
+  if (scales.x === 'log' && b.xMin <= 0) {
+    throw new Error(`@xscale: log needs a positive x range in @bounds, got "${b.xMin}, ${b.xMax}"`)
+  }
+  if (scales.y === 'log' && b.yMin <= 0) {
+    throw new Error(`@yscale: log needs a positive y range in @bounds, got "${b.yMin}, ${b.yMax}"`)
+  }
 }
 
 // Mutates `config` in place with the directive on one "@key: value" line.
@@ -28,6 +52,11 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
 
   const body = rawLine.trim().slice(1) // strip leading "@"
   const colonIdx = body.indexOf(':')
+  // "@lock" is a flag: bare means true.
+  if (colonIdx === -1 && body.trim() === 'lock') {
+    config.lock = true
+    return
+  }
   if (colonIdx === -1) throw new Error(`Expected "@key: value", got "@${body}"`)
 
   const key = body.slice(0, colonIdx).trim()
@@ -60,6 +89,18 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
     }
     case 'xstep':
     case 'ystep': {
+      // A step written as a rational multiple of pi ("pi/2", "2pi",
+      // "3*pi/4") sets the numeric step AND marks the axis in space.ticks, the
+      // field the 2D tick labels read. A plain number is untouched. Whichever
+      // of this and @ticks3d comes later wins space.ticks.x/.y.
+      if (!/^[+-]?(\d+\.?\d*|\.\d+)$/.test(value)) {
+        const pi = piStep(value)
+        if (pi) {
+          config[key] = pi.value
+          config.space.ticks[key === 'xstep' ? 'x' : 'y'] = pi
+          return
+        }
+      }
       const n = Number.parseFloat(value)
       if (!Number.isFinite(n) || n <= 0) throw new Error(`@${key} must be a positive number, got "${value}"`)
       config[key] = n
@@ -72,7 +113,9 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
       }
       const [xMin, xMax, yMin, yMax] = parts
       if (xMin >= xMax || yMin >= yMax) throw new Error(`@bounds min must be less than max, got "${value}"`)
-      config.bounds = { xMin, xMax, yMin, yMax }
+      const next = { xMin, xMax, yMin, yMax }
+      checkLogBounds(config.scales, next)
+      config.bounds = next
       return
     }
     case 'grid':
@@ -201,6 +244,21 @@ export function parseConfigLine(rawLine: string, config: GraphConfig, line = 0):
         throw new Error(`@step-mode must be "nice", "geometric", or "fixed", got "${value}"`)
       }
       config.stepMode = value
+      return
+    }
+    case 'xscale':
+    case 'yscale': {
+      if (value !== 'linear' && value !== 'log') {
+        throw new Error(`@${key} must be "linear" or "log", got "${value}"`)
+      }
+      const next = { ...config.scales, [key === 'xscale' ? 'x' : 'y']: value }
+      if (config.bounds) checkLogBounds(next, config.bounds)
+      config.scales = next
+      return
+    }
+    case 'lock': {
+      if (value !== 'true' && value !== 'false') throw new Error(`@lock must be "true" or "false" (or bare "@lock"), got "${value}"`)
+      config.lock = value === 'true'
       return
     }
     case 'point-labels': {

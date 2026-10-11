@@ -19,7 +19,7 @@ import type { MathScope } from '../../math/scope'
 import { simplify } from '../../math/simplify'
 import { traceImplicitCurve } from '../../render/marchingSquares'
 import type { LineMark } from '../scene/types'
-import { boundNames, boxX, boxY, constant, CURVE_WIDTH, lineStyle, Reads, renameBound, resolution } from './common'
+import { boundNames, boxX, boxY, constant, CURVE_WIDTH, lineStyle, Reads, refuseWhere, renameBound, resolution } from './common'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from './registry'
 
 const DEFAULT_SEGMENTS = 512
@@ -51,12 +51,15 @@ function curveParts(statement: Statement, config: GraphConfig): CurveParts {
     }
     case 'polar': {
       const theta = variable('theta')
+      // The parser's default range (no "for theta in [a, b]", flagged fullTurn) is a full turn in the document's angle
+      // unit: 0 to 360 under @angle: degrees, as the 2D engine does (scene/buildScene.ts); its from and to hold the radian default.
+      const degreesTurn = statement.fullTurn === true && config.angle === 'degrees'
       return {
         ...plain,
         f: [mul(statement.body, call('cos', theta)), mul(statement.body, call('sin', theta)), ZERO],
         param: 'theta',
-        from: statement.from,
-        to: statement.to,
+        from: degreesTurn ? num(0) : statement.from,
+        to: degreesTurn ? num(360) : statement.to,
       }
     }
     case 'space':
@@ -87,13 +90,15 @@ function prepareCondition(condition: IfClause | null, scope: MathScope, reads: R
 
 function prepareCurve(statement: Statement, context: BuildContext): PreparedStatement {
   const { scope, config } = context
+  // y = f(x) if ...: a clause the old shape cannot say is not read in 3D yet.
+  refuseWhere(statement)
   const parts = curveParts(statement, config)
   const segments = resolution(parts.res, config, DEFAULT_SEGMENTS)
   const reads = new Reads(scope)
   const vars = boundNames(1)
   const renamed = parts.f.map((e) => {
     reads.add(e, [parts.param])
-    return renameBound(e, [parts.param])
+    return renameBound(e, [parts.param], scope)
   }) as [Expr, Expr, Expr]
   const r = compileVector(renamed, vars, scope)
   const dr = compileVector(renamed.map((e) => simplify(diff(e, vars[0], scope))) as [Expr, Expr, Expr], vars, scope)
@@ -199,6 +204,7 @@ export function chain(segments: readonly (readonly { x: number; y: number }[])[]
 
 function prepareImplicitCurve(statement: Statement, context: BuildContext): PreparedStatement {
   if (statement.kind !== 'implicit') throw new Error(`not an implicit curve: ${statement.kind}`)
+  refuseWhere(statement)
   const { scope, config } = context
   const reads = new Reads(scope).add(statement.left, ['x', 'y']).add(statement.right, ['x', 'y'])
   const left: CompiledFn = compileScalar(statement.left, ['x', 'y'], scope)

@@ -286,18 +286,17 @@ describe('diff stays small on nested definitions (fix round 2, item 2)', () => {
   for (let k = 7; k >= 1; k--) functions.push([`f${k}`, fn(['s', 't'], `f${k + 1}(s, t) + f${k + 1}(t, s)`)])
   const scope = makeScope({ functions })
 
-  it('depth 7: under 50k nodes before simplify, under 50 ms, with the hand-computed values', () => {
-    const t0 = performance.now()
+  it('depth 7: under 1000 differentiation steps, under 50k nodes before simplify, with the hand-computed values', () => {
+    // The work is counted (steps and nodes), not timed: a wall clock says
+    // nothing on a loaded machine.
     const before = differentiationSteps()
     const dx = diff(p('f1(x, y)'), 'x', scope)
     const dy = diff(p('f1(x, y)'), 'y', scope)
-    const elapsed = performance.now() - t0
     // 109 steps for d/dx, fewer for d/dy (the partials are cached by then);
     // uncached, d/dx alone is 4.5 million
     expect(differentiationSteps() - before).toBeLessThan(1000)
     expect(countNodes(dx)).toBeLessThan(50000)
     expect(countNodes(dy)).toBeLessThan(50000)
-    expect(elapsed).toBeLessThan(50)
     const fx = compileScalar(simplify(dx), ['x', 'y'], scope)
     const fy = compileScalar(simplify(dy), ['x', 'y'], scope)
     // at (2, 1): 64 (4 + 1) = 320 and 64 (4 + 4) = 512; at (1, 2): 64 (4 + 4) = 512 and 64 (1 + 4) = 320

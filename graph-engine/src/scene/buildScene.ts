@@ -1,29 +1,87 @@
+import { compileScalar, freeVariablesDeep } from '../math/compile'
+import { variable } from '../math/expr'
+import { and, compare } from '../math/reserved'
+import type { MathScope } from '../math/scope'
 import type { GraphConfig } from '../parser/config'
-import { compileExpr, evalExpr, type Bindings, type FunctionTable } from '../parser/evalExpr'
-import type { Condition, Statement } from '../parser/types'
-import { traceImplicitCurve, traceImplicitRegion, type Bounds } from '../render/marchingSquares'
+import type { FunctionTable } from '../parser/evalExpr'
+import type { Expr, Statement } from '../parser/types'
+import { logOf, throughScales } from '../plot/frame/rewrite'
+import { scaleOf } from '../plot/frame/scale'
+import { type CurveSpec, sampleCurve, type View } from '../plot/sample/curve'
+import { buildPlotScope } from '../plot/scope'
+import { FULL } from '../plot/sample/tuning'
+import { sampleImplicit } from '../plot/implicit/implicit'
+import { comparisonsOf } from '../plot/implicit/region'
+import { sampleRegion } from '../plot/implicit/regions'
+import type { Sampled, StatementOptions } from '../plot/implicit/types'
+import { chainOf } from './chains'
 import { explicitFeatures, intersectionFeatures, type FeaturePoint } from './featurePoints'
 import { buildConstructions } from './geometry/buildConstructions'
 import { circleCurve, polygonObjects } from './geometry/sceneObjects'
-import { formatCoord } from './format'
-import type { Scene, SceneObject, Vec2 } from './types'
+import { formatCoord, formatForSpan } from './format'
+import type { Bounds, Scene, SceneObject, Vec2 } from './types'
 
-const SAMPLES = 400
-// Full-quality marching-squares resolution for a settled view; buildScene's
-// caller passes a lower value while the user is actively dragging (see
-// GraphViewer.tsx) so the expensive region/implicit-curve sampling backs off
-// during interaction and sharpens back up once it stops.
-const IMPLICIT_RESOLUTION = 140
 const FIELD_DIVISIONS = 18
-// A jump between consecutive samples bigger than this multiple of the
-// visible height is treated as a blow-up (an asymptote), not a steep-but-
-// continuous stretch of the function.
-const ASYMPTOTE_JUMP_FACTOR = 3
+// A config built by hand (a test, a tool) may not say its scales: both linear.
+const LINEAR_SCALES = { x: 'linear', y: 'linear' } as const
+
+// Where a world point lands on the plane being viewed: itself when both axes are linear, else (log10 x, log10 y)
+// per log axis (NaN for a value <= 0 there). `place` is the same but says why it cannot, so a statement is skipped
+// with a note on its line rather than emitting NaN.
+// Documented limit: a straight world segment is not straight on a log plane. Segments, rays, vectors, polygon
+// edges and a scatter's regression line are drawn straight between their mapped endpoints.
+interface Plane {
+  log: boolean
+  scales: { x: 'linear' | 'log'; y: 'linear' | 'log' }
+  toPlane(p: Vec2): Vec2
+  place(p: Vec2): Vec2
+  forwardX(x: number): number
+  forwardY(y: number): number
+  inverseX(u: number): number
+  inverseY(v: number): number
+}
+
+function planeOf(config: GraphConfig): Plane {
+  const scales = config.scales ?? LINEAR_SCALES
+  const sx = scaleOf(scales.x)
+  const sy = scaleOf(scales.y)
+  const log = scales.x === 'log' || scales.y === 'log'
+  const toPlane = (p: Vec2): Vec2 => (log ? { x: sx.forward(p.x), y: sy.forward(p.y) } : p)
+  const place = (p: Vec2): Vec2 => {
+    if (!log) return p
+    const q = toPlane(p)
+    if (Number.isNaN(q.x)) throw new Error("a point at x ≤ 0 can't be drawn on a log axis")
+    if (Number.isNaN(q.y)) throw new Error("a point at y ≤ 0 can't be drawn on a log axis")
+    return q
+  }
+  return { log, scales: { x: scales.x, y: scales.y }, toPlane, place, forwardX: sx.forward, forwardY: sy.forward, inverseX: sx.inverse, inverseY: sy.inverse }
+}
+// The viewport's width, in px, for a caller that does not give one (a test, a tool): the curve sampler
+// works in screen space (a sample per 4 px, a flatness of a quarter of a pixel), so it is told how big the
+// view is. The height then follows the bounds' aspect.
+const DEFAULT_WIDTH_PX = 800
+// What the scene says of a curve whose drawing budget ran out: it is drawn, from what the sampler had, and
+// the author is told it is not the whole picture (spec: "At the cap the curve coarsens and a note says so;
+// it never blanks").
+const BUDGET_NOTE = 'drawn coarsely: this curve needs more detail than its drawing budget allows'
+// And of one the budget left with nothing at all to draw (a curve the twin cannot certify has nothing
+// the cap can keep): the same cause, said as what it is. "drawn coarsely" over a blank would be false.
+const NOT_DRAWN_NOTE = 'not drawn: this curve needs more detail than its drawing budget allows'
+// And of one that is in view and not drawn, with the budget not spent and nothing steep to blame: the sampler could not certify any
+// of it (a staircase of a thousand steps a unit has treads a hundredth of a pixel wide). A blank always says why.
+const NOT_CERTIFIED_NOTE = 'not drawn: this curve could not be certified anywhere in view'
+// A curve that is smooth and rises faster than the sampler can certify (past about 1024:1 on screen, where the twin
+// has nothing to say about it): it is broken wherever that is so, and nothing else says why.
+const TOO_STEEP_NOTE = 'too steep to draw here: the curve rises faster than the sampler can certify'
 
 // One pass over the statements to collect every "k(x) = ..." / "a = 5"
 // definition into a lookup table, before anything else gets built — a
 // definition can be referenced by a statement anywhere else in the spec,
-// not just ones that come after it textually.
+// not just ones that come after it textually. This is the evalExpr-side table,
+// kept for the one user that still evaluates through parser/evalExpr.ts
+// (buildConstructions, shared with the figure engine); everything else in this
+// file, "animate:" paths included, reads the MathScope from plot/scope.ts
+// instead.
 function collectFunctions(statements: Statement[]): FunctionTable {
   const functions: FunctionTable = {}
   for (const statement of statements) {
@@ -36,6 +94,12 @@ function collectFunctions(statements: Statement[]): FunctionTable {
   return functions
 }
 
+// A number from an expression with no variables (a bound, a coordinate, a
+// radius), through the kernel.
+function constant(expr: Expr, scope: MathScope): number {
+  return compileScalar(expr, [], scope)()
+}
+
 // Same "collect everything up front, order doesn't matter" pass as
 // collectFunctions above, for angle:/tick:/right-angle:'s A/B/C point-name
 // references — a labeled point ("A = (x, y)") or a polygon vertex can be
@@ -45,19 +109,19 @@ function collectFunctions(statements: Statement[]): FunctionTable {
 // that failure gets reported once, when the point/polygon statement itself
 // is processed in the main loop below, rather than duplicated for every
 // mark statement that happens to reference it.
-function collectNamedPoints(statements: Statement[], config: GraphConfig, functions: FunctionTable): Map<string, Vec2> {
+function collectNamedPoints(statements: Statement[], scope: MathScope): Map<string, Vec2> {
   const points = new Map<string, Vec2>()
   for (const statement of statements) {
     if (statement.kind === 'point' && statement.label) {
       try {
-        points.set(statement.label, { x: evalExpr(statement.x, {}, config.angle, functions), y: evalExpr(statement.y, {}, config.angle, functions) })
+        points.set(statement.label, { x: constant(statement.x, scope), y: constant(statement.y, scope) })
       } catch {
         // reported when the point statement itself is processed below
       }
     } else if (statement.kind === 'polygon') {
       for (const vertex of statement.vertices) {
         try {
-          points.set(vertex.label, { x: evalExpr(vertex.x, {}, config.angle, functions), y: evalExpr(vertex.y, {}, config.angle, functions) })
+          points.set(vertex.label, { x: constant(vertex.x, scope), y: constant(vertex.y, scope) })
         } catch {
           // reported when the polygon statement itself is processed below
         }
@@ -67,163 +131,136 @@ function collectNamedPoints(statements: Statement[], config: GraphConfig, functi
   return points
 }
 
-// Compiles a condition's bound expression(s) to plain numbers once, up front
-// — they're constants with respect to the sampling loop's variable, so
-// re-evaluating them on every one of ~400 samples (as a naive per-sample
-// evalExpr call would) is pure waste.
-type CompiledCondition =
-  | { kind: 'compare'; op: '<' | '<=' | '>' | '>='; value: number }
-  | { kind: 'range'; lowOp: '<' | '<='; low: number; highOp: '<' | '<='; high: number }
-
-function compileCondition(condition: Condition | null, config: GraphConfig, functions: FunctionTable): CompiledCondition | null {
-  if (!condition) return null
-  if (condition.kind === 'compare') {
-    return { kind: 'compare', op: condition.op, value: evalExpr(condition.value, {}, config.angle, functions) }
-  }
-  return {
-    kind: 'range',
-    lowOp: condition.lowOp,
-    low: evalExpr(condition.low, {}, config.angle, functions),
-    highOp: condition.highOp,
-    high: evalExpr(condition.high, {}, config.angle, functions),
-  }
+// The statement's own domain as a condition Expr, for the sampler: its calc P1 "where" as it
+// is, else its old-shape clause (parser/types.ts Condition) written in the same language — a
+// comparison of the independent variable with the bound, or the two comparisons of a range
+// joined with `and`. The sampler compiles it over the independent variable alone, so a test on
+// the dependent one ("y = x if y > 0") is a compile error on its line, not a silent filter.
+function domainOf(statement: Statement & { kind: 'explicit' }): Expr | null {
+  if (statement.where) return statement.where
+  const clause = statement.condition
+  if (!clause) return null
+  const t = variable(statement.independent)
+  if (clause.kind === 'compare') return compare(clause.op, t, clause.value)
+  // low <(=) t <(=) high
+  return and(compare(clause.lowOp, clause.low, t), compare(clause.highOp, t, clause.high))
 }
 
-function satisfiesCondition(condition: CompiledCondition | null, t: number): boolean {
-  if (!condition) return true
-  if (condition.kind === 'compare') {
-    switch (condition.op) {
-      case '<':
-        return t < condition.value
-      case '<=':
-        return t <= condition.value
-      case '>':
-        return t > condition.value
-      case '>=':
-        return t >= condition.value
-    }
+// The range of a polar or parametric statement as two numbers, low to high. A range written the
+// wrong way round ("for t in [5, 2]") is the same curve traced backwards, and the sampler (which
+// takes low to high) draws what v1 did. A range that is not a number, or has nothing in it, says
+// so on its own line, which "undefined everywhere in view" would not. The exception is an empty
+// range that a @param made (`for t in [0, a]` with the slider at 0): a slider's position is not a
+// mistake in the text, so there is nothing to draw and nothing to say (null). A range written as
+// empty, or made so by a constant, is still the author's to fix.
+function rangeOf(from: Expr, to: Expr, scope: MathScope, param: string): [number, number] | null {
+  const a = constant(from, scope)
+  const b = constant(to, scope)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error(`the range of ${param} is not a number`)
+  if (a === b) {
+    if (readsParam(from, scope) || readsParam(to, scope)) return null
+    throw new Error(`the range of ${param} is empty`)
   }
-  const lowOk = condition.lowOp === '<=' ? t >= condition.low : t > condition.low
-  const highOk = condition.highOp === '<=' ? t <= condition.high : t < condition.high
-  return lowOk && highOk
+  return a < b ? [a, b] : [b, a]
 }
 
-// Features are no longer derived from a curve's sampled points (see
-// featurePoints.ts for why), so this is now just "wrap the samples".
-function curveObject(points: Vec2[], color: string | null): SceneObject {
-  return { kind: 'curve', points, color }
+// Whether an expression reads a @param, directly or through the functions and constants it uses.
+function readsParam(expr: Expr, scope: MathScope): boolean {
+  for (const name of freeVariablesDeep(expr, scope)) if (scope.params.index.has(name)) return true
+  return false
 }
 
-function sampleExplicit(statement: Statement & { kind: 'explicit' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): SceneObject[] {
-  const [lo, hi] = statement.independent === 'x' ? [bounds.xMin, bounds.xMax] : [bounds.yMin, bounds.yMax]
-  const viewSpan = statement.independent === 'x' ? bounds.yMax - bounds.yMin : bounds.xMax - bounds.xMin
-  const body = compileExpr(statement.body, config.angle, functions)
-  const condition = compileCondition(statement.condition, config, functions)
-  const bindings: Bindings = {}
-
-  // Segments split apart wherever the function is undefined OR jumps by a
-  // blow-up-sized amount between adjacent samples — without this, a vertical
-  // asymptote (1/x, tan(x), ...) draws a fake near-vertical line connecting
-  // +infinity to -infinity across the gap instead of an open break.
-  const segments: Vec2[][] = [[]]
-  const asymptoteXs: number[] = []
-  let lastOther: number | null = null
-  let lastT: number | null = null
-
-  for (let i = 0; i <= SAMPLES; i++) {
-    const t = lo + ((hi - lo) * i) / SAMPLES
-    if (!satisfiesCondition(condition, t)) continue
-    try {
-      bindings[statement.independent] = t
-      const other = body(bindings)
-      if (!Number.isFinite(other)) throw new Error('non-finite')
-
-      if (lastOther !== null && Math.abs(other - lastOther) > viewSpan * ASYMPTOTE_JUMP_FACTOR) {
-        if (segments[segments.length - 1].length > 0) segments.push([])
-        if (statement.independent === 'x' && lastT !== null) asymptoteXs.push((lastT + t) / 2)
-      }
-
-      const point = statement.independent === 'x' ? { x: t, y: other } : { x: other, y: t }
-      segments[segments.length - 1].push(point)
-      lastOther = other
-      lastT = t
-    } catch {
-      if (segments[segments.length - 1].length > 0) segments.push([])
-      lastOther = null
-      lastT = null
-    }
-  }
-
-  const objects: SceneObject[] = []
-  for (const segment of segments) {
-    if (segment.length < 2) continue
-    objects.push(curveObject(segment, statement.color))
-  }
-  if (config.asymptotes) {
-    // A pole's approach can itself jump by more than the threshold across
-    // 2-3 adjacent samples (value swings from very-negative to very-positive
-    // in a handful of steps), which without merging shows up as several
-    // near-identical dashed lines stacked right on top of each other instead
-    // of one.
-    const dt = (hi - lo) / SAMPLES
-    const merged: number[] = []
-    for (const x of asymptoteXs) {
-      const last = merged[merged.length - 1]
-      if (last !== undefined && Math.abs(x - last) < dt * 3) merged[merged.length - 1] = (last + x) / 2
-      else merged.push(x)
-    }
-    if (merged.length > 0) {
-      const pairs: [Vec2, Vec2][] = merged.map((x) => [{ x, y: bounds.yMin }, { x, y: bounds.yMax }])
-      objects.push({ kind: 'segments', pairs, dashed: true, color: statement.color ?? 'gray' })
-    }
-  }
-  return objects
+// What the sampler needs besides the statement: the viewport, how fine to be, and where to put
+// what it says (the work it did, and the notes on the statement's line).
+interface CurveContext {
+  view: View
+  scope: MathScope
+  config: GraphConfig
+  quality: 'full' | 'coarse'
+  budget: { points: number; intervals: number } | undefined
+  stats: { points: number; intervals: number }
+  errors: Scene['errors']
 }
 
-function samplePolar(statement: Statement & { kind: 'polar' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
-  const from = evalExpr(statement.from, {}, config.angle, functions)
-  const to = evalExpr(statement.to, {}, config.angle, functions)
-  const body = compileExpr(statement.body, config.angle, functions)
-  const bindings: Bindings = {}
-  const points: Vec2[] = []
-  for (let i = 0; i <= SAMPLES; i++) {
-    const theta = from + ((to - from) * i) / SAMPLES
-    const thetaRad = config.angle === 'degrees' ? (theta * Math.PI) / 180 : theta
-    try {
-      bindings.theta = theta
-      const r = body(bindings)
-      const point = { x: r * Math.cos(thetaRad), y: r * Math.sin(thetaRad) }
-      if (Number.isFinite(point.x) && Number.isFinite(point.y)) points.push(point)
-    } catch {
-      // skip undefined points
-    }
-  }
-  return [curveObject(points, statement.color)]
+// One curve statement through the adaptive sampler (plot/sample/curve.ts), and what the scene says of
+// the result, in the sampler's own terms:
+//  - tested but defined nowhere in the range: "undefined everywhere in view" (the statement's error). A
+//    curve that was never tested (its domain misses the view) says nothing; a curve that is defined but
+//    wholly off screen is not this either.
+//  - nothing drawn in the picture (no chain or band in view, no isolated point) of a curve that has a
+//    point in view (`blankInView`): "not drawn", at ANY quality, and a blank must say why. The cause is
+//    the sampler's: the budget ran out (capped: what the cap leaves of a curve the twin cannot certify,
+//    an integral, is nothing), or it is too steep (said below), or else it could not certify any of it. The
+//    same note over a curve that is not in view would be false, which is why the sampler says whether
+//    there was anything to draw.
+//  - tooSteep (smooth, and steeper than the sampler can certify, somewhere in view): "too steep to draw
+//    here", at FULL always and at COARSE only if nothing drew in view, as the budget notes. A jump the walk did
+//    not find is not this; nor is a steep stretch that is only in the overscan.
+//  - capped, and something drawn in view: the curve is drawn from what the sampler had, and the line says
+//    "drawn coarsely", at FULL only. A coarse pass is coarse on purpose (the settled pass says whether
+//    the curve fits its budget), and the message would flash on every drag frame. A chain that is only
+//    in the overscan is not drawing.
+// The objects are the sampler's: the curve, its bands, its marks, its asymptote guides.
+function sampleStatement(spec: CurveSpec, statementIndex: number, color: string | null, line: number, ctx: CurveContext): SceneObject[] {
+  const sampled = sampleCurve(spec, ctx.view, ctx.scope, {
+    statement: statementIndex,
+    color,
+    asymptotes: ctx.config.asymptotes,
+    quality: ctx.quality,
+    budget: ctx.budget,
+  })
+  ctx.stats.points += sampled.stats.points
+  ctx.stats.intervals += sampled.stats.intervals
+  if (sampled.tested && !sampled.defined) throw new Error('this curve is undefined everywhere in view')
+  // too steep to certify, somewhere in view: at FULL always, at COARSE only if nothing drew in view (as the budget notes: a chain
+  // only in the overscan is not drawing)
+  const steep = sampled.tooSteep && (ctx.quality === 'full' || !sampled.drawnInView)
+  if (steep) ctx.errors.push({ line, message: TOO_STEEP_NOTE })
+  if (sampled.blankInView) {
+    // by cause: the budget, else steepness (said already), else that nothing could be certified
+    if (sampled.capped) ctx.errors.push({ line, message: NOT_DRAWN_NOTE })
+    else if (!steep) ctx.errors.push({ line, message: NOT_CERTIFIED_NOTE })
+  } else if (sampled.capped && ctx.quality === 'full' && sampled.drawnInView) ctx.errors.push({ line, message: BUDGET_NOTE })
+  return sampled.objects
 }
 
-function sampleParametric(statement: Statement & { kind: 'parametric' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
-  const from = evalExpr(statement.from, {}, config.angle, functions)
-  const to = evalExpr(statement.to, {}, config.angle, functions)
-  const fx = compileExpr(statement.fx, config.angle, functions)
-  const fy = compileExpr(statement.fy, config.angle, functions)
-  const bindings: Bindings = {}
-  const points: Vec2[] = []
-  for (let i = 0; i <= SAMPLES; i++) {
-    const t = from + ((to - from) * i) / SAMPLES
-    try {
-      bindings[statement.param] = t
-      const point = { x: fx(bindings), y: fy(bindings) }
-      if (Number.isFinite(point.x) && Number.isFinite(point.y)) points.push(point)
-    } catch {
-      // skip undefined points
-    }
+function sampleExplicit(statement: Statement & { kind: 'explicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const scales = ctx.config.scales ?? LINEAR_SCALES
+  if (scales.x === 'linear' && scales.y === 'linear') {
+    return sampleStatement({ kind: 'explicit', independent: statement.independent, body: statement.body, domain: domainOf(statement) }, statementIndex, statement.color, line, ctx)
   }
-  return [curveObject(points, statement.color)]
+  // A log axis is a change of variable: the independent variable now means u (or v), the body reads the
+  // world value 10^u, and a log output axis takes the log of what it gives (calc P4 4.3).
+  const domain = domainOf(statement)
+  const outputScale = statement.independent === 'x' ? scales.y : scales.x
+  const through = throughScales(statement.body, scales)
+  const body = outputScale === 'log' ? logOf(through) : through
+  return sampleStatement({ kind: 'explicit', independent: statement.independent, body, domain: domain ? throughScales(domain, scales) : null }, statementIndex, statement.color, line, ctx)
 }
 
-function featureLabel(feature: FeaturePoint, config: GraphConfig): string | null {
+// The parameter is theta in the statement's own angle unit (the variable the body is written in, not
+// the radians it is plotted at; the sampler reads the unit off the scope). A range the author did not
+// write is a full turn in that unit: 360 under @angle: degrees, 2 pi otherwise (the parser's default,
+// flagged `fullTurn`, is in radians).
+function samplePolar(statement: Statement & { kind: 'polar' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  if (ctx.config.scales?.x === 'log' || ctx.config.scales?.y === 'log') throw new Error('polar curves need linear axes; write the curve parametrically')
+  const range = statement.fullTurn && ctx.config.angle === 'degrees' ? ([0, 360] as [number, number]) : rangeOf(statement.from, statement.to, ctx.scope, 'theta')
+  if (range === null) return []
+  return sampleStatement({ kind: 'polar', body: statement.body, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
+}
+
+function sampleParametric(statement: Statement & { kind: 'parametric' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  const range = rangeOf(statement.from, statement.to, ctx.scope, statement.param)
+  if (range === null) return []
+  const { x, y } = ctx.config.scales ?? LINEAR_SCALES
+  const fx = x === 'log' ? logOf(statement.fx) : statement.fx
+  const fy = y === 'log' ? logOf(statement.fy) : statement.fy
+  return sampleStatement({ kind: 'parametric', param: statement.param, fx, fy, from: range[0], to: range[1] }, statementIndex, statement.color, line, ctx)
+}
+
+function featureLabel(feature: FeaturePoint, config: GraphConfig, span = Infinity): string | null {
   if (config.pointLabels !== 'coords') return null
-  return `(${formatCoord(feature.position.x)}, ${formatCoord(feature.position.y)})`
+  return `(${formatForSpan(feature.position.x, span)}, ${formatForSpan(feature.position.y, span)})`
 }
 
 // One pass over every explicit statement, after the curves are built. Explicit
@@ -234,9 +271,14 @@ function buildFeaturePoints(
   statements: Statement[],
   bounds: Bounds,
   config: GraphConfig,
-  functions: FunctionTable
+  scope: MathScope,
+  plane: Plane
 ): SceneObject[] {
   if (config.points.size === 0) return []
+  // The features are found numerically in WORLD coordinates: on a log axis `bounds` is the (u, v) plane,
+  // so the search window is its image under the inverse scale, and the results are mapped back onto the plane.
+  const worldX0 = plane.inverseX(bounds.xMin)
+  const worldX1 = plane.inverseX(bounds.xMax)
 
   const callables: ((x: number) => number)[] = []
   const found: FeaturePoint[] = []
@@ -244,182 +286,171 @@ function buildFeaturePoints(
   for (const statement of statements) {
     if (statement.statementName && config.hidden.has(statement.statementName)) continue
     if (statement.kind !== 'explicit' || statement.independent !== 'x') continue
-    const body = compileExpr(statement.body, config.angle, functions)
-    const f = (x: number) => body({ x })
+    let f: (x: number) => number
+    try {
+      f = compileScalar(statement.body, ['x'], scope)
+      // A statement whose if clause does not compile draws nothing, so it
+      // marks nothing either: domainOf gives whichever shape of clause the
+      // statement has, the old condition (x < k) or the new where, as the
+      // one condition the sampler compiles.
+      const domain = domainOf(statement)
+      if (domain) compileScalar(domain, ['x'], scope)
+    } catch {
+      // reported by the statement itself
+      continue
+    }
     callables.push(f)
-    found.push(...explicitFeatures(f, bounds.xMin, bounds.xMax, config.points))
+    found.push(...explicitFeatures(f, worldX0, worldX1, config.points))
   }
 
   if (config.points.has('intersection')) {
-    found.push(...intersectionFeatures(callables, bounds.xMin, bounds.xMax))
+    found.push(...intersectionFeatures(callables, worldX0, worldX1))
   }
 
   // No `style` here on purpose: a feature point's appearance is chosen from
   // its kind by the renderer (see render/featureMarker.ts), not set here. The
   // scene layer must not import from render/.
-  return found.map((feature) => ({
+  // (the label keeps the world coordinates; a feature a log axis cannot place, such as the y-intercept at x = 0, is left out)
+  return found.flatMap((feature) => {
+    const position = plane.toPlane(feature.position)
+    return plane.log && (Number.isNaN(position.x) || Number.isNaN(position.y)) ? [] : [{ feature, position }]
+  }).map(({ feature, position }) => ({
     kind: 'point' as const,
-    label: featureLabel(feature, config),
-    position: feature.position,
+    label: featureLabel(feature, config, Math.min(bounds.xMax - bounds.xMin, bounds.yMax - bounds.yMin)),
+    position,
     feature: feature.kind,
     exact: feature.exact,
   }))
 }
 
-function traceImplicit(statement: Statement & { kind: 'implicit' }, bounds: Bounds, config: GraphConfig, resolution: number, functions: FunctionTable): SceneObject[] {
-  const left = compileExpr(statement.left, config.angle, functions)
-  const right = compileExpr(statement.right, config.angle, functions)
-  const bindings: Bindings = { x: 0, y: 0 }
-  const f = (x: number, y: number) => {
-    bindings.x = x
-    bindings.y = y
-    return left(bindings) - right(bindings)
+// An implicit curve or a region through the quadtree (plot/implicit), and what the scene says of the
+// result, as sampleStatement says it for the curves: "undefined everywhere in view" when it was tested and
+// defined nowhere; "not drawn" when something in view is blank (the budget's, else not certified); "drawn
+// coarsely" when capped or leaves were left out and something drew, at FULL only (a coarse pass would flash
+// it on every drag frame). A view the sampler cannot work in says nothing here.
+function sayImplicit(sampled: Sampled, what: 'curve' | 'region', line: number, ctx: CurveContext): SceneObject[] {
+  ctx.stats.points += sampled.stats.points
+  ctx.stats.intervals += sampled.stats.intervals
+  if (sampled.tested && !sampled.defined) throw new Error(`this ${what} is undefined everywhere in view`)
+  const say = (note: string): string => (what === 'curve' ? note : note.replace('this curve', `this ${what}`))
+  if (sampled.blankInView) {
+    if (sampled.capped) ctx.errors.push({ line, message: say(NOT_DRAWN_NOTE) })
+    else ctx.errors.push({ line, message: say(NOT_CERTIFIED_NOTE) })
+  } else if ((sampled.capped || sampled.leftOut > 0) && ctx.quality === 'full' && sampled.drawnInView && !sampled.badView) {
+    ctx.errors.push({ line, message: say(BUDGET_NOTE) })
   }
-  const raw = traceImplicitCurve(f, bounds, resolution)
-  if (raw.length === 0) return []
-  const pairs: [Vec2, Vec2][] = raw.map(([from, to]) => [from, to])
-  return [{ kind: 'segments', pairs, color: statement.color }]
+  return sampled.objects
 }
 
-// Fills the inequality and draws its boundary in one marching-squares pass
-// (see render/marchingSquares.ts's traceImplicitRegion) — the fill's edge is
-// built from the exact same per-cell corner/crossing math as the boundary
-// line, so they can't visibly disagree the way an independently-resolved
-// coarse mask could.
-function buildRegion(statement: Statement & { kind: 'region' }, bounds: Bounds, config: GraphConfig, resolution: number, functions: FunctionTable): SceneObject[] {
-  const left = compileExpr(statement.left, config.angle, functions)
-  const right = compileExpr(statement.right, config.angle, functions)
-  const flip = statement.op === '<' || statement.op === '<='
-  const bindings: Bindings = { x: 0, y: 0 }
-  const f = (x: number, y: number) => {
-    bindings.x = x
-    bindings.y = y
-    const d = left(bindings) - right(bindings)
-    // traceImplicitRegion fills where f > 0; for ">"/">=" that's already
-    // "left > right" (d > 0), for "<"/"<=" flip the sign so "inside" still
-    // means "the inequality holds".
-    return flip ? -d : d
-  }
-  const { triangles, boundarySegments } = traceImplicitRegion(f, bounds, resolution)
-  const dashed = statement.op === '<' || statement.op === '>'
-  const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'region', triangles, color: statement.color })
-  if (boundarySegments.length > 0) {
-    const pairs: [Vec2, Vec2][] = boundarySegments.map(([from, to]) => [from, to])
-    objects.push({ kind: 'segments', pairs, dashed, color: statement.color })
-  }
-  return objects
+function sampleImplicitStatement(statement: Statement & { kind: 'implicit' }, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  // On a log axis the view is (u, v) and the sampler reads H(10^u, 10^v): every free x or y is rewritten (calc P4 4.4).
+  const scales = ctx.config.scales ?? LINEAR_SCALES
+  const through = (e: Expr): Expr => throughScales(e, scales)
+  const where = statement.where ? through(statement.where) : null
+  const sampled = sampleImplicit(through(statement.left), through(statement.right), where, ctx.view, ctx.scope, optionsOf(statement.color, statementIndex, ctx))
+  return sayImplicit(sampled, 'curve', line, ctx)
 }
 
-// A chained comparison ("lo op1 mid op2 hi", already normalised in
-// parseStatement.ts so lowOp/highOp are always "<" or "<=") is the
-// intersection of "mid > lo" and "mid < hi". Both hold exactly where
-// min(mid - lo, hi - mid) > 0, so feeding that single function to
-// traceImplicitRegion gets the fill and the boundary in one marching-squares
-// pass, same as the plain single-inequality case above.
-function buildRegionChain(statement: Statement & { kind: 'regionChain' }, bounds: Bounds, config: GraphConfig, resolution: number, functions: FunctionTable): SceneObject[] {
-  const lowFn = compileExpr(statement.low, config.angle, functions)
-  const midFn = compileExpr(statement.mid, config.angle, functions)
-  const highFn = compileExpr(statement.high, config.angle, functions)
-  const bindings: Bindings = { x: 0, y: 0 }
-  const f = (x: number, y: number) => {
-    bindings.x = x
-    bindings.y = y
-    return Math.min(midFn(bindings) - lowFn(bindings), highFn(bindings) - midFn(bindings))
-  }
-  const { triangles, boundarySegments } = traceImplicitRegion(f, bounds, resolution)
-  const objects: SceneObject[] = []
-  if (triangles.length > 0) objects.push({ kind: 'region', triangles, color: statement.color })
+function optionsOf(color: string | null, statement: number, ctx: CurveContext): StatementOptions {
+  return { statement, color, quality: ctx.quality, budget: ctx.budget }
+}
 
-  if (boundarySegments.length > 0) {
-    // Strictness can differ per side (e.g. "-2 <= x < 5"), so each traced
-    // edge is classified on its own: evaluate which constraint is tighter
-    // (smaller of mid-lo / hi-mid) at the segment's midpoint — that's the
-    // constraint whose boundary this edge actually lies on — and dash it
-    // according to that constraint's own operator rather than one uniform
-    // style for the whole boundary.
-    const dashedPairs: [Vec2, Vec2][] = []
-    const solidPairs: [Vec2, Vec2][] = []
-    for (const [from, to] of boundarySegments) {
-      bindings.x = (from.x + to.x) / 2
-      bindings.y = (from.y + to.y) / 2
-      const mid = midFn(bindings)
-      const lowGap = mid - lowFn(bindings)
-      const highGap = highFn(bindings) - mid
-      const lowActive = lowGap <= highGap
-      const strict = lowActive ? statement.lowOp === '<' : statement.highOp === '<'
-      ;(strict ? dashedPairs : solidPairs).push([from, to])
-    }
-    if (dashedPairs.length > 0) objects.push({ kind: 'segments', pairs: dashedPairs, dashed: true, color: statement.color })
-    if (solidPairs.length > 0) objects.push({ kind: 'segments', pairs: solidPairs, dashed: false, color: statement.color })
-  }
-  return objects
+function sampleRegionStatement(written: Expr, color: string | null, statementIndex: number, line: number, ctx: CurveContext): SceneObject[] {
+  // the whole condition, its if clause included, is read at (10^u, 10^v) on a log axis (calc P4 4.4)
+  const condition = throughScales(written, ctx.config.scales ?? LINEAR_SCALES)
+  const sampled = sampleRegion(condition, comparisonsOf(condition),ctx.view, ctx.scope, optionsOf(color, statementIndex, ctx))
+  const objects = sayImplicit(sampled, 'region', line, ctx)
+  // A region with an empty outline (x^2 + y^2 < 0) is nothing to fill, and has no boundary to stroke.
+  return objects.filter((o) => o.kind !== 'region' || o.outline.length > 0)
+}
+
+// "left op right [if where]" is the one condition, "low lowOp mid highOp high" the two joined with `and`.
+function withWhere(condition: Expr, where: Expr | undefined): Expr {
+  return where ? and(condition, where) : condition
 }
 
 // One short tick per grid point, angled by the local slope — a direction
 // field for dy/dx = f(x,y).
-function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): SceneObject[] {
+// On a log axis the lattice is in the plane (u, v) and the slope is read at the world point (10^u, 10^v); the
+// tick's direction in the plane is dv/du, by the chain rule: s (linear), s x ln10 (log x), s / (y ln10) (log y),
+// s x / y (log-log).
+function buildField(statement: Statement & { kind: 'field' }, bounds: Bounds, scope: MathScope, plane: Plane): SceneObject[] {
   const dx = (bounds.xMax - bounds.xMin) / FIELD_DIVISIONS
   const dy = (bounds.yMax - bounds.yMin) / FIELD_DIVISIONS
   const tickLen = Math.min(dx, dy) * 0.7
-  const body = compileExpr(statement.body, config.angle, functions)
-  const bindings: Bindings = { x: 0, y: 0 }
+  const body = compileScalar(statement.body, ['x', 'y'], scope)
   const pairs: [Vec2, Vec2][] = []
-  for (let j = 0; j <= FIELD_DIVISIONS; j++) {
+  // The grid keeps the view's own lattice and runs on past it by the overscan
+  // (P2's 25 % of the span on each side, rounded up to whole ticks), so the
+  // field pans with the rest and a column at x = 0 stays a column.
+  const extra = Math.ceil(FULL.overscan * FIELD_DIVISIONS)
+  for (let j = -extra; j <= FIELD_DIVISIONS + extra; j++) {
     const y = bounds.yMin + j * dy
-    for (let i = 0; i <= FIELD_DIVISIONS; i++) {
+    for (let i = -extra; i <= FIELD_DIVISIONS + extra; i++) {
       const x = bounds.xMin + i * dx
-      try {
-        bindings.x = x
-        bindings.y = y
-        const slope = body(bindings)
-        const angle = Math.atan(slope)
-        const hx = (Math.cos(angle) * tickLen) / 2
-        const hy = (Math.sin(angle) * tickLen) / 2
-        pairs.push([{ x: x - hx, y: y - hy }, { x: x + hx, y: y + hy }])
-      } catch {
-        // skip undefined slopes
-      }
+      let slope: number
+      if (plane.log) {
+        const wx = plane.inverseX(x)
+        const wy = plane.inverseY(y)
+        slope = body(wx, wy)
+        if (plane.scales.x === 'log') slope *= plane.scales.y === 'log' ? wx / wy : wx * Math.LN10
+        else slope /= wy * Math.LN10
+      } else slope = body(x, y)
+      // An undefined slope (NaN) has no direction to draw; an infinite one is
+      // a vertical tick, as it always was.
+      if (Number.isNaN(slope)) continue
+      const angle = Math.atan(slope)
+      const hx = (Math.cos(angle) * tickLen) / 2
+      const hy = (Math.sin(angle) * tickLen) / 2
+      pairs.push([{ x: x - hx, y: y - hy }, { x: x + hx, y: y + hy }])
     }
   }
   return pairs.length > 0 ? [{ kind: 'segments', pairs, color: statement.color }] : []
 }
 
 // Numeric tangent (central difference) to `body` at x = at, drawn across the
-// visible domain.
-function buildTangent(statement: Statement & { kind: 'tangent' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): SceneObject[] {
-  const a = evalExpr(statement.at, {}, config.angle, functions)
-  const fa = evalExpr(statement.body, { x: a }, config.angle, functions)
+// visible domain: a curve of one two-vertex chain from the left edge of the
+// view to the right (the parameter is x), so it keeps the thin curve ribbon
+// and stays hoverable like any curve.
+function buildTangent(statement: Statement & { kind: 'tangent' }, statementIndex: number, bounds: Bounds, scope: MathScope): SceneObject[] {
+  const a = constant(statement.at, scope)
+  const f = compileScalar(statement.body, ['x'], scope)
+  const fa = f(a)
   const h = 1e-4
-  const slope = (evalExpr(statement.body, { x: a + h }, config.angle, functions) - evalExpr(statement.body, { x: a - h }, config.angle, functions)) / (2 * h)
+  const slope = (f(a + h) - f(a - h)) / (2 * h)
   const color = statement.color ?? 'orange'
   const line: Vec2[] = [
     { x: bounds.xMin, y: fa + slope * (bounds.xMin - a) },
     { x: bounds.xMax, y: fa + slope * (bounds.xMax - a) },
   ]
   return [
-    { kind: 'curve', points: line, color },
+    {
+      kind: 'curve',
+      id: { statement: statementIndex, object: 'tangent' },
+      chains: [chainOf(line, [bounds.xMin, bounds.xMax])],
+      breaks: [],
+      color,
+    },
     { kind: 'point', label: null, position: { x: a, y: fa }, color },
   ]
 }
 
-// A circle by center + radius, sampled as a closed loop (the last sample at
-// t=2*pi coincides with the first at t=0) and reused as a plain 'curve'
-// SceneObject — the existing ribbon renderer already draws a closed shape
-// correctly as long as the point list closes on itself, so no new render
-// path is needed just for this. The sampling itself lives in
-// geometry/sceneObjects.ts so an incircle/circumcircle draws identically.
-function buildCircle(statement: Statement & { kind: 'circle' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
-  const cx = evalExpr(statement.cx, {}, config.angle, functions)
-  const cy = evalExpr(statement.cy, {}, config.angle, functions)
-  const radius = evalExpr(statement.radius, {}, config.angle, functions)
+// A circle by center + radius, sampled as one closed chain and reused as a
+// plain 'curve' SceneObject — the ribbon renderer draws a closed chain as a
+// loop (renderItems.ts closes it), so no new render path is needed just for
+// this. The sampling itself lives in geometry/sceneObjects.ts so an
+// incircle/circumcircle draws identically.
+function buildCircle(statement: Statement & { kind: 'circle' }, statementIndex: number, scope: MathScope): SceneObject[] {
+  const cx = constant(statement.cx, scope)
+  const cy = constant(statement.cy, scope)
+  const radius = constant(statement.radius, scope)
   if (radius <= 0) throw new Error('circle radius must be positive')
-  return [circleCurve({ x: cx, y: cy }, radius, statement.color)]
+  return [circleCurve({ x: cx, y: cy }, radius, statement.color, { statement: statementIndex, object: 'curve' })]
 }
 
 // A closed shape from >= 3 labeled vertices — the edges reuse 'segments'
 // (straight, constant weight, matching a geometry diagram's crisp corners
-// rather than the curvature-driven ribbon a 'curve' would give a polygon's
+// rather than the round-jointed ribbon a 'curve' would give a polygon's
 // sharp turns), plus one 'point' per vertex so labels/dots render exactly
 // like a plain "A = (x, y)" statement would. Vertex *names* are resolved to
 // coordinates separately, in collectNamedPoints, so angle:/tick:/
@@ -430,10 +461,10 @@ function buildCircle(statement: Statement & { kind: 'circle' }, config: GraphCon
 // solved "triangle ABC:" statement has to draw as exactly the same picture —
 // a hand-typed polygon and a solved triangle should not be two shapes that
 // merely resemble each other.
-function buildPolygon(statement: Statement & { kind: 'polygon' }, config: GraphConfig, functions: FunctionTable): SceneObject[] {
+function buildPolygon(statement: Statement & { kind: 'polygon' }, scope: MathScope, plane: Plane): SceneObject[] {
   const vertices = statement.vertices.map((v) => ({
     label: v.label,
-    position: { x: evalExpr(v.x, {}, config.angle, functions), y: evalExpr(v.y, {}, config.angle, functions) },
+    position: plane.place({ x: constant(v.x, scope), y: constant(v.y, scope) }),
   }))
   return polygonObjects(vertices, statement.color)
 }
@@ -458,36 +489,105 @@ function linearRegression(points: Vec2[]) {
   return { slope, intercept, r }
 }
 
-function buildScatter(statement: Statement & { kind: 'scatter' }, bounds: Bounds, config: GraphConfig, functions: FunctionTable): { objects: SceneObject[]; regression: Scene['regression'] } {
+function buildScatter(
+  statement: Statement & { kind: 'scatter' },
+  statementIndex: number,
+  bounds: Bounds,
+  scope: MathScope,
+  plane: Plane,
+  note: (message: string) => void
+): { objects: SceneObject[]; regression: Scene['regression'] } {
   const points: Vec2[] = statement.points.map(([xExpr, yExpr]) => ({
-    x: evalExpr(xExpr, {}, config.angle, functions),
-    y: evalExpr(yExpr, {}, config.angle, functions),
+    x: constant(xExpr, scope),
+    y: constant(yExpr, scope),
   }))
-  const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: p, color: statement.color }))
+  // the fit is done on the world data; only what is drawn goes through the scales
+  const objects: SceneObject[] = points.map((p) => ({ kind: 'point', label: null, position: plane.place(p), color: statement.color }))
   if (points.length < 2) return { objects, regression: null }
 
+  // The fitted line across the visible domain, as a tangent is: one two-vertex
+  // chain from the left edge of the view to the right (the parameter is x).
+  // On a log plane the view is (u, v), so its edges are world 10^u; the line is computed in world
+  // coordinates and drawn straight between its mapped endpoints.
   const regression = linearRegression(points)
-  const line: Vec2[] = [
-    { x: bounds.xMin, y: regression.slope * bounds.xMin + regression.intercept },
-    { x: bounds.xMax, y: regression.slope * bounds.xMax + regression.intercept },
+  const x0 = plane.log ? scaleOf(plane.scales.x).inverse(bounds.xMin) : bounds.xMin
+  const x1 = plane.log ? scaleOf(plane.scales.x).inverse(bounds.xMax) : bounds.xMax
+  const world: Vec2[] = [
+    { x: x0, y: regression.slope * x0 + regression.intercept },
+    { x: x1, y: regression.slope * x1 + regression.intercept },
   ]
-  objects.push({ kind: 'curve', points: line, color: statement.color })
+  const line = world.map(plane.toPlane)
+  if (plane.log && line.some((p) => Number.isNaN(p.x) || Number.isNaN(p.y))) {
+    note("the fitted line leaves the positive range of a log axis; it is not drawn")
+    return { objects, regression }
+  }
+  objects.push({
+    kind: 'curve',
+    id: { statement: statementIndex, object: 'regression' },
+    chains: [chainOf(line, [bounds.xMin, bounds.xMax])],
+    breaks: [],
+    color: statement.color,
+  })
   return { objects, regression }
 }
 
 // Rebuilds the full scene from parsed statements. `bounds` is the current
 // camera viewport — functions, implicit curves, regions, and fields are
 // sampled over it, so the scene is rebuilt on pan/zoom as well as on spec
-// edits. `resolution` controls the marching-squares grid density for
-// implicit curves/regions — the caller (GraphViewer.tsx) passes a reduced
-// value while the view is actively being dragged, and the full
-// IMPLICIT_RESOLUTION once it settles.
-export function buildScene(statements: Statement[], bounds: Bounds, config: GraphConfig, resolution: number = IMPLICIT_RESOLUTION): Scene {
+// edits. `resolution` is ignored since P3: implicit curves and regions are
+// sampled by the quadtree at the `quality` option below. It stays in the signature so
+// callers keep compiling.
+//
+// Curves (y = f(x), x = f(y), polar, parametric) go through the adaptive sampler
+// (plot/sample/curve.ts), which works in screen space, so `options` says how big the
+// viewport is and how fine the sampling should be:
+//   widthPx, heightPx  the viewport in CSS px (defaults: 800 wide, and the height the
+//                      bounds' aspect gives);
+//   quality            'full' for a settled view (the default), 'coarse' while a
+//                      gesture runs: a looser curve for about a quarter of the work;
+//   budget             for tests: the sampler's budget of evaluations, to force a curve
+//                      to its cap.
+// `Scene.stats` is the work every sampled curve did, summed.
+export interface SceneOptions {
+  widthPx?: number
+  heightPx?: number
+  quality?: 'full' | 'coarse'
+  budget?: { points: number; intervals: number }
+}
+
+// The viewport the sampler is given: the width, and the height that keeps the bounds' aspect unless
+// the caller says. Each is a finite number of pixels, at least one: a canvas that is not displayed
+// reports 0, and the sampler answers a scale of no pixels with "undefined everywhere in view", which
+// would be a false message about a curve that is only unseen. A size that is not a number at all
+// (NaN, an infinity) is the default.
+function viewOf(bounds: Bounds, options: SceneOptions | undefined): View {
+  const px = (given: number | undefined, otherwise: number) => (given !== undefined && Number.isFinite(given) ? Math.max(1, given) : otherwise)
+  const widthPx = px(options?.widthPx, DEFAULT_WIDTH_PX)
+  const natural = Math.round((widthPx * (bounds.yMax - bounds.yMin)) / (bounds.xMax - bounds.xMin))
+  const heightPx = px(options?.heightPx, Number.isFinite(natural) ? Math.max(1, natural) : widthPx)
+  return { bounds, widthPx, heightPx }
+}
+
+export function buildScene(
+  statements: Statement[],
+  bounds: Bounds,
+  config: GraphConfig,
+  _resolution?: number,
+  lines?: readonly number[],
+  options?: SceneOptions
+): Scene {
   const objects: SceneObject[] = []
   const errors: Scene['errors'] = []
+  const stats = { points: 0, intervals: 0 }
   let regression: Scene['regression'] = null
+  const lineOf = (index: number) => lines?.[index] ?? 0
   const functions = collectFunctions(statements)
-  const namedPoints = collectNamedPoints(statements, config, functions)
+  const plotScope = buildPlotScope(statements, config, lines)
+  const scope = plotScope.scope
+  errors.push(...plotScope.errors)
+  const namedPoints = collectNamedPoints(statements, scope)
+  const plane = planeOf(config)
+  const curves: CurveContext = { view: viewOf(bounds, options), scope, config, quality: options?.quality ?? 'full', budget: options?.budget, stats, errors }
 
   // Geometry constructions resolve in one pass up front, in source order (see
   // geometry/buildConstructions.ts for why definition-before-use rather than
@@ -496,7 +596,14 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
   // referenceable by angle:/tick:/right-angle: exactly like a polygon vertex.
   const constructions = buildConstructions(statements, config, functions, namedPoints)
   for (const [name, position] of constructions.points) namedPoints.set(name, position)
-  errors.push(...constructions.errors)
+  // buildConstructions (shared with the figure engine) reports its errors in
+  // statement order but not which statement failed, and gives every statement
+  // that succeeded an entry in objectsByStatement. So the failed statements
+  // are the constructions and triangles without one, in the same order as the
+  // errors; if the counts ever disagree the errors keep line 0.
+  const failedConstructions = statements.flatMap((s, i) => ((s.kind === 'construction' || s.kind === 'triangle') && !constructions.objectsByStatement.has(i) ? [i] : []))
+  const namesTheirLine = failedConstructions.length === constructions.errors.length
+  constructions.errors.forEach((error, k) => errors.push(namesTheirLine ? { ...error, line: lineOf(failedConstructions[k]) } : error))
 
   function resolvePoint(name: string): Vec2 {
     const point = namedPoints.get(name)
@@ -513,41 +620,50 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
     if (statement.statementName && config.hidden.has(statement.statementName)) continue
     try {
       if (statement.kind === 'explicit') {
-        objects.push(...sampleExplicit(statement, bounds, config, functions))
+        objects.push(...sampleExplicit(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'polar') {
-        objects.push(...samplePolar(statement, config, functions))
+        objects.push(...samplePolar(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'parametric') {
-        objects.push(...sampleParametric(statement, config, functions))
+        objects.push(...sampleParametric(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'implicit') {
-        objects.push(...traceImplicit(statement, bounds, config, resolution, functions))
+        objects.push(...sampleImplicitStatement(statement, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'region') {
-        objects.push(...buildRegion(statement, bounds, config, resolution, functions))
+        objects.push(...sampleRegionStatement(withWhere(compare(statement.op, statement.left, statement.right), statement.where), statement.color, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'regionChain') {
-        objects.push(...buildRegionChain(statement, bounds, config, resolution, functions))
+        const chain = and(compare(statement.lowOp, statement.low, statement.mid), compare(statement.highOp, statement.mid, statement.high))
+        objects.push(...sampleRegionStatement(withWhere(chain, statement.where), statement.color, statementIndex, lineOf(statementIndex), curves))
       } else if (statement.kind === 'field') {
-        objects.push(...buildField(statement, bounds, config, functions))
+        objects.push(...buildField(statement, bounds, scope, plane))
       } else if (statement.kind === 'tangent') {
-        objects.push(...buildTangent(statement, bounds, config, functions))
+        if (plane.log) throw new Error('tangent lines need linear axes')
+        objects.push(...buildTangent(statement, statementIndex, bounds, scope))
       } else if (statement.kind === 'scatter') {
-        const built = buildScatter(statement, bounds, config, functions)
+        const built = buildScatter(statement, statementIndex, bounds, scope, plane, (message) => errors.push({ line: lineOf(statementIndex), message }))
         objects.push(...built.objects)
         if (built.regression) regression = built.regression
       } else if (statement.kind === 'animatedPoint') {
+        // Both coordinates compile through the kernel here, so a mistake lands
+        // on this statement's line now rather than failing silently on every
+        // frame, and the whole language (n!, |t|, sums, piecewise, f', multi-
+        // parameter functions, @params) works in the path. The renderer calls
+        // the closures per frame.
+        const fx = compileScalar(statement.fx, [statement.param], scope)
+        const fy = compileScalar(statement.fy, [statement.param], scope)
         objects.push({
           kind: 'animatedPoint',
-          fx: statement.fx,
-          fy: statement.fy,
+          // on a log axis the position is mapped per frame (NaN where the world value is <= 0)
+          fx: plane.scales.x === 'log' ? (t: number) => plane.forwardX(fx(t)) : fx,
+          fy: plane.scales.y === 'log' ? (t: number) => plane.forwardY(fy(t)) : fy,
           param: statement.param,
-          from: evalExpr(statement.from, {}, config.angle, functions),
-          to: evalExpr(statement.to, {}, config.angle, functions),
+          from: constant(statement.from, scope),
+          to: constant(statement.to, scope),
           color: statement.color,
-          functions,
         })
       } else if (statement.kind === 'point') {
         objects.push({
           kind: 'point',
           label: statement.label,
-          position: { x: evalExpr(statement.x, {}, config.angle, functions), y: evalExpr(statement.y, {}, config.angle, functions) },
+          position: plane.place({ x: constant(statement.x, scope), y: constant(statement.y, scope) }),
           color: statement.color,
           // The author typed these coordinates; nothing about them was
           // sampled or converged to, so this is the most literal position
@@ -557,26 +673,28 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
       } else if (statement.kind === 'segment') {
         objects.push({
           kind: 'segment',
-          from: { x: evalExpr(statement.x1, {}, config.angle, functions), y: evalExpr(statement.y1, {}, config.angle, functions) },
-          to: { x: evalExpr(statement.x2, {}, config.angle, functions), y: evalExpr(statement.y2, {}, config.angle, functions) },
+          from: plane.place({ x: constant(statement.x1, scope), y: constant(statement.y1, scope) }),
+          to: plane.place({ x: constant(statement.x2, scope), y: constant(statement.y2, scope) }),
           color: statement.color,
         })
       } else if (statement.kind === 'ray') {
         objects.push({
           kind: 'ray',
-          from: { x: evalExpr(statement.x1, {}, config.angle, functions), y: evalExpr(statement.y1, {}, config.angle, functions) },
-          to: { x: evalExpr(statement.x2, {}, config.angle, functions), y: evalExpr(statement.y2, {}, config.angle, functions) },
+          from: plane.place({ x: constant(statement.x1, scope), y: constant(statement.y1, scope) }),
+          to: plane.place({ x: constant(statement.x2, scope), y: constant(statement.y2, scope) }),
           color: statement.color,
         })
       } else if (statement.kind === 'vector') {
-        const from = { x: evalExpr(statement.x1, {}, config.angle, functions), y: evalExpr(statement.y1, {}, config.angle, functions) }
-        const to = { x: evalExpr(statement.x2, {}, config.angle, functions), y: evalExpr(statement.y2, {}, config.angle, functions) }
+        const from = { x: constant(statement.x1, scope), y: constant(statement.y1, scope) }
+        const to = { x: constant(statement.x2, scope), y: constant(statement.y2, scope) }
+        // |v| is the world vector's length, whatever the axes
         const magnitude = Math.hypot(to.x - from.x, to.y - from.y)
-        objects.push({ kind: 'ray', from, to, label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
+        objects.push({ kind: 'ray', from: plane.place(from), to: plane.place(to), label: `|v| = ${formatCoord(magnitude)}`, color: statement.color })
       } else if (statement.kind === 'circle') {
-        objects.push(...buildCircle(statement, config, functions))
+        if (plane.log) throw new Error('circles need linear axes')
+        objects.push(...buildCircle(statement, statementIndex, scope))
       } else if (statement.kind === 'polygon') {
-        objects.push(...buildPolygon(statement, config, functions))
+        objects.push(...buildPolygon(statement, scope, plane))
       } else if (statement.kind === 'construction' || statement.kind === 'triangle') {
         // Already solved in the construction pass above; emitted here so the
         // draw order follows the spec text and "@hide" still applies. A
@@ -595,8 +713,8 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
       } else if (statement.kind === 'namedSegment') {
         objects.push({
           kind: 'segment',
-          from: resolvePoint(statement.from),
-          to: resolvePoint(statement.to),
+          from: plane.place(resolvePoint(statement.from)),
+          to: plane.place(resolvePoint(statement.to)),
           dashed: statement.style === 'dashed',
           color: statement.color,
         })
@@ -624,11 +742,11 @@ export function buildScene(statements: Statement[], bounds: Bounds, config: Grap
         })
       }
     } catch (err) {
-      errors.push({ line: 0, message: err instanceof Error ? err.message : String(err) })
+      errors.push({ line: lineOf(statementIndex), message: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  objects.push(...buildFeaturePoints(statements, bounds, config, functions))
+  objects.push(...buildFeaturePoints(statements, bounds, config, scope, plane))
 
-  return { objects, errors, regression }
+  return plane.log ? { objects, errors, regression, stats, scales: plane.scales } : { objects, errors, regression, stats }
 }

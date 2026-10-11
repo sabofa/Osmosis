@@ -74,6 +74,15 @@ describe('S5 grammar — named regions (the unkeyed claim)', () => {
     expect(() => form('x = region x in [0, 1], y in [0, x]')).toThrow(/"x" is a coordinate/)
   })
 
+  it("one of calc's ten new built-in names may name a region or a volume; a classic built-in, pi and e may not", () => {
+    expect(form('step = region x in [0, 1], y in [0, x]')).toMatchObject({ form: 'namedRegion', name: 'step' })
+    expect(form('gamma = volume x in [0, 1], y in [0, 1], z in [0, 1]')).toMatchObject({ form: 'namedVolume', name: 'gamma' })
+    expect(() => form('sin = region x in [0, 1], y in [0, x]')).toThrow(/"sin" is a built-in name, not a name for a region/)
+    expect(() => form('abs = volume x in [0, 1], y in [0, 1], z in [0, 1]')).toThrow(/"abs" is a built-in name, not a name for a volume/)
+    expect(() => form('pi = region x in [0, 1], y in [0, x]')).toThrow(/"pi" is a built-in name, not a name for a region/)
+    expect(() => form('e = volume x in [0, 1], y in [0, 1], z in [0, 1]')).toThrow(/"e" is a built-in name, not a name for a volume/)
+  })
+
   it('refuses a style clause on a named region, saying where it goes', () => {
     expect(() => form('R = region x in [0, 1], y in [0, x] opacity: 0.5')).toThrow(/a named region draws nothing/)
   })
@@ -155,6 +164,9 @@ describe('S5 grammar — riemann:', () => {
     expect(() => form('riemann: under x*y over x in [0, 1], y in [0, x], n = 2')).toThrow(message)
     expect(() => form('riemann: under x*y over r in [0, 1], theta in [0, pi], n = 2')).toThrow(message)
     expect(() => form('riemann: under x*y over x^2 + y^2 <= 1, n = 2')).toThrow(message)
+    // a bound that writes x as a factor reads x: y in [0, x(1)] is y in [0, x]
+    expect(() => form('riemann: under x*y over x in [0, 1], y in [0, x(1)], n = 2')).toThrow(message)
+    expect(() => form('riemann: under x*y over y in [0, x(1)], x in [0, 1], n = 2')).toThrow(message)
   })
 
   it('refuses a missing n and an unknown sample rule', () => {

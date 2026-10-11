@@ -31,6 +31,7 @@ import type { Statement } from '../../parser/types'
 import { roundHalfAway } from '../../math/compile'
 import type { Binding } from '../config'
 import { sceneExtent } from '../scene/extent'
+import { RATIO_XY_IN_3D } from '../frame/aspect'
 import { resolveBox } from '../frame/bounds'
 import type { Box3, ColorScale, LabelAnchor, Mark, Range, SceneError, SpaceScene } from '../scene/types'
 import type { CreateSpaceKernel, SpaceKernel } from './api'
@@ -186,6 +187,8 @@ function run(prepared: PreparedStatement, line: number): BuildResult {
 }
 
 export const createSpaceKernel: CreateSpaceKernel = (statements: Statement[], config, lines) => {
+  // The directive parser cannot tell 2D from 3D; refuse here, before any state.
+  if (config.space.aspect?.kind === 'ratioXY') throw new Error(RATIO_XY_IN_3D)
   const bindings: readonly Binding[] = config.bindings
   const { scope, errors: scopeErrors } = buildScope(statements, lines, bindings, config.angle)
   const { named, errors: namedErrors } = collectNamed(statements, lines, scope)

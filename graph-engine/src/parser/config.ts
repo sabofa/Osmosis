@@ -52,6 +52,7 @@ export type ViewName = (typeof VIEW_NAMES)[number]
 
 export type LabelMode = 'all' | 'coarse' | 'none'
 export type StepMode = 'nice' | 'geometric' | 'fixed'
+export type AxisScale = 'linear' | 'log'
 
 export interface GraphConfig {
   theme: 'light' | 'dark'
@@ -100,6 +101,11 @@ export interface GraphConfig {
   labelEvery: number
   // How a fixed @xstep/@ystep rescales as the view zooms. See grid.ts.
   stepMode: StepMode
+  // Per-axis scale, from "@xscale:" / "@yscale:". A log axis needs a positive
+  // range (checked against @bounds in parseConfig).
+  scales: { x: AxisScale; y: AxisScale }
+  // "@lock": a static plot. Keeps its authored view; pan, zoom, keys and reset are ignored.
+  lock: boolean
   // Whether a detected feature point prints its coordinates.
   pointLabels: 'off' | 'coords'
   // Dashed vertical guide at a detected vertical asymptote. Splitting the
@@ -162,6 +168,8 @@ export function defaultConfig(): GraphConfig {
     labels: 'all',
     labelEvery: 1,
     stepMode: 'nice',
+    scales: { x: 'linear', y: 'linear' },
+    lock: false,
     pointLabels: 'off',
     asymptotes: true,
     hidden: new Set(),

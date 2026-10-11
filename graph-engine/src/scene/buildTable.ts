@@ -1,6 +1,7 @@
+import { compileScalar } from '../math/compile'
 import type { GraphConfig } from '../parser/config'
-import { evalExpr, type FunctionTable } from '../parser/evalExpr'
 import type { Statement } from '../parser/types'
+import { buildPlotScope } from '../plot/scope'
 
 export interface NamedTableData {
   name: string
@@ -29,11 +30,7 @@ function formatNumber(n: number): string {
 // a table from the result entirely. Any other statement kind is ignored: a
 // spec authored for table mode isn't expected to also carry graph statements.
 export function buildTable(statements: Statement[], config: GraphConfig): NamedTableData[] {
-  const functions: FunctionTable = {}
-  for (const statement of statements) {
-    if (statement.kind === 'functionDef') functions[statement.name] = { param: statement.param, body: statement.body }
-    else if (statement.kind === 'constantDef') functions[statement.name] = { param: null, body: statement.value }
-  }
+  const { scope } = buildPlotScope(statements, config)
 
   const order: string[] = []
   const tables = new Map<string, NamedTableData>()
@@ -64,19 +61,20 @@ export function buildTable(statements: Statement[], config: GraphConfig): NamedT
       if (!table) continue
       if (table.headers.length === 0) table.headers.push(statement.independent, statement.dependent)
       if (table.formula === null) table.formula = statement.formula
-      const from = evalExpr(statement.from, {}, config.angle, functions)
-      const to = evalExpr(statement.to, {}, config.angle, functions)
-      const step = evalExpr(statement.step, {}, config.angle, functions)
+      const from = compileScalar(statement.from, [], scope)()
+      const to = compileScalar(statement.to, [], scope)()
+      const step = compileScalar(statement.step, [], scope)()
       if (step <= 0) throw new Error('table step must be a positive number')
+      let cellAt: (x: number) => string
+      try {
+        const body = compileScalar(statement.body, [statement.independent], scope)
+        cellAt = (x) => formatNumber(body(x))
+      } catch {
+        cellAt = () => 'undefined'
+      }
       let count = 0
       for (let x = from; x <= to + 1e-9 && count < GENERATOR_MAX_ROWS; x += step, count++) {
-        let cell: string
-        try {
-          cell = formatNumber(evalExpr(statement.body, { [statement.independent]: x }, config.angle, functions))
-        } catch {
-          cell = 'undefined'
-        }
-        table.rows.push([formatNumber(x), cell])
+        table.rows.push([formatNumber(x), cellAt(x)])
       }
     }
   }

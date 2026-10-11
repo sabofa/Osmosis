@@ -1,19 +1,25 @@
 import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
-import { evalExpr, type FunctionTable } from '../parser/evalExpr'
 import { Camera2D } from './camera2d'
-import { clipLineToBounds } from './clipLine'
+import { ViewController } from './viewController'
+import { authoredBounds, resolvePlotAspect } from '../plot/view/authored'
+import { frameChanged } from '../plot/view/frameChanged'
+import { keyReachesView, pointerKindOf } from '../view2d/dom/domInput'
+import type { Intent, PointerSample } from '../view2d'
 import { clearAndDispose, disposeObject3D } from './disposeObject3D'
-import { GeometryGroupManager, isGeometryKind, type GeometryKind } from './geometryGroup'
+import { GeometryGroupManager } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
 import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
+import { scaleOf } from '../plot/frame/scale'
 import { HoverResolver, type HoverInfo } from './hover'
-import { clampedLabelPlacement } from './labelLayout'
+import { createInteraction, overscanBox, viewChangeAction } from './interaction'
+import { clampedLabelPlacementXY } from './labelLayout'
+import { pixelSizeXY } from './pixelSize'
 import { makeLabelSprite } from './labelSprite'
 import type { Bounds } from './marchingSquares'
+import { toRenderItems } from './renderItems'
 import type { Scene as GraphScene, SceneObject, Vec2 } from '../scene/types'
-import type { Expr } from '../parser/types'
 
 export type { HoverInfo } from './hover'
 
@@ -105,6 +111,30 @@ function markerGeometry(shape: MarkerShape): THREE.CircleGeometry {
   }
 }
 
+// A 'mark' draws exactly as a label-less point: one Group of [background disc-
+// or-halo, coloured ring-or-fill] at the object's position, so the two share
+// build, in-place update and sizing code. They differ only in where the
+// position and the shape come from, and in the fallback colour (a mark belongs
+// to its curve, so it takes the curve colour, not the point colour).
+type PointLike = Extract<SceneObject, { kind: 'point' | 'mark' }>
+
+function isPointLike(obj: SceneObject): obj is PointLike {
+  return obj.kind === 'point' || obj.kind === 'mark'
+}
+
+function pointPosition(obj: PointLike): Vec2 {
+  return obj.kind === 'mark' ? obj.at : obj.position
+}
+
+// A feature point's appearance comes from its kind; an ordinary plotted point
+// still honours its own `style`; an open mark is a ring (its background disc
+// hides the curve under its centre) and a filled one a dot. 'ring' and
+// "outline" are the same picture, so they share a branch.
+function pointShape(obj: PointLike): MarkerShape {
+  if (obj.kind === 'mark') return obj.fill === 'open' ? 'ring' : 'dot'
+  return obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+}
+
 export interface SceneRendererOptions {
   // Colours to use instead of the theme's built-in palette (see palette.ts).
   palette?: Palette
@@ -120,12 +150,11 @@ export interface SceneRendererOptions {
 
 interface AnimatedEntry {
   mesh: THREE.Object3D
-  fx: Expr
-  fy: Expr
-  param: string
+  // The path's coordinates, compiled by the kernel when the scene was built.
+  fx: (t: number) => number
+  fy: (t: number) => number
   from: number
   to: number
-  functions: FunctionTable
 }
 
 interface MiscEntry {
@@ -176,24 +205,32 @@ export class SceneRenderer {
   private scene = new THREE.Scene()
   private camera2d: Camera2D
   private gridRenderer: GridRenderer
-  // curve/segment/segments/region: updated in place rather than disposed and
-  // rebuilt every rebuild, since those are the objects with real vertex
-  // counts and rebuild every frame during a drag — see geometryGroup.ts.
+  // curve/segment/segments/region render items: updated in place rather than
+  // disposed and rebuilt every rebuild, since those are the objects with real
+  // vertex counts and rebuild every frame during a drag — see geometryGroup.ts.
   private geometryGroupManager: GeometryGroupManager
-  // point/ray/animatedPoint — see the class comment above for the update
-  // strategy (points reused in place, ray/animatedPoint rebuilt).
+  // point/mark/ray/animatedPoint — see the class comment above for the update
+  // strategy (points and marks reused in place, ray/animatedPoint rebuilt).
   private miscGroup = new THREE.Group()
   private miscEntries: MiscEntry[] = []
   private hoverResolver: HoverResolver
   private canvas: HTMLCanvasElement
   private resizeObserver: ResizeObserver
   private rafId = 0
-  private dragging = false
-  private lastPointer = { x: 0, y: 0 }
+  // Whether the view is being dragged or zoomed, for the coarse pass (render/interaction.ts)
+  private interaction = createInteraction(() => performance.now())
+  private settleTimer: ReturnType<typeof setTimeout> | null = null
+  private controller: ViewController
+  // The camera may be behind the input (a drag or pinch is applied at the next frame).
+  private viewDirty = false
   private options: SceneRendererOptions
   private palette: Palette
   private lastScene: GraphScene | null = null
   private viewChangeScheduled = false
+  // The camera bounds the last scene was built for, and whether the canvas was resized since: what
+  // viewChangeAction needs to decide if a gesture frame can just transform the last picture.
+  private builtBounds: Bounds | null = null
+  private resizedSinceBuild = false
   private animated: AnimatedEntry[] = []
   private startTime = performance.now()
   private needsRender = true
@@ -219,9 +256,12 @@ export class SceneRenderer {
     const rect = canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
-    this.camera2d = new Camera2D(width, height, options.config.bounds ?? undefined)
+    this.camera2d = new Camera2D(width, height, authoredBounds(options.config, width / height), resolvePlotAspect(options.config))
+    this.controller = new ViewController(this.camera2d, { locked: options.config.lock })
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    // the size the first scene is built at: the observer reports it once as it starts, which is no change
+    this.interaction.viewportChanged(width, height)
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize())
     this.resizeObserver.observe(canvas)
@@ -229,6 +269,13 @@ export class SceneRenderer {
     canvas.addEventListener('pointerdown', this.handlePointerDown)
     window.addEventListener('pointermove', this.handlePointerMove)
     window.addEventListener('pointerup', this.handlePointerUp)
+    // A drag the browser takes away (a touch becoming a scroll, a dialog) never gets a pointerup, and neither
+    // does one whose capture is lost: both end it, and settle it, as the pointerup would have.
+    canvas.addEventListener('pointercancel', this.handlePointerCancel)
+    canvas.addEventListener('lostpointercapture', this.handlePointerCancel)
+    canvas.addEventListener('keydown', this.handleKeyDown)
+    this.applyLock(options.config.lock)
+    canvas.style.outline = 'none'
     canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     canvas.addEventListener('pointermove', this.handleHoverMove)
     canvas.addEventListener('pointerleave', this.handlePointerLeave)
@@ -244,10 +291,25 @@ export class SceneRenderer {
     return this.camera2d.getBounds()
   }
 
-  // Exposed so GraphViewer.tsx can pass a reduced marching-squares
-  // resolution to buildScene while the user is actively panning.
+  // Whether the pointer is down on the canvas.
   isDragging(): boolean {
-    return this.dragging
+    return this.interaction.isDragging()
+  }
+
+  // Exposed so GraphViewer.tsx can ask buildScene for a coarse pass (the
+  // samplers' coarse quality preset) while the user is
+  // dragging or zooming: dragging, or within WHEEL_SETTLE_MS of the last wheel
+  // event. The rebuild that follows when it stops is full quality (see settle).
+  isInteracting(): boolean {
+    return this.interaction.isInteracting()
+  }
+
+  // The canvas in CSS px, at least a pixel each way (a canvas that is not displayed
+  // reports 0, as handleResize knows): the curve sampler's screen-space tolerances are
+  // measured in these.
+  getViewportPx(): { width: number; height: number } {
+    const rect = this.canvas.getBoundingClientRect()
+    return { width: Math.max(rect.width, 1), height: Math.max(rect.height, 1) }
   }
 
   // Converts a target on-screen pixel size into the current world-unit size
@@ -263,14 +325,48 @@ export class SceneRenderer {
   // un-hides the canvas hasn't committed to the DOM yet), which reports a
   // 0-height rect. Dividing by that produced Infinity/NaN ribbon vertices
   // for every curve/segment built during that window.
-  private pixelToWorld(px: number): number {
+  //
+  // Per axis: x and y px-per-unit differ under an authored aspect or a one-axis zoom, so a round on-screen
+  // size is an ellipse in world units. pixelToWorld (the x value) is for the sizes still built as one
+  // number along a line (ribbon widths, dashes, arcs, ticks); round things use pixelToWorldXY.
+  private pixelToWorldXY(px: number): Vec2 {
     const rect = this.canvas.getBoundingClientRect()
     const height = Math.max(rect.height, 1)
     const sizeScale = Math.min(1, Math.max(MIN_SIZE_SCALE, Math.min(rect.width, rect.height) / SIZE_REFERENCE_PX))
-    return px * sizeScale * this.camera2d.worldPerPixel(height)
+    return pixelSizeXY(px * sizeScale, this.camera2d.worldPerPixelXY(height))
+  }
+
+  private pixelToWorld(px: number): number {
+    return this.pixelToWorldXY(px).x
+  }
+
+  // A locked plot is not an input surface: the page scrolls over it and it takes no keyboard focus.
+  private applyLock(locked: boolean) {
+    if (locked && !this.controller.locked) {
+      this.controller.cancel() // a gesture in flight must not strand
+      for (const id of this.activePointers) {
+        try { this.canvas.releasePointerCapture(id) } catch { /* not captured */ }
+      }
+      this.activePointers.clear()
+      const moved = this.interaction.pointerUp()
+      this.applyView() // the cancelled drag's dragEnd never reaches onIntents
+      if (moved && !this.controller.moving) this.settle()
+    }
+    this.controller.locked = locked
+    this.canvas.tabIndex = locked ? -1 : 0
+    this.canvas.style.touchAction = locked ? 'auto' : 'none'
   }
 
   setConfig(config: GraphConfig, palette?: Palette) {
+    this.applyLock(config.lock)
+    // Only an edit to the authored frame moves the view; any other edit leaves the user's pan/zoom alone.
+    // The caller rebuilds the scene right after, which picks up the new camera bounds.
+    if (frameChanged(this.options.config, config)) {
+      const { width, height } = this.camera2d.screenSize()
+      this.camera2d.setFrame(authoredBounds(config, width / height), resolvePlotAspect(config))
+      this.controller.resized()
+      this.resizedSinceBuild = true
+    }
     this.options.config = config
     this.palette = palette ?? (config.theme === 'dark' ? DARK_PALETTE : LIGHT_PALETTE)
     this.renderer.setClearColor(this.palette.background, 1)
@@ -278,23 +374,55 @@ export class SceneRenderer {
     this.drawGrid()
   }
 
+  // The canvas's size is part of what the curve sampler draws from (it works in screen pixels, a sample
+  // per 4 px), so a new size is a view change: the scene is rebuilt, coalesced into the next frame like any
+  // other. That includes a canvas that was hidden when the scene was built (a table-only spec edited into a
+  // graph one is built at 1 x 1 px, and `y = sin(x)` drew 9 vertices, 50 px off) and comes up at its size.
+  // A canvas that goes hidden is not rebuilt for: there is nothing to see it at, and its next size is a change.
+  // A resize is a gesture like a wheel turn: dragging a splitter is a stream of sizes, so each is a coarse
+  // rebuild (the interaction is in a burst), and the full one comes when the sizes stop (armSettle).
   private handleResize() {
     const rect = this.canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
     this.renderer.setSize(width, height, false)
     this.camera2d.resize(width, height)
+    this.controller.resized()
     this.drawGrid()
+    const changed = this.interaction.viewportChanged(width, height)
+    if (changed && rect.width >= 1 && rect.height >= 1) {
+      this.resizedSinceBuild = true
+      this.armSettle()
+      this.scheduleViewChange()
+    }
   }
 
+  private sample(e: PointerEvent): PointerSample {
+    const box = this.canvas.getBoundingClientRect()
+    return {
+      id: e.pointerId,
+      x: e.clientX - box.left,
+      y: e.clientY - box.top,
+      t: performance.now(),
+      kind: pointerKindOf(e.pointerType),
+      button: e.button,
+      shiftKey: e.shiftKey,
+    }
+  }
+
+  // Pointers that went down on the canvas: the window-level move/up handlers read the layout only for these.
+  private readonly activePointers = new Set<number>()
+
   private handlePointerDown = (e: PointerEvent) => {
-    this.dragging = true
-    this.lastPointer = { x: e.clientX, y: e.clientY }
+    if (this.controller.locked) return
+    this.activePointers.add(e.pointerId)
+    this.canvas.focus({ preventScroll: true })
     try {
       this.canvas.setPointerCapture(e.pointerId)
     } catch {
       // ignore — pointer capture is a nicety (keeps dragging past the canvas edge), not required for panning to work
     }
+    this.onIntents(this.controller.pointerDown(this.sample(e)))
   }
 
   // Rebuilding the scene (re-sampling every function/region/etc. over the new
@@ -321,7 +449,17 @@ export class SceneRenderer {
     requestAnimationFrame(() => {
       this.viewChangeScheduled = false
       this.drawGrid()
-      this.options.onViewChange?.()
+      // During a gesture the last build is only rebuilt when the view has left its overscan or changed scale
+      // too far; otherwise the camera transforms the last picture. At rest this is always 'full': a frame
+      // queued across the end of a gesture is itself the settle rebuild.
+      const action = viewChangeAction({
+        built: this.builtBounds,
+        current: this.camera2d.getBounds(),
+        interacting: this.interaction.isInteracting(),
+        resized: this.resizedSinceBuild,
+      })
+      if (action !== 'skip') this.options.onViewChange?.()
+      else this.refreshPixelSizes()
       // The hover guide line's own length is drawn out to the *current*
       // camera bounds (see hover.ts's resolve) — but resolveHover only
       // otherwise runs from a pointermove handler, and a wheel zoom (the
@@ -336,43 +474,106 @@ export class SceneRenderer {
     })
   }
 
-  private handlePointerMove = (e: PointerEvent) => {
-    if (!this.dragging) return
-    const dx = e.clientX - this.lastPointer.x
-    const dy = e.clientY - this.lastPointer.y
-    this.lastPointer = { x: e.clientX, y: e.clientY }
-    const rect = this.canvas.getBoundingClientRect()
-    this.camera2d.panByPixels(dx, dy, rect.height)
-    // Cheap, every frame — keeps the guide line's far end reaching the true
-    // bottom of the view throughout the drag instead of freezing at
-    // whatever bounds were current when hover was last fully resolved (see
-    // refreshGuideLine's own comment). The full re-hit-test in resolveHover
-    // stays skipped for the whole drag (see its `dragging` guard) — this
-    // only touches the line's two vertices, not a scan of every candidate.
+  // The view has stopped moving (the pointer came up after a drag, or the wheel and the canvas's size have
+  // been quiet for WHEEL_SETTLE_MS): tell the host once more, so it rebuilds at full quality, because what the last
+  // frame of the gesture built was coarse, or nothing was built at all (every frame skipped). A view change
+  // already queued for the next frame will do it, by then with the gesture's flag down (so viewChangeAction
+  // says 'full', never 'skip'), so it is not asked for twice; otherwise it is asked for here, directly.
+  private settle() {
+    if (this.viewChangeScheduled) return
+    this.options.onViewChange?.()
+  }
+
+  // A burst (a wheel turned, a canvas resized) has no end event: wait until it has been quiet, and settle
+  // then. The timer is the clock's to correct (it can fire a hair before performance.now says the burst is
+  // over: wait the rest).
+  private armSettle() {
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer)
+    const wait = this.interaction.settleIn()
+    if (wait === null) return
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null
+      if (!this.interaction.takeSettled()) this.armSettle()
+      // a drag in progress settles itself when the pointer goes up
+      else if (!this.interaction.isDragging()) this.settle()
+    }, wait)
+  }
+
+  // What the view's input does to the renderer's interaction clock (see interaction.ts). A drag is
+  // dragStart..dragEnd; everything else that moves the view (wheel, keys, coast, reset) is a burst.
+  private onIntents(intents: Intent[]) {
+    for (const i of intents) {
+      if (i.kind === 'dragStart') this.interaction.pointerDown()
+      else if (i.kind === 'dragEnd') {
+        this.applyView() // the last drag move is not in the camera yet
+        // a coast carries on and settles when it stops; otherwise a moved drag settles now
+        if (this.interaction.pointerUp() && !this.controller.moving) this.settle()
+      } else if (i.kind === 'drag' || i.kind === 'zoom' || i.kind === 'pinch' || i.kind === 'pan' || i.kind === 'reset') {
+        this.viewDirty = true
+      }
+    }
+    // Belt-and-suspenders: see resolveHover's own re-resolve in scheduleViewChange.
+    if (intents.some((i) => i.kind === 'dragEnd') && this.pendingHoverEvent) this.resolveHover(this.pendingHoverEvent)
+  }
+
+  // Step the motion to now and, if the camera moved, tell everything that follows it.
+  private applyView() {
+    if (!this.controller.step(performance.now())) {
+      this.viewDirty = this.controller.moving
+      return
+    }
+    this.viewDirty = this.controller.moving
     this.hoverResolver.refreshGuideLine(this.camera2d)
     this.needsRender = true
+    if (this.interaction.isDragging()) this.interaction.pointerMove()
+    else {
+      this.interaction.wheel()
+      this.armSettle()
+    }
     this.scheduleViewChange()
   }
 
-  private handlePointerUp = () => {
-    this.dragging = false
-    // Belt-and-suspenders alongside scheduleViewChange's own re-resolve: that
-    // one only fires once its queued rAF callback runs, which could in
-    // principle land before or after this synchronous pointerup depending on
-    // frame timing. Resolving right here means the hover marker reappears at
-    // its correct, settled-view position the instant the drag actually ends,
-    // regardless of that race.
-    if (this.pendingHoverEvent) this.resolveHover(this.pendingHoverEvent)
+  private handlePointerMove = (e: PointerEvent) => {
+    if (!this.activePointers.has(e.pointerId)) return
+    this.onIntents(this.controller.pointerMove(this.sample(e)))
+  }
+
+  private handlePointerUp = (e: PointerEvent) => {
+    if (!this.activePointers.delete(e.pointerId)) return
+    this.onIntents(this.controller.pointerUp(this.sample(e)))
+  }
+
+  private handlePointerCancel = (e: PointerEvent) => {
+    this.activePointers.delete(e.pointerId)
+    this.onIntents(this.controller.pointerCancel(this.sample(e)))
+  }
+
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (!keyReachesView(e)) return
+    const t = performance.now()
+    if (this.controller.key(e.key, t)) {
+      e.preventDefault()
+      this.viewDirty = true
+    }
   }
 
   private handleWheel = (e: WheelEvent) => {
+    if (this.controller.locked) return
     e.preventDefault()
     const rect = this.canvas.getBoundingClientRect()
-    const factor = Math.exp(e.deltaY * 0.001)
-    this.camera2d.zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top, rect.width, rect.height)
-    this.hoverResolver.refreshGuideLine(this.camera2d)
-    this.needsRender = true
-    this.scheduleViewChange()
+    this.controller.wheel({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode as 0 | 1 | 2,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      t: performance.now(),
+    })
+    this.viewDirty = true
+    this.applyView() // an exact one-axis zoom is already in the camera; the others start moving here
   }
 
   private handleContextLost = (e: Event) => {
@@ -404,7 +605,7 @@ export class SceneRenderer {
   }
 
   private resolveHover(e: PointerEvent) {
-    if (this.dragging) return
+    if (this.interaction.isDragging()) return
     const mode = this.options.config.hover
     if (mode === 'none' || !this.lastScene) {
       this.hoverResolver.clear()
@@ -427,74 +628,67 @@ export class SceneRenderer {
       rect.height,
       this.palette.hover,
       this.palette.background,
-      (px) => this.pixelToWorld(px)
+      (px) => this.pixelToWorld(px),
+      (px) => this.pixelToWorldXY(px),
+      { x: scaleOf(this.options.config.scales?.x), y: scaleOf(this.options.config.scales?.y) }
     )
     this.needsRender = true
     this.options.onHover?.(info)
   }
 
   private drawGrid() {
-    this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px))
+    const rect = this.canvas.getBoundingClientRect()
+    this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px), {
+      widthPx: Math.max(rect.width, 1),
+      heightPx: Math.max(rect.height, 1),
+    }, (px) => this.pixelToWorldXY(px), this.camera2d.origin())
     this.needsRender = true
   }
 
-  // A constructed 'line' object is stored unclipped — it is a locus, true
-  // everywhere along itself, and how much of it to draw is a fact about the
-  // current view rather than about the figure. Clipping it here, against the
-  // camera's live bounds, is what keeps it correct under pan and zoom: the
-  // same stored object yields a different drawn segment each time the view
-  // moves, instead of a fixed-length stick sliding around the screen. A line
-  // that misses the view entirely simply drops out.
-  private clipConstructionLines(objects: SceneObject[]): SceneObject[] {
-    if (!objects.some((o) => o.kind === 'line')) return objects
-    const bounds = this.camera2d.getBounds()
-    const clipped: SceneObject[] = []
-    for (const obj of objects) {
-      if (obj.kind !== 'line') {
-        clipped.push(obj)
-        continue
-      }
-      const span = clipLineToBounds(obj.through, obj.direction, obj.extent, bounds)
-      if (span) clipped.push({ kind: 'segment', from: span[0], to: span[1], color: obj.color })
-    }
-    return clipped
-  }
-
+  // toRenderItems turns the scene into what this renderer draws: ribbons,
+  // regions, segments — and clips every unclipped 'line' against the camera's
+  // live bounds, which is what keeps a construction line or an asymptote
+  // correct under pan and zoom (see its comment). Everything it leaves in
+  // `misc` is point-like or annotation and is built by updateMiscGroup.
   setGraphScene(scene: GraphScene) {
     this.lastScene = scene
-    const objects = this.clipConstructionLines(scene.objects)
-    this.geometryGroupManager.update(
-      objects.filter((o): o is Extract<SceneObject, { kind: GeometryKind }> => isGeometryKind(o.kind)),
-      this.palette,
-      (px) => this.pixelToWorld(px)
-    )
-    this.updateMiscGroup(objects.filter((o) => !isGeometryKind(o.kind)))
+    // Remember the view this build is for. Unclipped lines are clipped to the build's overscan box, not the
+    // bare view, so a picture the camera then pans or zooms still has its overscan to show.
+    const view = this.camera2d.getBounds()
+    this.builtBounds = view
+    this.resizedSinceBuild = false
+    // Renderer-relative float32: build the geometry relative to the view's centre (kept until the next rebuild), so a
+    // 1e-8 window around x = 1000 does not quantise. The grid draws against the same origin.
+    this.camera2d.setOrigin((view.xMin + view.xMax) / 2, (view.yMin + view.yMax) / 2)
+    const { geometry, misc } = toRenderItems(scene.objects, overscanBox(view))
+    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px), this.camera2d.origin(), (px) => this.pixelToWorldXY(px))
+    this.drawGrid()
+    this.updateMiscGroup(misc)
     this.needsRender = true
   }
 
-  // See the class comment for the reuse policy per kind: 'point' updates its
-  // existing Group in place, everything contentKey knows how to key (ray,
-  // and the geometry-annotation marks below) skips rebuilding entirely when
-  // that key says nothing that matters changed, and 'animatedPoint' always
-  // rebuilds. Same index-match-by-position idea as geometryGroupManager
-  // .update, just over whole objects instead of vertex buffers.
+  // See the class comment for the reuse policy per kind: 'point' and 'mark'
+  // update their existing Group in place, everything contentKey knows how to
+  // key (ray, and the geometry-annotation marks below) skips rebuilding
+  // entirely when that key says nothing that matters changed, and
+  // 'animatedPoint' always rebuilds. Same index-match-by-position idea as
+  // geometryGroupManager.update, just over whole objects instead of vertex
+  // buffers.
   private updateMiscGroup(objects: SceneObject[]) {
     const next: MiscEntry[] = []
     this.animated = []
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i]
-      // A feature point's appearance comes from its kind; an ordinary plotted
-      // point still honours its own `style`. 'ring' and "outline" are the same
-      // picture, so they share a branch.
-      const shape: MarkerShape =
-        obj.kind !== 'point' ? 'dot' : obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
-      const outline = obj.kind === 'point' && shape === 'ring'
+      const shape: MarkerShape = isPointLike(obj) ? pointShape(obj) : 'dot'
+      const outline = isPointLike(obj) && shape === 'ring'
       const hasLabel = obj.kind === 'point' && !!obj.label
       const prev = this.miscEntries[i]
+      // A mark and a point build the same Group, so either can be updated in
+      // place from the other: a pan moves nothing, and a zoom only rescales.
       if (
-        obj.kind === 'point' &&
+        isPointLike(obj) &&
         prev &&
-        prev.kind === 'point' &&
+        (prev.kind === 'point' || prev.kind === 'mark') &&
         prev.outline === outline &&
         prev.hasLabel === hasLabel &&
         prev.shape === shape
@@ -537,6 +731,22 @@ export class SceneRenderer {
     this.miscEntries = next
   }
 
+  // A gesture frame that skips the rebuild still zooms: the existing point dots, rings, halos and their labels
+  // are re-sized for the new scale (a transform each, no rebuild), so they hold their pixel size instead of
+  // scaling with the picture until the next rebuild. Rays/angle marks bake their pixel sizes into geometry
+  // and ribbons are not touched: both may lag until the rebuild, which the spec accepts.
+  private refreshPixelSizes() {
+    for (const entry of this.miscEntries) {
+      if (entry.kind !== 'point' && entry.kind !== 'mark') continue
+      const group = entry.object3d as THREE.Group
+      this.applyPointSizes(group, entry.outline)
+      const label = group.children[2] as THREE.Sprite | undefined
+      const layout = label?.userData.layout as { worldPos: Vec2; direction: Vec2; maxOffset?: number | null } | undefined
+      if (label && layout) this.updateLabelSprite(label, layout.worldPos, layout.direction, layout.maxOffset)
+    }
+    this.needsRender = true
+  }
+
   // Everything these kinds' built geometry actually depends on: their own
   // spec inputs (endpoints/color/label/etc.) plus the current zoom (any
   // pixelToWorld-derived size — a ray's shaft width, an angle arc's radius —
@@ -551,7 +761,8 @@ export class SceneRenderer {
   // any kind not listed here (point/animatedPoint), which just means "this
   // kind doesn't use the cache-key path" — see updateMiscGroup.
   private contentKey(obj: SceneObject): string | null {
-    const zoom = this.pixelToWorld(1)
+    const per = this.pixelToWorldXY(1)
+    const zoom = `${per.x}|${per.y}`
     if (obj.kind === 'ray') {
       return ['ray', obj.from.x, obj.from.y, obj.to.x, obj.to.y, obj.color ?? '', obj.label ?? '', zoom].join('|')
     }
@@ -575,19 +786,20 @@ export class SceneRenderer {
   // and the point-colored mesh second, at z = 0.01, so it renders in front),
   // with the group itself carrying the world position — that's what makes
   // "just move the group" a correct, complete update.
-  private updatePointObject(group: THREE.Group, obj: Extract<SceneObject, { kind: 'point' }>) {
-    group.position.set(obj.position.x, obj.position.y, 0)
-    // Must mirror buildObject's own shape/outline derivation exactly: a
-    // feature point (e.g. an x-/y-intercept) gets its 'ring' shape from
-    // `obj.feature`, never from `obj.style` (buildScene never sets `style`
-    // on a feature point — see its comment). Reusing `obj.style === 'outline'`
-    // alone here would compute `outline = false` for such a point even
-    // though the group it's reusing was actually built as a ring, which
-    // flips its ring/fill colors and sizes to the wrong (non-outline) pair
-    // on every reuse after the first build.
-    const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+  private updatePointObject(group: THREE.Group, obj: PointLike) {
+    const position = pointPosition(obj)
+    group.position.set(position.x, position.y, 0)
+    // Must mirror buildObject's own shape/outline derivation exactly — both go
+    // through pointShape. A feature point (e.g. an x-/y-intercept) gets its
+    // 'ring' shape from `obj.feature`, never from `obj.style` (buildScene never
+    // sets `style` on a feature point — see its comment). Reusing
+    // `obj.style === 'outline'` alone here would compute `outline = false` for
+    // such a point even though the group it's reusing was actually built as a
+    // ring, which flips its ring/fill colors and sizes to the wrong
+    // (non-outline) pair on every reuse after the first build.
+    const shape = pointShape(obj)
     const outline = shape === 'ring'
-    const pointColor = this.colorOr(obj.color, this.palette.point)
+    const pointColor = this.pointLikeColor(obj)
     // child[0] (background disc / halo) is always background-colored and
     // child[1] (ring / fill) is always point-colored — true in both the
     // outline and non-outline shapes, so no outline check is needed here.
@@ -605,7 +817,7 @@ export class SceneRenderer {
     // zoomed in instead of holding its apparent size like every other
     // pixelToWorld-driven marker does.
     this.applyPointSizes(group, outline)
-    if (obj.label) {
+    if (obj.kind === 'point' && obj.label) {
       const label = group.children[2] as THREE.Sprite | undefined
       if (label && label.userData.labelText !== obj.label) {
         group.remove(label)
@@ -632,17 +844,26 @@ export class SceneRenderer {
       // The ring's inner/outer ratio is baked into its RingGeometry, not
       // into this scale — both the backing disc and the ring share the same
       // outer radius so the disc exactly fills (and sits behind) the ring.
-      const outer = this.pixelToWorld(POINT_OUTLINE_OUTER_PX)
-      backgroundMesh.scale.setScalar(outer)
-      coloredMesh.scale.setScalar(outer)
+      const outer = this.pixelToWorldXY(POINT_OUTLINE_OUTER_PX)
+      backgroundMesh.scale.set(outer.x, outer.y, 1)
+      coloredMesh.scale.set(outer.x, outer.y, 1)
     } else {
-      backgroundMesh.scale.setScalar(this.pixelToWorld(POINT_HALO_PX))
-      coloredMesh.scale.setScalar(this.pixelToWorld(POINT_FILL_PX))
+      const halo = this.pixelToWorldXY(POINT_HALO_PX)
+      const fill = this.pixelToWorldXY(POINT_FILL_PX)
+      backgroundMesh.scale.set(halo.x, halo.y, 1)
+      coloredMesh.scale.set(fill.x, fill.y, 1)
     }
   }
 
   private colorOr(color: string | null | undefined, fallback: number): number {
     return themedColor(color, fallback, this.palette)
+  }
+
+  // The colour of a point-like's coloured mesh: its own, else the palette's
+  // point colour for a point and the curve colour for a mark (a mark belongs to
+  // its curve, so it must read as part of it).
+  private pointLikeColor(obj: PointLike): number {
+    return this.colorOr(obj.color, obj.kind === 'mark' ? this.palette.curve : this.palette.point)
   }
 
   // A label sprite sized/offset in screen pixels rather than world units —
@@ -670,7 +891,10 @@ export class SceneRenderer {
   // "keep it out of anything that needs a canvas to construct" reasoning as
   // geometryMarks.ts/hover.ts.
   private updateLabelSprite(sprite: THREE.Sprite, worldPos: Vec2, direction: Vec2 = DEFAULT_LABEL_DIRECTION, maxOffset?: number | null) {
-    const placement = clampedLabelPlacement(worldPos, direction, this.pixelToWorld(LABEL_OFFSET_PX), this.pixelToWorld(60), this.pixelToWorld(30), maxOffset)
+    // Remembered so a skipped gesture frame can re-lay the label out at the new zoom (refreshPixelSizes).
+    sprite.userData.layout = { worldPos, direction, maxOffset }
+    const offset = this.pixelToWorldXY(LABEL_OFFSET_PX)
+    const placement = clampedLabelPlacementXY(worldPos, direction, offset, this.pixelToWorldXY(60).x, this.pixelToWorldXY(30).y, maxOffset)
     sprite.scale.set(placement.width, placement.height, 1)
     sprite.position.set(placement.position.x, placement.position.y, 0)
   }
@@ -689,9 +913,14 @@ export class SceneRenderer {
 
     const group = new THREE.Group()
 
-    const halfWidth = this.pixelToWorld(RAY_WIDTH_PX) / 2
-    const nx = -dir.y * halfWidth
-    const ny = dir.x * halfWidth
+    // The normal is taken on screen (px space), so the shaft is RAY_WIDTH_PX thick at any direction.
+    const per = this.pixelToWorldXY(1)
+    const halfWidth = RAY_WIDTH_PX / 2
+    const pdx = dir.x / per.x
+    const pdy = dir.y / per.y
+    const plen = Math.hypot(pdx, pdy) || 1
+    const nx = (-pdy / plen) * per.x * halfWidth
+    const ny = (pdx / plen) * per.y * halfWidth
     const shaftPositions = new Float32Array([
       origin.x + nx, origin.y + ny, 0,
       origin.x - nx, origin.y - ny, 0,
@@ -713,8 +942,9 @@ export class SceneRenderer {
     return group
   }
 
-  // Only the point/ray/animatedPoint kinds — curve/segment/segments/region
-  // are built and updated by geometryGroupManager instead (see setGraphScene).
+  // Only the point/mark/ray/animatedPoint kinds and the annotation marks —
+  // curve/segment/segments/region render items are built and updated by
+  // geometryGroupManager instead (see setGraphScene).
   private buildObject(obj: SceneObject): THREE.Object3D | null {
     if (obj.kind === 'ray') {
       const origin = new THREE.Vector3(obj.from.x, obj.from.y, 0)
@@ -731,19 +961,17 @@ export class SceneRenderer {
       return arrow
     }
 
-    if (obj.kind === 'point') {
+    if (isPointLike(obj)) {
       // Group-relative: every child sits at the group's local origin, and
       // the group itself carries the world position — required so
       // updatePointObject's in-place reuse can move the whole point with a
       // single group.position.set(...) instead of touching each child.
       const group = new THREE.Group()
-      group.position.set(obj.position.x, obj.position.y, 0)
-      // A feature point's appearance comes from its kind; an ordinary plotted
-      // point still honours its own `style`. 'ring' and "outline" are the same
-      // picture, so they share a branch.
-      const shape: MarkerShape = obj.feature ? markerShape(obj.feature) : obj.style === 'outline' ? 'ring' : 'dot'
+      const position = pointPosition(obj)
+      group.position.set(position.x, position.y, 0)
+      const shape = pointShape(obj)
       const outline = shape === 'ring'
-      const pointColor = this.colorOr(obj.color, this.palette.point)
+      const pointColor = this.pointLikeColor(obj)
       if (outline) {
         // Unit radius (1) — applyPointSizes below scales this via a
         // transform, not by rebuilding the geometry, so the same mesh works
@@ -781,7 +1009,8 @@ export class SceneRenderer {
         group.add(circle)
       }
       this.applyPointSizes(group, outline)
-      if (obj.label) {
+      // A mark carries no label.
+      if (obj.kind === 'point' && obj.label) {
         const label = this.buildLabel(obj.label, { x: 0, y: 0 }, obj.labelDirection ?? undefined, obj.maxLabelOffset)
         label.userData.labelText = obj.label
         group.add(label)
@@ -791,8 +1020,10 @@ export class SceneRenderer {
 
     if (obj.kind === 'animatedPoint') {
       const color = this.colorOr(obj.color, this.palette.point)
-      const mesh = new THREE.Mesh(new THREE.CircleGeometry(this.pixelToWorld(7), 24), new THREE.MeshBasicMaterial({ color }))
-      this.animated.push({ mesh, fx: obj.fx, fy: obj.fy, param: obj.param, from: obj.from, to: obj.to, functions: obj.functions })
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color }))
+      const r = this.pixelToWorldXY(7)
+      mesh.scale.set(r.x, r.y, 1)
+      this.animated.push({ mesh, fx: obj.fx, fy: obj.fy, from: obj.from, to: obj.to })
       return mesh
     }
 
@@ -805,14 +1036,21 @@ export class SceneRenderer {
     if (obj.kind === 'angleMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
       const legLength = Math.min(Math.hypot(obj.from.x - obj.vertex.x, obj.from.y - obj.vertex.y), Math.hypot(obj.to.x - obj.vertex.x, obj.to.y - obj.vertex.y))
-      const radius = Math.min(this.pixelToWorld(ANGLE_ARC_RADIUS_PX), legLength * ANGLE_ARC_MAX_FRACTION)
-      const points = angleArcPoints(obj.vertex, obj.from, obj.to, radius)
+      // An arc of r px is an ellipse in world: built in px space, mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const toPx = (v: Vec2): Vec2 => ({ x: v.x / per.x, y: v.y / per.y })
+      const pxVertex = toPx(obj.vertex)
+      const pxLeg = Math.min(Math.hypot(toPx(obj.from).x - pxVertex.x, toPx(obj.from).y - pxVertex.y), Math.hypot(toPx(obj.to).x - pxVertex.x, toPx(obj.to).y - pxVertex.y))
+      const radiusPx = Math.min(ANGLE_ARC_RADIUS_PX, pxLeg * ANGLE_ARC_MAX_FRACTION)
+      const points = angleArcPoints(pxVertex, toPx(obj.from), toPx(obj.to), radiusPx).map((p) => ({ x: p.x * per.x, y: p.y * per.y }))
       const geometry = new THREE.BufferGeometry().setFromPoints(points.map((p) => new THREE.Vector3(p.x, p.y, 0)))
       const group = new THREE.Group()
       group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })))
       if (obj.label) {
-        const labelDistance = Math.min(this.pixelToWorld(ANGLE_LABEL_DISTANCE_PX), legLength * ANGLE_LABEL_MAX_FRACTION)
-        const labelPos = angleBisectorPoint(obj.vertex, obj.from, obj.to, labelDistance)
+        // Placed in px space like the arc, so the distance is the same on screen on unequal axes.
+        const labelDistancePx = Math.min(ANGLE_LABEL_DISTANCE_PX, pxLeg * ANGLE_LABEL_MAX_FRACTION)
+        const labelPx = angleBisectorPoint(pxVertex, toPx(obj.from), toPx(obj.to), labelDistancePx)
+        const labelPos = { x: labelPx.x * per.x, y: labelPx.y * per.y }
         // labelDistance above only clamps *where* the label sits (along the
         // bisector) — without also capping its own text size the same way
         // maxLabelOffset does for a polygon vertex, a small triangle's angle
@@ -825,19 +1063,30 @@ export class SceneRenderer {
 
     if (obj.kind === 'rightAngleMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
-      const legLength = Math.min(Math.hypot(obj.from.x - obj.vertex.x, obj.from.y - obj.vertex.y), Math.hypot(obj.to.x - obj.vertex.x, obj.to.y - obj.vertex.y))
-      const size = Math.min(this.pixelToWorld(RIGHT_ANGLE_SIZE_PX), legLength * RIGHT_ANGLE_MAX_FRACTION)
-      const points = rightAngleSquarePoints(obj.vertex, obj.from, obj.to, size)
+      // A square in px: built in px space, mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const toPx = (v: Vec2): Vec2 => ({ x: v.x / per.x, y: v.y / per.y })
+      const pxVertex = toPx(obj.vertex)
+      const pxLeg = Math.min(Math.hypot(toPx(obj.from).x - pxVertex.x, toPx(obj.from).y - pxVertex.y), Math.hypot(toPx(obj.to).x - pxVertex.x, toPx(obj.to).y - pxVertex.y))
+      const sizePx = Math.min(RIGHT_ANGLE_SIZE_PX, pxLeg * RIGHT_ANGLE_MAX_FRACTION)
+      const points = rightAngleSquarePoints(pxVertex, toPx(obj.from), toPx(obj.to), sizePx).map((p) => ({ x: p.x * per.x, y: p.y * per.y }))
       const geometry = new THREE.BufferGeometry().setFromPoints(points.map((p) => new THREE.Vector3(p.x, p.y, 0)))
       return new THREE.Line(geometry, new THREE.LineBasicMaterial({ color }))
     }
 
     if (obj.kind === 'tickMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
-      const segLength = Math.hypot(obj.to.x - obj.from.x, obj.to.y - obj.from.y)
-      const tickLength = Math.min(this.pixelToWorld(TICK_LENGTH_PX), segLength * TICK_MAX_FRACTION)
-      const gap = Math.min(this.pixelToWorld(TICK_GAP_PX), segLength * TICK_MAX_FRACTION)
-      const segments = tickMarkSegments(obj.from, obj.to, obj.count, tickLength, gap)
+      // Ticks are laid out in px space (length, gap and perpendicular on screen), mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const pxFrom: Vec2 = { x: obj.from.x / per.x, y: obj.from.y / per.y }
+      const pxTo: Vec2 = { x: obj.to.x / per.x, y: obj.to.y / per.y }
+      const segLength = Math.hypot(pxTo.x - pxFrom.x, pxTo.y - pxFrom.y)
+      const tickLength = Math.min(TICK_LENGTH_PX, segLength * TICK_MAX_FRACTION)
+      const gap = Math.min(TICK_GAP_PX, segLength * TICK_MAX_FRACTION)
+      const segments = tickMarkSegments(pxFrom, pxTo, obj.count, tickLength, gap).map(([a, b]) => [
+        { x: a.x * per.x, y: a.y * per.y },
+        { x: b.x * per.x, y: b.y * per.y },
+      ])
       const group = new THREE.Group()
       for (const [a, b] of segments) {
         const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, a.y, 0), new THREE.Vector3(b.x, b.y, 0)])
@@ -852,22 +1101,19 @@ export class SceneRenderer {
   private updateAnimated() {
     if (this.animated.length === 0) return
     const elapsed = performance.now() - this.startTime
-    const angleMode = this.options.config.angle
     for (const entry of this.animated) {
       const cycle = (elapsed % ANIMATE_DURATION_MS) / ANIMATE_DURATION_MS
       const t = entry.from + (entry.to - entry.from) * cycle
-      try {
-        const bindings = { [entry.param]: t }
-        const x = evalExpr(entry.fx, bindings, angleMode, entry.functions)
-        const y = evalExpr(entry.fy, bindings, angleMode, entry.functions)
-        entry.mesh.position.set(x, y, 0.02)
-      } catch {
-        // leave the point at its last valid position
-      }
+      const x = entry.fx(t)
+      const y = entry.fy(t)
+      // A path undefined at this t (the kernel answers NaN, it does not throw)
+      // leaves the point at its last valid position.
+      if (Number.isFinite(x) && Number.isFinite(y)) entry.mesh.position.set(x, y, 0.02)
     }
   }
 
   private loop = () => {
+    if (this.viewDirty || this.controller.moving) this.applyView()
     this.updateAnimated()
     // Render on demand: skip the actual draw call on frames where nothing
     // changed (no pan/zoom/hover/scene update in flight), unless a point is
@@ -882,10 +1128,14 @@ export class SceneRenderer {
 
   dispose() {
     cancelAnimationFrame(this.rafId)
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer)
     this.resizeObserver.disconnect()
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     window.removeEventListener('pointermove', this.handlePointerMove)
     window.removeEventListener('pointerup', this.handlePointerUp)
+    this.canvas.removeEventListener('pointercancel', this.handlePointerCancel)
+    this.canvas.removeEventListener('lostpointercapture', this.handlePointerCancel)
+    this.canvas.removeEventListener('keydown', this.handleKeyDown)
     this.canvas.removeEventListener('wheel', this.handleWheel)
     this.canvas.removeEventListener('pointermove', this.handleHoverMove)
     this.canvas.removeEventListener('pointerleave', this.handlePointerLeave)

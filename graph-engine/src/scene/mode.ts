@@ -7,8 +7,11 @@ import type { Statement } from '../parser/types'
 // lifted onto the z=0 plane, so mixed specs "just work".
 export function isThreeD(statements: Statement[]): boolean {
   return statements.some((s) => {
-    // Every space form routes the spec to space (track 3, SP9).
-    if (s.kind === 'space') return true
+    // Every space form routes the spec to space (track 3, SP9) — except a
+    // scalar multi-parameter definition, which draws nothing and is as much a
+    // 2D helper as a 3D one (agreed with space, 2026-10-01). A vector function
+    // stays 3D intent.
+    if (s.kind === 'space') return s.form.form !== 'function'
     if (s.kind === 'surface' || s.kind === 'parametricSurface') return true
     if (s.kind === 'point') return s.z !== null
     if (s.kind === 'segment' || s.kind === 'ray') return s.z1 !== null || s.z2 !== null

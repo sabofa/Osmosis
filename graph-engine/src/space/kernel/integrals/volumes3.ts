@@ -30,7 +30,7 @@
 // same value. Inner bounds that cross are refused.
 
 import type { Expr } from '../../../parser/types'
-import { compileMany, compileScalar } from '../../../math/compile'
+import { compileMany, compileScalar, paramCallsAsProducts } from '../../../math/compile'
 import { diff } from '../../../math/diff'
 import { add, call, mul, num, pow, sub, substitute, variable } from '../../../math/expr'
 import { integrate3 } from '../../../math/quadrature'
@@ -149,7 +149,7 @@ export function prepareIteratedSolid(solid: Iterated, context: BuildContext, rea
     integrals(exprs) {
       const fs = exprs.map((expr) => {
         reads.add(expr, [...XYZ, ...vars])
-        const inSystem = solid.coords === 'rectangular' ? expr : substitute(expr, toSystem)
+        const inSystem = solid.coords === 'rectangular' ? expr : substitute(paramCallsAsProducts(expr, XYZ, scope), toSystem)
         return { f: compileScalar(mul(inSystem, jac), vars, scope), positive: nonNegative(expr) }
       })
       return () => {
@@ -181,15 +181,18 @@ function compileMap(solid: Iterated, context: BuildContext) {
   const [S, T, W] = boundNames(3).map(variable)
   const U = add(O.from, mul(sub(O.to, O.from), S))
   const outer = new Map([[O.param, U]])
-  const c = substitute(M.from, outer)
-  const d = substitute(M.to, outer)
+  // A bound that writes the outer variable as a factor, y in [0, x(1 - x)], is
+  // a product, said outright before the variable is substituted.
+  const { scope } = context
+  const c = substitute(paramCallsAsProducts(M.from, [O.param], scope), outer)
+  const d = substitute(paramCallsAsProducts(M.to, [O.param], scope), outer)
   const V = add(c, mul(sub(d, c), T))
   const both = new Map([
     [O.param, U],
     [M.param, V],
   ])
-  const e = substitute(I.from, both)
-  const g = substitute(I.to, both)
+  const e = substitute(paramCallsAsProducts(I.from, [O.param, M.param], scope), both)
+  const g = substitute(paramCallsAsProducts(I.to, [O.param, M.param], scope), both)
   const Q = add(e, mul(sub(g, e), W))
   const values = new Map([...both, [I.param, Q]])
   const xyz = cartesian(solid.coords, (name) => values.get(name) ?? variable(name))

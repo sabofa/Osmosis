@@ -24,10 +24,11 @@
 import { parseTuple, parseForRange, splitTopLevelComma } from '../../parser/grammarUtil'
 import { parseExprString } from '../../parser/parseExpr'
 import type { Expr } from '../../parser/types'
-import { BUILTIN_NAMES } from '../../math/compile'
 import { varNames } from '../../math/expr'
+import { isClassicBuiltin, SHADOWABLE_BUILTINS } from './shadowable'
 import { parseForDomain, parseOverDomain } from './domain'
 import { parseNamedIntegral } from './keywords/integrals'
+import { readNames } from './reads'
 import { buildStyle, splitStyle, type RawClause } from './style'
 import { spaceStatement, type SpaceForm, type SpaceStatement } from './types'
 import { parseVectorLiteral } from './vector'
@@ -37,10 +38,30 @@ const NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 // "NAME(p1, ...) = rhs": a name, then a parenthesised parameter list.
 const DEFINITION = /^([a-zA-Z_][a-zA-Z0-9_]*)\(([^()]*)\)\s*=(.*)$/
 
-// A built-in's name, pi or e is never a definition's: "log(y, x) = 2" is an
-// equation calling log, as it always was.
+// A classic built-in's name, pi or e is never a definition's: "log(y, x) = 2" is
+// an equation calling log, as it always was. Only calc's ten new names are a
+// document's to use (shadowable.ts).
 function reserved(name: string): boolean {
-  return BUILTIN_NAMES.has(name) || name === 'pi' || name === 'e'
+  return isClassicBuiltin(name) || name === 'pi' || name === 'e'
+}
+
+// One of those ten, followed by a scalar right side, may be the equation it
+// would always have been, so it is a definition only when it cannot be one:
+// - its parameters are not all coordinates. "lcm(x, y) = x*y" and
+//   "gcd(x, y) = x + y - 1" are the implicit curves they were at calc's base;
+//   a coordinate-only line is never a definition;
+// - its right side reads every one of its parameters, since a document's own
+//   @param or constant could be an argument: "choose(x, k) = 3" is an equation,
+//   "gcd(a, b) = a*b" and "root(x, n) = x^(1/n)" define.
+const COORDINATES = new Set(['x', 'y', 'z'])
+
+function readsEvery(rhs: string, params: readonly string[]): boolean {
+  try {
+    const read = readNames(parseExprString(rhs), params)
+    return params.every((p) => read.has(p))
+  } catch {
+    return false
+  }
 }
 
 function parseDefinition(rest: string, clauses: readonly RawClause[]): SpaceForm | 'unclaimed' | null {
@@ -49,13 +70,13 @@ function parseDefinition(rest: string, clauses: readonly RawClause[]): SpaceForm
   const [, name, paramText, rhs] = match
   const params = paramText.split(',').map((p) => p.trim())
   if (params.some((p) => !NAME.test(p))) return null
-  // A one-parameter scalar definition is the shared parser's functionDef,
-  // whatever its name (the kernel refuses one named after a built-in).
-  const oneParameter = params.length === 1 && !parseVectorLiteral(rhs, true)
-  if (oneParameter) return 'unclaimed'
-  if (reserved(name)) return null
-
   const vector = parseVectorLiteral(rhs, true)
+  // A one-parameter scalar definition is the shared parser's functionDef,
+  // whatever its name (the kernel refuses one named after a classic built-in).
+  if (params.length === 1 && !vector) return 'unclaimed'
+  if (reserved(name)) return null
+  if (!vector && SHADOWABLE_BUILTINS.has(name) && (params.every((p) => COORDINATES.has(p)) || !readsEvery(rhs, params))) return null
+
   if (vector) {
     buildStyle(clauses, 'vector definition')
     checkParams(name, params)

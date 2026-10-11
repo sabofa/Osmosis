@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { niceStep, resolveStep, shouldLabel } from './grid'
+import { labelBoxesPx } from './labelLayout'
+import { gridPlan, niceStep, resolveStep, shouldLabel } from './grid'
 import { defaultConfig } from '../parser/config'
 
 describe('resolveStep', () => {
@@ -117,8 +118,193 @@ describe('resolveStep in fixed mode', () => {
   })
 })
 
+describe('gridPlan', () => {
+  const SIZE = { widthPx: 800, heightPx: 480 }
+  const MARGINS = { x: 0.7, y: 0.4 }
+  const OFFSET = { x: 0.5, y: 0.5 }
+  const bounds = (xMin: number, xMax: number, yMin: number, yMax: number) => ({ xMin, xMax, yMin, yMax })
+
+  // The step loops GridRenderer.draw used before frameTicks, run by hand.
+  const oldWalk = (min: number, max: number, step: number) => {
+    const out: number[] = []
+    for (let v = Math.ceil(min / step) * step; v <= max; v += step) out.push(v)
+    return out
+  }
+
+  it('reproduces the linear step loops exactly', () => {
+    const plan = gridPlan(bounds(-10, 10, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    const stepX = resolveStep(null, 20, 6)
+    const stepY = resolveStep(null, 12, 6)
+    expect(plan.faintX).toEqual(oldWalk(-10, 10, stepX))
+    expect(plan.faintY).toEqual(oldWalk(-6, 6, stepY))
+    expect(plan.strongX).toEqual(oldWalk(-10, 10, stepX * 5))
+    expect(plan.strongY).toEqual(oldWalk(-6, 6, stepY * 5))
+    expect(plan.strongX).toEqual([-10, -5, 0, 5, 10])
+  })
+
+  it('labels linear ticks with the precise formatter, "0" only on the y pass', () => {
+    const plan = gridPlan(bounds(-10, 10, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    expect(plan.labelsX.map((l) => l.label)).toEqual(
+      ['−10', '−9', '−8', '−7', '−6', '−5', '−4', '−3', '−2', '−1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    )
+    expect(plan.labelsX[0].at.y).toBe(-OFFSET.y)
+    expect(plan.labelsY.map((l) => l.label)).toContain('0')
+    expect(plan.labelsY[0].at.x).toBe(-OFFSET.x)
+    expect(plan.labelsY[0].at.y).toBeCloseTo(-6 + 8 * (12 / 480), 9) // slid up half a label height (8px) off the bottom edge
+  })
+
+  it('draws a log axis: decades strong with power labels, 2..9 faint', () => {
+    const config = defaultConfig()
+    config.scales.y = 'log'
+    const plan = gridPlan(bounds(-10, 10, 0, 4), config, SIZE, MARGINS, OFFSET)
+    expect(plan.strongY).toEqual([0, 1, 2, 3, 4])
+    expect(plan.labelsY.map((l) => l.label)).toEqual(['1', '10', '10²', '10³', '10⁴'])
+    const minors: number[] = []
+    for (let k = 0; k < 4; k++) for (let m = 2; m <= 9; m++) minors.push(Math.log10(m) + k)
+    expect(plan.faintY).toHaveLength(minors.length)
+    plan.faintY.forEach((v, i) => expect(v).toBeCloseTo(minors[i], 12))
+    // labels are drawn at forward(value): 1 sits at v = 0, slid up half a label height so its box stays in view
+    expect(plan.labelsY[0].at.y).toBeGreaterThanOrEqual(0)
+    expect(plan.labelsY[0].at.y).toBeLessThan(0.1)
+  })
+
+  it('walks pi steps with pi labels', () => {
+    const config = defaultConfig()
+    config.space.ticks.x = { value: Math.PI / 2, pi: { num: 1, den: 2 } }
+    const plan = gridPlan(bounds(0, 2 * Math.PI, -2, 2), config, SIZE, MARGINS, OFFSET)
+    expect(plan.faintX).toHaveLength(5)
+    plan.faintX.forEach((v, k) => expect(v).toBeCloseTo((k * Math.PI) / 2, 12))
+    // 0 is skipped on the x pass (the y pass owns it), the rest are pi labels
+    expect(plan.labelsX.map((l) => l.label)).toEqual(['π/2', 'π', '3π/2', '2π'])
+  })
+
+  it('pins y labels to the left edge when the y-axis is off-screen', () => {
+    const plan = gridPlan(bounds(20, 30, -6, 6), defaultConfig(), SIZE, MARGINS, OFFSET)
+    expect(plan.labelsY.length).toBeGreaterThan(0)
+    for (const l of plan.labelsY) expect(l.at.x).toBeCloseTo(20 + MARGINS.x, 12)
+    // x labels keep riding the on-screen x-axis
+    for (const l of plan.labelsX) expect(l.at.y).toBe(-OFFSET.y)
+  })
+})
+
 describe('resolveStep defaults', () => {
   it('behaves exactly as before when no mode is passed', () => {
     expect(resolveStep(0.25, 200, 6)).toBe(resolveStep(0.25, 200, 6, 'nice'))
   })
+})
+
+describe('gridPlan titles', () => {
+  const SIZE = { widthPx: 800, heightPx: 480 }
+  const view = { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }
+  const withTitles = (x: string, y: string) => {
+    const c = defaultConfig()
+    return { ...c, space: { ...c.space, titles: { x, y, z: '' } } }
+  }
+
+  it('carries the @titles of the space config as placements', () => {
+    const plan = gridPlan(view, withTitles('t (s)', 'v (m/s)'), SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 })
+    expect(plan.titles.map((t) => [t.axis, t.text])).toEqual([['x', 't (s)'], ['y', 'v (m/s)']])
+  })
+
+  it('draws only authored titles: defaults and a title equal to its default place nothing', () => {
+    const args = [SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }] as const
+    expect(gridPlan(view, defaultConfig(), ...args).titles).toEqual([])
+    const c = defaultConfig()
+    const one = { ...c, space: { ...c.space, titles: { ...c.space.titles, x: 't (s)' } } }
+    expect(gridPlan(view, one, ...args).titles.map((t) => t.axis)).toEqual(['x'])
+    const same = { ...c, space: { ...c.space, titles: { ...c.space.titles, y: 'y' } } }
+    expect(gridPlan(view, same, ...args).titles).toEqual([])
+  })
+
+  it('has none for empty titles or with the axes off', () => {
+    expect(gridPlan(view, withTitles('', ''), SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
+    const off = { ...withTitles('t', 'v'), axes: false }
+    expect(gridPlan(view, off, SIZE, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 }).titles).toEqual([])
+  })
+})
+
+describe('gridPlan step agreement and hand-built configs', () => {
+  const bounds = { xMin: -10, xMax: 10, yMin: -10, yMax: 10 }
+  const size = { widthPx: 800, heightPx: 800 }
+  const m = { x: 0.5, y: 0.5 }
+
+  it('puts strong lines on the tick step even when a fixed @xstep is outside the readable band', () => {
+    // 0.25 over a span of 20 is 80 divisions: ticks fall back to a nice step, and so must the strong lines
+    const config = { ...defaultConfig(), xstep: 0.25 }
+    const plan = gridPlan(bounds, config, size, m, m)
+    const ticks = plan.faintX
+    const step = ticks[1] - ticks[0]
+    expect(step).toBeGreaterThan(0.25)
+    expect(plan.strongX.length).toBeGreaterThan(0)
+    for (const v of plan.strongX) expect(Math.abs(v / (step * 5) - Math.round(v / (step * 5)))).toBeLessThan(1e-9)
+    expect(plan.strongX[1] - plan.strongX[0]).toBeCloseTo(step * 5, 9)
+  })
+
+  it('takes the step from the view size when the span alone would give another', () => {
+    // fixed-mode step 0.25 over span 20 stays 0.25 (80 divisions <= 1000); strong lines every 1.25
+    const config = { ...defaultConfig(), xstep: 0.25, stepMode: 'fixed' as const }
+    const plan = gridPlan(bounds, config, size, m, m)
+    expect(plan.strongX[1] - plan.strongX[0]).toBeCloseTo(1.25, 9)
+  })
+
+  it('plans a config without scales as linear', () => {
+    const config = { ...defaultConfig() } as Record<string, unknown>
+    delete config.scales
+    const plan = gridPlan(bounds, config as never, size, m, m)
+    expect(plan.faintX.length).toBeGreaterThan(0)
+    expect(plan.labelsX.length).toBeGreaterThan(0)
+  })
+
+  it('treats a title equal to the space default as not authored', () => {
+    const plan = gridPlan(bounds, defaultConfig(), size, m, m)
+    expect(plan.titles).toEqual([])
+  })
+})
+
+describe('gridPlan labels at a deep-zoom window', () => {
+  const lo = 999.99999999
+  const hi = 1000.00000001
+  const bounds = { xMin: lo, xMax: hi, yMin: lo, yMax: hi }
+  const size = { widthPx: 900, heightPx: 600 }
+  const plan = gridPlan(bounds, defaultConfig(), size, { x: 4e-10, y: 2e-10 }, { x: 1e-9, y: 1e-9 })
+  const parse = (s: string) => Number(s.replace('−', '-').replace(/×10(.*)$/, (_, e: string) => 'e' + e.replace(/[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]/g, (c) => '-0123456789'['⁻⁰¹²³⁴⁵⁶⁷⁸⁹'.indexOf(c)])))
+
+  for (const axis of ['labelsX', 'labelsY'] as const) {
+    it(`${axis}: distinct, complete, non-overlapping`, () => {
+      const ls = plan[axis]
+      expect(ls.length).toBeGreaterThan(2)
+      expect(new Set(ls.map((l) => l.label)).size).toBe(ls.length)
+      for (const l of ls) expect(Math.abs(parse(l.label) - l.value)).toBeLessThan(1e-10) // step is 1e-9
+      const boxes = labelBoxesPx(ls, bounds, size.widthPx, size.heightPx)
+      const key = axis === 'labelsX' ? 'x' : 'y'
+      const sorted = [...boxes].sort((a, b) => a[key] - b[key])
+      for (let i = 1; i < sorted.length; i++) {
+        const a = sorted[i - 1]
+        const b = sorted[i]
+        const clear = axis === 'labelsX' ? a.x + a.w <= b.x : a.y + a.h <= b.y
+        expect(clear).toBe(true)
+      }
+    })
+  }
+})
+
+describe('gridPlan: x and y labels never overlap each other', () => {
+  const size = { widthPx: 1200, heightPx: 800 }
+  const check = (b: { xMin: number; xMax: number; yMin: number; yMax: number }, scales: { x?: 'log' | 'linear'; y?: 'log' | 'linear' }, m: { x: number; y: number }) => {
+    const config = defaultConfig()
+    Object.assign(config.scales, scales)
+    const plan = gridPlan(b, config, size, m, m)
+    expect(plan.labelsX.length).toBeGreaterThan(0)
+    expect(plan.labelsY.length).toBeGreaterThan(0)
+    const bx = labelBoxesPx(plan.labelsX, b, size.widthPx, size.heightPx)
+    const by = labelBoxesPx(plan.labelsY, b, size.widthPx, size.heightPx)
+    for (const a of bx)
+      for (const c of by) {
+        const hit = a.x < c.x + c.w && c.x < a.x + a.w && a.y < c.y + c.h && c.y < a.y + a.h
+        expect(hit).toBe(false)
+      }
+  }
+  it('log-log 0.1..10 x 0.01..1000', () => check({ xMin: -1, xMax: 1, yMin: -2, yMax: 3 }, { x: 'log', y: 'log' }, { x: 0.01, y: 0.01 }))
+  it('semi-log 0..10 x 1e-4..10', () => check({ xMin: 0, xMax: 10, yMin: -4, yMax: 1 }, { y: 'log' }, { x: 0.01, y: 0.01 }))
+  it('deep zoom', () => check({ xMin: 999.99999999, xMax: 1000.00000001, yMin: 999.99999999, yMax: 1000.00000001 }, {}, { x: 4e-10, y: 2e-10 }))
 })

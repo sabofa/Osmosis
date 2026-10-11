@@ -28,7 +28,6 @@
 import type { Expr, Statement } from '../../../parser/types'
 import { compileMany } from '../../../math/compile'
 import { diff } from '../../../math/diff'
-import { substitute, variable } from '../../../math/expr'
 import { isVectorBody, type MathScope } from '../../../math/scope'
 import { simplify } from '../../../math/simplify'
 import type { CurveFrameForm } from '../../grammar/keywords/geometryForms'
@@ -89,7 +88,7 @@ function curveComponents(form: CurveFrameForm, scope: MathScope, reads: Reads): 
   if (curve.kind === 'inline') {
     return curve.components.map((e) => {
       reads.add(e, [form.param])
-      return renameBound(e, [form.param])
+      return renameBound(e, [form.param], scope)
     }) as [Expr, Expr, Expr]
   }
   const name = curve.name
@@ -98,10 +97,9 @@ function curveComponents(form: CurveFrameForm, scope: MathScope, reads: Reads): 
   if (fn.params.length === 0) throw new Error(`"${name}" is a vector, not a curve — a curve is "${name}(t) = <cos(t), sin(t), t>"`)
   if (fn.params.length > 1) throw new Error(`"${name}" is a function of (${fn.params.join(', ')}), not a curve r(t)`)
   const [param] = fn.params
-  const at = new Map([[param, variable(boundNames(1)[0])]])
   return fn.body.map((e) => {
     reads.add(e, [param])
-    return substitute(e, at)
+    return renameBound(e, [param], scope)
   }) as [Expr, Expr, Expr]
 }
 

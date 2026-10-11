@@ -12,9 +12,9 @@
 
 import type { GraphConfig } from '../../parser/config'
 import type { Expr, Statement } from '../../parser/types'
-import { compileMany, compileScalar, type CompiledFn, type CompiledMany } from '../../math/compile'
+import { compileMany, compileScalar, paramCallsAsProducts, type CompiledFn, type CompiledMany } from '../../math/compile'
 import { diff } from '../../math/diff'
-import { call, mul, substitute, variable, varNames } from '../../math/expr'
+import { substitute, varNames } from '../../math/expr'
 import type { MathScope } from '../../math/scope'
 import { simplify } from '../../math/simplify'
 import { stepFor } from '../frame/nice'
@@ -34,6 +34,7 @@ import {
 } from './common'
 import { inequalitySamples, iteratedSamples, rectSamples, type Condition, type DomainSamples } from './domain'
 import { namedRegionDomain } from './integrals/named'
+import { POLAR_XY } from './integrals/target'
 import { finishMesh } from './mesh'
 import type { BuildContext, BuildResult, BuilderEntry, PreparedStatement } from './registry'
 
@@ -142,16 +143,10 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
   const angle = scope.angle === 'degrees' ? Math.PI / 180 : 1
   if (polar) {
     reads.add(body, ['x', 'y', 'r', 'theta'])
-    const polarBody = renameBound(
-      substitute(
-        body,
-        new Map([
-          ['x', mul(variable('r'), call('cos', variable('theta')))],
-          ['y', mul(variable('r'), call('sin', variable('theta')))],
-        ])
-      ),
-      ['r', 'theta']
-    )
+    // x(x + 1) and r(r + 1) are products: said outright before x and y are
+    // substituted and r and theta renamed (common.ts's renameBound says why).
+    const product = paramCallsAsProducts(body, ['x', 'y', 'r', 'theta'], scope)
+    const polarBody = renameBound(substitute(product, POLAR_XY), ['r', 'theta'], scope)
     const height = compileScalar(polarBody, vars, scope)
     sample = compileMany([polarBody, partialExpr(polarBody, 0, scope), partialExpr(polarBody, 1, scope)], vars, scope)
     normal = (r, theta, g, out) => {
@@ -163,7 +158,7 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
       out[1] = -(dr * s + dt * c)
       out[2] = 1
     }
-    const names = varNames(body)
+    const names = varNames(product)
     if (names.has('r') || names.has('theta')) {
       // r(r, theta) = (r cos, r sin, g); r_r = (cos, sin, g_r) and
       // r_theta = (-r sin, r cos, g_theta), times the angle unit for theta.
@@ -177,13 +172,13 @@ function prepareSurface(statement: Statement, context: BuildContext): PreparedSt
         rv: (r, theta) => [-r * angle * Math.sin(theta * angle), r * angle * Math.cos(theta * angle), gt(r, theta)],
       }
     } else {
-      const xyBody = renameBound(body, ['x', 'y'])
+      const xyBody = renameBound(product, ['x', 'y'], scope)
       const f = compileScalar(xyBody, vars, scope)
       pick = { kind: 'graph', f: (x, y) => f(x, y), fx: partial(xyBody, 0, scope), fy: partial(xyBody, 1, scope) }
     }
   } else {
     reads.add(body, ['x', 'y'])
-    const xyBody = renameBound(body, ['x', 'y'])
+    const xyBody = renameBound(body, ['x', 'y'], scope)
     // The partials are differentiated once, for sampling and the pick alike.
     const dx = partialExpr(xyBody, 0, scope)
     const dy = partialExpr(xyBody, 1, scope)

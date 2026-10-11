@@ -68,7 +68,7 @@ export function resolveTarget(target: Expr, scope: MathScope, reads: Reads, keyw
   const arity = targetArity(target, scope)
   const names = arity === 2 ? XY : XYZ
   reads.add(body, [...names])
-  return { arity, body: renameBound(body, names), vars: boundNames(arity) }
+  return { arity, body: renameBound(body, names, scope), vars: boundNames(arity) }
 }
 
 // d(body)/d(bound i), simplified.

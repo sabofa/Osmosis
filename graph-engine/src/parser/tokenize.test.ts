@@ -110,3 +110,33 @@ describe('tokenize: numeric literals that are not one finite number', () => {
     expect(tokenize('2.5e-1')).toEqual([{ kind: 'num', value: 0.25 }])
   })
 })
+
+// calc P1: the characters that used to throw are operators now.
+describe('tokenize: calc P1 operators', () => {
+  const op = (value: string) => ({ kind: 'op', value })
+
+  it('reads comparators, with "<=", ">=" and "!=" as one token each', () => {
+    expect(tokenize('a<b')).toEqual([{ kind: 'ident', name: 'a' }, op('<'), { kind: 'ident', name: 'b' }])
+    expect(tokenize('a<=b')).toEqual([{ kind: 'ident', name: 'a' }, op('<='), { kind: 'ident', name: 'b' }])
+    expect(tokenize('a>b')).toEqual([{ kind: 'ident', name: 'a' }, op('>'), { kind: 'ident', name: 'b' }])
+    expect(tokenize('a>=b')).toEqual([{ kind: 'ident', name: 'a' }, op('>='), { kind: 'ident', name: 'b' }])
+    expect(tokenize('a!=b')).toEqual([{ kind: 'ident', name: 'a' }, op('!='), { kind: 'ident', name: 'b' }])
+    // a space breaks the pair: "<" then "="
+    expect(tokenize('a< =b')).toEqual([{ kind: 'ident', name: 'a' }, op('<'), op('='), { kind: 'ident', name: 'b' }])
+  })
+
+  it('reads a lone "!" as the factorial, and "n! = 5" as three tokens', () => {
+    expect(tokenize('n!')).toEqual([{ kind: 'ident', name: 'n' }, op('!')])
+    expect(tokenize('n!!')).toEqual([{ kind: 'ident', name: 'n' }, op('!'), op('!')])
+    expect(tokenize('n! = 5')).toEqual([{ kind: 'ident', name: 'n' }, op('!'), op('='), { kind: 'num', value: 5 }])
+  })
+
+  it('reads braces, colon, bars and the prime mark', () => {
+    expect(tokenize("{|x|: f'}")).toEqual([op('{'), op('|'), { kind: 'ident', name: 'x' }, op('|'), op(':'), { kind: 'ident', name: 'f' }, op("'"), op('}')])
+  })
+
+  it('still refuses what is not an operator', () => {
+    expect(() => tokenize('1 % 2')).toThrow(/Unexpected character/)
+    expect(() => tokenize('a & b')).toThrow(/Unexpected character "&"/)
+  })
+})

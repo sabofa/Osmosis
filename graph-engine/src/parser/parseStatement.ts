@@ -1,6 +1,6 @@
 import { isValidColor, normaliseColor } from './colors'
 import { parseForRange, parseTuple, splitTopLevelComma } from './grammarUtil'
-import { parseExprString } from './parseExpr'
+import { parseConditionString, parseExprString } from './parseExpr'
 import { parseSpaceKeyword } from '../space/grammar/keyword'
 import { parseSpaceUnkeyed } from '../space/grammar/unkeyed'
 import type {
@@ -45,36 +45,59 @@ function parseArrow(str: string): { x1: Expr; y1: Expr; z1: Expr | null; x2: Exp
   }
 }
 
-// Finds the earliest top-level comparator in a line, preferring the 2-char
-// form ("<=" over "<") when they start at the same position. Comparators
-// never appear inside our expression grammar otherwise, so a plain scan is safe.
+// Finds the earliest comparator at bracket depth 0, preferring "<=" over "<".
+// A comparator inside parentheses, brackets or braces — a piecewise
+// {x < 0: …} — belongs to an expression, not to the statement. (A stray
+// closing bracket does not take the depth below 0: the line stays scannable and
+// the expression parser reports the real mistake.)
 function findComparator(line: string): { op: '<' | '<=' | '>' | '>='; idx: number } | null {
-  const candidates: { op: '<' | '<=' | '>' | '>='; idx: number }[] = []
-  for (const op of ['<=', '>=', '<', '>'] as const) {
-    const idx = line.indexOf(op)
-    if (idx !== -1) candidates.push({ op, idx })
+  let depth = 0
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && (c === '<' || c === '>')) {
+      return { op: (line[i + 1] === '=' ? `${c}=` : c) as '<' | '<=' | '>' | '>=', idx: i }
+    }
   }
-  if (candidates.length === 0) return null
-  candidates.sort((a, b) => a.idx - b.idx || b.op.length - a.op.length)
-  return candidates[0]
+  return null
 }
 
 type Relation = { type: 'equals'; idx: number } | { type: 'comparator'; op: '<' | '<=' | '>' | '>='; idx: number }
 
-// Scans left to right for whichever comes first: a standalone "=" (an
-// assignment/equation) or a comparator ("<", "<=", ">", ">="). Used at the
-// top level of a statement, where it matters which kind of relation the line
-// actually is — see the call site for why this can't be two separate checks.
+// Scans left to right, at bracket depth 0, for whichever comes first: a
+// standalone "=" (an assignment/equation) or a comparator ("<", "<=", ">",
+// ">="). Used at the top level of a statement, where it matters which kind of
+// relation the line actually is — see the call site for why this can't be two
+// separate checks. A "=" inside brackets — sum(k = 0 to n, …) — is not the
+// statement's, and neither is the "=" of a "!=".
 function findTopLevelRelation(line: string): Relation | null {
+  let depth = 0
   for (let i = 0; i < line.length; i++) {
     const c = line[i]
-    if (c === '<' || c === '>') {
-      const twoChar = line[i + 1] === '='
-      return { type: 'comparator', op: (twoChar ? c + '=' : c) as '<' | '<=' | '>' | '>=', idx: i }
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0) {
+      if (c === '<' || c === '>') {
+        const twoChar = line[i + 1] === '='
+        return { type: 'comparator', op: (twoChar ? c + '=' : c) as '<' | '<=' | '>' | '>=', idx: i }
+      }
+      if (c === '=' && line[i - 1] !== '!') return { type: 'equals', idx: i }
     }
-    if (c === '=') return { type: 'equals', idx: i }
   }
   return null
+}
+
+// The index of " if " at bracket depth 0, or -1.
+function topLevelIf(text: string): number {
+  let depth = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && text.startsWith(' if ', i)) return i
+  }
+  return -1
 }
 
 // Parses an "if <condition>" clause's condition text, restricted to the
@@ -1520,21 +1543,24 @@ function parseStatementCore(rawLine: string): StatementShape {
   const reserved = /^(r|x|y|z)\s*=(?!=)\s*(.*)$/.exec(line)
   if (reserved) refuseReservedConstruction(line, reserved[1], reserved[2])
 
-  // Polar curve: "r = 1 + cos(theta)" (theta defaults to [0, 2*pi]) or
-  // "r = f(theta) for theta in [a, b]"
+  // Polar curve: "r = 1 + cos(theta)" (theta defaults to a full turn) or
+  // "r = f(theta) for theta in [a, b]". The default range is 0 to 2*pi here, flagged `fullTurn`: a full
+  // turn is 360 under @angle: degrees, which the parser does not know, so the consumer reads the flag.
   if (/^r\s*=/.test(line)) {
     const eqIdx = line.indexOf('=')
     let rest = line.slice(eqIdx + 1).trim()
     let from: Expr = { kind: 'num', value: 0 }
     let to: Expr = { kind: 'binary', op: '*', left: { kind: 'num', value: 2 }, right: { kind: 'var', name: 'pi' } }
+    let fullTurn = true
     const forIdx = rest.indexOf(' for ')
     if (forIdx !== -1) {
       const range = parseForRange(rest.slice(forIdx + ' for '.length).trim())
       from = range.from
       to = range.to
       rest = rest.slice(0, forIdx).trim()
+      fullTurn = false
     }
-    return { kind: 'polar', body: parseExprString(rest), from, to }
+    return fullTurn ? { kind: 'polar', body: parseExprString(rest), from, to, fullTurn } : { kind: 'polar', body: parseExprString(rest), from, to }
   }
 
   // Parametric curve/surface: "(...) for t in [a, b]" or "(...) for u in [a,b], v in [c,d]"
@@ -1604,7 +1630,9 @@ function parseStatementCore(rawLine: string): StatementShape {
   }
 
   // Bare point: "(x, y)" or "(x, y, z)" with nothing else on the line.
-  if (line.startsWith('(') && line.endsWith(')')) {
+  // The opening paren must close at the very end: "(x^2+y^2)^2 = 4(x^2-y^2)"
+  // starts and ends with a paren yet is an equation, not a point.
+  if (line.startsWith('(') && line.endsWith(')') && openingParenClosesAtEnd(line)) {
     const parts = parseTuple(line)
     return { kind: 'point', label: null, x: parts[0], y: parts[1], z: parts.length === 3 ? parts[2] : null }
   }
@@ -1620,28 +1648,22 @@ function parseStatementCore(rawLine: string): StatementShape {
   if (relation?.type === 'comparator') {
     const left = line.slice(0, relation.idx).trim()
     const right = line.slice(relation.idx + relation.op.length).trim()
-    // The "if <condition>" piecewise clause only exists on y=/x= explicit
-    // statements (see the "equals" branch below) — an inequality region has
-    // no such clause in its grammar. Without this check, a stray "if" here
-    // falls through into parseExprString(right), where the tokenizer chokes
-    // on the leftover comparator inside the condition text (e.g. the "<=" in
-    // "0 <= x <= 3") with an opaque "Unexpected character" error that gives
-    // no hint the real mistake was applying "if" to the wrong statement form.
-    if (/\bif\b/.test(right)) {
-      throw new Error(
-        `"if" clauses are only valid on explicit y=/x= function statements, not on inequality-region statements. ` +
-          `To shade over a bounded interval, restrict the function itself instead, e.g. "y = x^2 if 0 <= x <= 3".`
-      )
-    }
+    // An "if" clause restricts where the inequality is shaded (calc P1). It is
+    // split off first, so the comparators inside it ("0 <= x <= 3") are never
+    // mistaken for a chain of the region itself.
+    const ifAt = topLevelIf(right)
+    const where = ifAt === -1 ? undefined : parseConditionString(right.slice(ifAt + ' if '.length))
+    const core = ifAt === -1 ? right : right.slice(0, ifAt).trim()
+    const withWhere = where ? { where } : {}
 
-    // A second top-level comparator inside "right" means this is a chained
-    // comparison ("7 < x < 12"), not a single region — expressions never
-    // contain "<"/">" themselves, so any second comparator here is
-    // unambiguously a chain, not a false positive from the expression text.
-    const second = findComparator(right)
+    // A second comparator at bracket depth 0 inside "core" means this is a
+    // chained comparison ("7 < x < 12"), not a single region — a comparator
+    // inside brackets, a piecewise {x < 0: …}, belongs to an expression and is
+    // not seen here, so any second one is unambiguously a chain.
+    const second = findComparator(core)
     if (second) {
-      const mid = right.slice(0, second.idx).trim()
-      const tail = right.slice(second.idx + second.op.length).trim()
+      const mid = core.slice(0, second.idx).trim()
+      const tail = core.slice(second.idx + second.op.length).trim()
       if (findComparator(tail)) {
         throw new Error(
           `A chained comparison supports only two operators (e.g. "7 < x < 12"), but found a third comparator in "${line.trim()}".`
@@ -1669,10 +1691,11 @@ function parseStatementCore(rawLine: string): StatementShape {
         mid: parseExprString(mid),
         highOp: highOp as '<' | '<=',
         high: parseExprString(high),
+        ...withWhere,
       }
     }
 
-    return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(right) }
+    return { kind: 'region', left: parseExprString(left), op: relation.op, right: parseExprString(core), ...withWhere }
   }
 
   if (relation?.type === 'equals') {
@@ -1682,11 +1705,18 @@ function parseStatementCore(rawLine: string): StatementShape {
 
     if (lhs === 'y' || lhs === 'x') {
       const independent = lhs === 'y' ? 'x' : 'y'
-      const ifIdx = rhs.indexOf(' if ')
+      const ifIdx = topLevelIf(rhs)
       if (ifIdx === -1) return { kind: 'explicit', independent, body: parseExprString(rhs), condition: null }
       const body = parseExprString(rhs.slice(0, ifIdx).trim())
-      const condition = parseCondition(rhs.slice(ifIdx + ' if '.length).trim(), independent)
-      return { kind: 'explicit', independent, body, condition }
+      const clause = rhs.slice(ifIdx + ' if '.length).trim()
+      // The old shape (x < c, or lo <= x < hi) stays exactly as it was, so
+      // every existing parse result is unchanged; anything else is the calc
+      // P1 condition language.
+      try {
+        return { kind: 'explicit', independent, body, condition: parseCondition(clause, independent) }
+      } catch {
+        return { kind: 'explicit', independent, body, condition: null, where: parseConditionString(clause) }
+      }
     }
     if (lhs === 'z') return { kind: 'surface', body: parseExprString(rhs) }
 
@@ -1726,7 +1756,16 @@ function parseStatementCore(rawLine: string): StatementShape {
       return { kind: 'constantDef', name: lhs, value: parseExprString(rhs) }
     }
 
-    // Implicit curve: "x^2/9 + y^2/4 = 1"
+    // Implicit curve: "x^2/9 + y^2/4 = 1", optionally "… if y > 0"
+    const ifAt = topLevelIf(rhs)
+    if (ifAt !== -1) {
+      return {
+        kind: 'implicit',
+        left: parseExprString(lhs),
+        right: parseExprString(rhs.slice(0, ifAt).trim()),
+        where: parseConditionString(rhs.slice(ifAt + ' if '.length)),
+      }
+    }
     return { kind: 'implicit', left: parseExprString(lhs), right: parseExprString(rhs) }
   }
 
@@ -2105,6 +2144,74 @@ function parseGiven(rest: string, section: GivensSection): StatementShape {
   return { kind: 'given', section, entry: { kind: 'measure', subject: named.subject, content: content ?? { kind: 'computed' } } }
 }
 
+// "!" is a token (the factorial, calc P1), and several grammars split a line at
+// its first "=" by string, so "y != 2" would read as the equation "y! = 2" and
+// "x^2 + y^2 != 1" as a circle. "!=" is a condition, never an equation, so it is
+// refused where an equation could be read, before any grammar (space's keyword
+// and unkeyed hooks included) sees the line.
+const NOT_EQUAL_IS_A_CONDITION =
+  '"!=" is a condition, not an equation: use it inside an "if" clause or a piecewise {…}; for a factorial equation write "n! = 5" with a space'
+
+// Statements whose text after the keyword is words, not an expression — a
+// table's cells, a measure label's symbol — where "!=" is only characters.
+const FREE_TEXT_STATEMENT = /^(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?(?:header|row):|^label:/
+
+// "given:" and "find:" state a measure whose value is text ("given: AB = x != 3"),
+// except where the measure names a plane: parseSpaceMeasure splits that at its
+// first "=" and reads the left side as an expression, so a bare "!=" there is
+// the same misparse as in an equation. The same two shapes it reads.
+const GIVEN_OR_FIND = /^(?:given|find):(.*)$/
+
+function isPlaneMeasure(body: string): boolean {
+  const between = /^(?:angle|distance)\s+between\s+(.+?)\s+and\s+(.+)$/.exec(body.trim())
+  if (between) return /^plane\s/.test(between[1].trim()) || /^plane\s/.test(between[2].trim())
+  const from = /^distance\s+from\s+\S+\s+to\s+(.+)$/.exec(body.trim())
+  return !!from && /^plane\s/.test(from[1].trim())
+}
+
+// Throws when `line` has a "!=" outside every bracket and before any "if"
+// clause (what follows an "if" clause is a condition, where "!=" is the
+// comparison). A word "if" opens a clause only after the statement's first "="
+// or comparator, so "if != 2" is not one. A "given:" or "find:" line (reaching
+// the scan only as a plane measure) has no "if" clause at all: there the word
+// opens nothing, and every "!=" outside a bracket is bare. It scans on its own,
+// not through the splitters the grammars use.
+function refuseBareNotEqual(line: string): void {
+  const text = line.trim()
+  if (FREE_TEXT_STATEMENT.test(text)) return
+  const given = GIVEN_OR_FIND.exec(text)
+  if (given && !isPlaneMeasure(given[1])) return
+  // "angle: A-B-C label: text": the label is text.
+  const labelAt = text.startsWith('angle:') ? text.indexOf('label:') : -1
+  const scanned = labelAt === -1 ? text : text.slice(0, labelAt)
+  let depth = 0
+  let relation = false
+  for (let i = 0; i < scanned.length; i++) {
+    const c = scanned[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1)
+    else if (depth === 0) {
+      if (c === '!' && scanned[i + 1] === '=') throw new Error(NOT_EQUAL_IS_A_CONDITION)
+      if (c === '=' || c === '<' || c === '>') relation = true
+      else if (!given && relation && c === 'i' && scanned.startsWith('if', i) && !/[a-zA-Z0-9_]/.test(scanned[i - 1] ?? ' ') && !/[a-zA-Z0-9_]/.test(scanned[i + 2] ?? ' ')) return
+    }
+  }
+}
+
+// True when the "(" at index 0 is closed by the line's final ")" (T7.7): the
+// whole line is one parenthesised group, as a bare point is.
+function openingParenClosesAtEnd(line: string): boolean {
+  let depth = 0
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '(') depth++
+    else if (line[i] === ')') {
+      depth--
+      if (depth === 0) return i === line.length - 1
+    }
+  }
+  return false
+}
+
 // Parses one non-empty, comment-stripped line into a Statement. Splices off
 // trailing "color: <value>" and/or "name: <id>" clauses (see
 // parser/types.ts's grammar comment) — in either order — before handing the
@@ -2145,5 +2252,6 @@ export function parseStatement(rawLine: string): Statement {
     break
   }
 
+  refuseBareNotEqual(line)
   return { ...parseStatementCore(line), color, statementName }
 }

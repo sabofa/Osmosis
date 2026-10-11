@@ -23,6 +23,8 @@ export const EXAMPLE_GROUPS = [
   'Measures in space',
   'Nets and paths',
   'Styles',
+  'Calculus',
+  'Frame',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -1326,4 +1328,169 @@ y = k(k(x)) - 5 color: purple`,
   },
   // Space (track 3): space/examples.ts.
   ...SPACE_EXAMPLES,
+  // Calculus (track 4, calc P1): the language the 2D engine now compiles
+  // through the shared kernel.
+  {
+    label: 'Cube roots, both halves',
+    group: 'Calculus',
+    spec: `y = x^(1/3)
+y = x^(2/3) color: blue`,
+  },
+  {
+    label: 'Piecewise in braces',
+    group: 'Calculus',
+    spec: `f(x) = {x < 0: x^2, x <= 2: 2x + 1, 5}
+y = f(x)`,
+  },
+  {
+    label: 'Taylor partial sums of sin',
+    group: 'Calculus',
+    spec: `@param n = 3 range [0, 12] step 1 integer
+y = sin(x)
+y = sum(k = 0 to n, (-1)^k x^(2k+1)/(2k+1)!) color: red`,
+  },
+  {
+    label: 'Accumulation: the sine integral',
+    group: 'Calculus',
+    spec: `F(x) = integral(t = 0 to x, sin(t)/t)
+y = F(x)
+y = sin(x)/x color: gray`,
+  },
+  {
+    label: 'Derivatives by primes',
+    group: 'Calculus',
+    spec: `f(x) = x^3 - 3x
+y = f(x)
+y = f'(x) color: red
+y = f''(x) color: blue`,
+  },
+  {
+    label: 'Special functions',
+    group: 'Calculus',
+    spec: `@bounds: -4, 6, -4, 6
+y = gamma(x)
+y = erf(x) color: blue
+y = |x - 1| - 2 color: gray`,
+  },
+  {
+    label: 'Conditions on a region',
+    group: 'Calculus',
+    spec: `x^2 + y^2 < 9 if y > 0 and x > -1`,
+  },
+  {
+    label: 'A two-argument helper',
+    group: 'Calculus',
+    spec: `g(x, a) = a sin(x)
+y = g(x, 2)
+y = g(x, 0.5) color: blue`,
+  },
+  // Calculus (track 4, calc P2): the adaptive curve sampler. Each of these is a case in
+  // plot/testing/corpus.ts, which pins what it draws.
+  {
+    label: 'Holes, jumps and poles',
+    group: 'Calculus',
+    spec: `@bounds: -5, 5, -5, 5
+y = (x^2-1)/(x-1)
+y = floor(x) color: blue
+y = tan(x) color: red`,
+  },
+  {
+    label: 'Piecewise ends',
+    group: 'Calculus',
+    spec: `@bounds: -3, 5, -2, 6
+y = {x < 0: x^2, x + 1}
+y = 2 if 0 < x <= 3 color: green`,
+  },
+  {
+    label: 'Faster than a pixel',
+    group: 'Calculus',
+    spec: `@bounds: -1, 1, -1.5, 1.5
+y = sin(1/x)`,
+  },
+  {
+    label: 'A polar pole',
+    group: 'Calculus',
+    spec: `@bounds: -3, 5, -4, 4
+r = 1/cos(theta)`,
+  },
+  // Calculus (track 4, calc P3): curves and regions given by a relation. There is no subgroup
+  // concept, so these share a title prefix.
+  {
+    label: 'Curves and regions: lemniscate',
+    group: 'Calculus',
+    spec: `@bounds: -3, 3, -2, 2
+(x^2+y^2)^2 = 4(x^2-y^2)`,
+  },
+  {
+    label: 'Curves and regions: sin x = cos y',
+    group: 'Calculus',
+    spec: `@bounds: -7, 7, -7, 7
+sin(x) - cos(y) = 0`,
+  },
+  {
+    label: 'Curves and regions: annulus',
+    group: 'Calculus',
+    spec: `@bounds: -3, 3, -3, 3
+1 < x^2+y^2 < 4`,
+  },
+  {
+    label: 'Curves and regions: below ln x',
+    group: 'Calculus',
+    spec: `@bounds: -2, 6, -3, 3
+y < ln(x)`,
+  },
+  {
+    label: 'Curves and regions: feasible region',
+    group: 'Calculus',
+    spec: `@bounds: -1, 6, -1, 6
+x + y <= 4 if x >= 0 and y >= 0 and y <= 2x + 1`,
+  },
+  // Frame (track 4, calc P4): the plot frame's authored pieces, to look at in the app.
+  {
+    label: 'Frame: pi ticks',
+    group: 'Frame',
+    spec: `@bounds: 0, 6.283185307179586, -1.2, 1.2
+@xstep: pi/2
+y = sin(x)`,
+  },
+  {
+    label: 'Frame: semi-log',
+    group: 'Frame',
+    spec: `@bounds: 0, 10, 0.0001, 10
+@yscale: log
+y = e^(-x)`,
+  },
+  {
+    label: 'Frame: log-log',
+    group: 'Frame',
+    spec: `@bounds: 0.1, 10, 0.01, 1000
+@xscale: log
+@yscale: log
+y = x^3`,
+  },
+  {
+    label: 'Frame: 2:1 aspect with titles',
+    group: 'Frame',
+    spec: `@bounds: -3, 3, -1, 9
+@aspect: 2:1
+@titles: x "time (s)", y "height (m)"
+y = x^2`,
+  },
+  // A 2e-8 window around (1000, 1000), equal aspect. A render check only: it needs the origin-relative
+  // rendering (calc 5.5) to draw a clean parabola and honest tick labels. (y = x^2 itself would not do: at
+  // x = 1000 its slope is 2000, so at equal aspect it is a near-vertical line however deep the zoom.)
+  {
+    label: 'Frame: deep zoom',
+    group: 'Frame',
+    spec: `@bounds: 999.99999999, 1000.00000001, 999.99999999, 1000.00000001
+y = 1000 + 100000000 * (x - 1000)^2`,
+  },
+  {
+    label: 'Frame: locked',
+    group: 'Frame',
+    spec: `@bounds: -5, 5, -3, 3
+@lock
+y = x^2 - 3
+y = sin(x)`,
+  },
 ]

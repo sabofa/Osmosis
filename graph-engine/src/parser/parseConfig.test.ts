@@ -75,6 +75,108 @@ describe('@step-mode', () => {
   })
 })
 
+describe('@xstep and @ystep as a multiple of pi', () => {
+  it('reads pi/2 as a number and marks the axis as a pi step', () => {
+    const c = parse('@xstep: pi/2')
+    expect(c.xstep).toBeCloseTo(Math.PI / 2, 12)
+    expect(c.space.ticks.x).toEqual({ value: c.xstep, pi: { num: 1, den: 2 } })
+    expect(c.space.ticks.y).toBeNull()
+  })
+
+  it('reads 2pi and 3*pi/4 as reduced rationals', () => {
+    const y = parse('@ystep: 2pi')
+    expect(y.ystep).toBeCloseTo(2 * Math.PI, 12)
+    expect(y.space.ticks.y?.pi).toEqual({ num: 2, den: 1 })
+    expect(parse('@xstep: 3*pi/4').space.ticks.x?.pi).toEqual({ num: 3, den: 4 })
+  })
+
+  it('leaves a plain number alone', () => {
+    const c = parse('@xstep: 0.5')
+    expect(c.xstep).toBe(0.5)
+    expect(c.space.ticks.x).toBeNull()
+  })
+
+  it('keeps today\'s refusals', () => {
+    expect(() => parse('@xstep: abc')).toThrow('@xstep must be a positive number, got "abc"')
+    expect(() => parse('@xstep: -pi')).toThrow('@xstep must be a positive number')
+    expect(() => parse('@xstep: 0')).toThrow('@xstep must be a positive number')
+  })
+
+  it('combines with @step-mode', () => {
+    const config = defaultConfig()
+    parseConfigLine('@xstep: pi/2', config)
+    parseConfigLine('@step-mode: geometric', config)
+    expect(config.stepMode).toBe('geometric')
+    expect(config.xstep).toBeCloseTo(Math.PI / 2, 12)
+  })
+})
+
+describe('@xscale and @yscale', () => {
+  it('default to linear on both axes', () => {
+    expect(defaultConfig().scales).toEqual({ x: 'linear', y: 'linear' })
+  })
+
+  it('parse linear and log', () => {
+    expect(parse('@xscale: log').scales.x).toBe('log')
+    expect(parse('@xscale: linear').scales.x).toBe('linear')
+    expect(parse('@yscale: log').scales.y).toBe('log')
+    expect(parse('@yscale: linear').scales.y).toBe('linear')
+  })
+
+  it('are independent per axis', () => {
+    expect(parse('@xscale: log').scales).toEqual({ x: 'log', y: 'linear' })
+    expect(parse('@yscale: log').scales).toEqual({ x: 'linear', y: 'log' })
+  })
+
+  it('refuse anything else, naming the directive', () => {
+    expect(() => parse('@xscale: ln')).toThrow('@xscale must be "linear" or "log", got "ln"')
+    expect(() => parse('@yscale: ln')).toThrow('@yscale must be "linear" or "log", got "ln"')
+  })
+})
+
+describe('log axes need a positive @bounds range', () => {
+  function parseAll(...lines: string[]) {
+    const config = defaultConfig()
+    for (const l of lines) parseConfigLine(l, config)
+    return config
+  }
+
+  it('refuses a log x axis whose range reaches zero or below', () => {
+    const msg = '@xscale: log needs a positive x range in @bounds, got "0, 10"'
+    expect(() => parseAll('@bounds: 0,10,1,5', '@xscale: log')).toThrow(msg)
+    expect(() => parseAll('@xscale: log', '@bounds: 0,10,1,5')).toThrow(msg)
+    expect(() => parseAll('@xscale: log', '@bounds: -3,10,1,5')).toThrow(/@xscale: log needs a positive x range/)
+  })
+
+  it('refuses a log y axis the same way', () => {
+    const msg = '@yscale: log needs a positive y range in @bounds, got "-1, 5"'
+    expect(() => parseAll('@bounds: 1,10,-1,5', '@yscale: log')).toThrow(msg)
+    expect(() => parseAll('@yscale: log', '@bounds: 1,10,-1,5')).toThrow(msg)
+  })
+
+  it('accepts a positive range, in either directive order', () => {
+    expect(parseAll('@bounds: 0.1,10,1,5', '@xscale: log').scales.x).toBe('log')
+    expect(parseAll('@xscale: log', '@bounds: 0.1,10,1,5').bounds).toEqual({ xMin: 0.1, xMax: 10, yMin: 1, yMax: 5 })
+    expect(parseAll('@bounds: 1,10,0.1,5', '@yscale: log').scales.y).toBe('log')
+    expect(parseAll('@yscale: log', '@bounds: 1,10,0.1,5').scales.y).toBe('log')
+  })
+
+  it('only checks the log axis: the other stays free to cross zero', () => {
+    expect(() => parseAll('@xscale: log', '@bounds: 0.1,10,-5,5')).not.toThrow()
+    expect(() => parseAll('@yscale: log', '@bounds: -5,5,0.1,10')).not.toThrow()
+  })
+
+  it('leaves linear axes alone with zero or negative bounds', () => {
+    expect(() => parseAll('@bounds: -10,0,-5,0')).not.toThrow()
+    expect(() => parseAll('@xscale: linear', '@yscale: linear', '@bounds: -10,10,-5,5')).not.toThrow()
+  })
+
+  it('a log axis with no @bounds is fine', () => {
+    const config = parseAll('@xscale: log')
+    expect(config.bounds).toBeNull()
+  })
+})
+
 describe('@point-labels', () => {
   it('parses off and coords', () => {
     expect(parse('@point-labels: coords').pointLabels).toBe('coords')
@@ -175,6 +277,7 @@ describe('space directives and @param (S1, K7)', () => {
     const config = parse('@bounds3d: x [-3, 3], z [0, 10]')
     expect(config.space.bounds).toEqual({ x: { min: -3, max: 3 }, y: null, z: { min: 0, max: 10 } })
     expect(parse('@aspect: 1:1:0.5').space.aspect).toEqual({ kind: 'ratio', x: 1, y: 1, z: 0.5 })
+    expect(parse('@aspect: 2:1').space.aspect).toEqual({ kind: 'ratioXY', x: 2, y: 1 })
     expect(parse('@projection: perspective').space.projection).toBe('perspective')
     expect(parse('@frame: axes').space.frame).toBe('axes')
     expect(parse('@colormap: magma').space.colormap).toBe('magma')
@@ -245,5 +348,25 @@ describe('@focus', () => {
     expect(result.config.focus).toBeNull()
     expect(result.config.theme).toBe('dark')
     expect(result.statements).toHaveLength(1)
+  })
+})
+
+describe('@lock', () => {
+  it('defaults to false', () => expect(defaultConfig().lock).toBe(false))
+  it('bare @lock and @lock: true lock', () => {
+    expect(parse('@lock').lock).toBe(true)
+    expect(parse('@lock: true').lock).toBe(true)
+  })
+  it('@lock: false unlocks', () => {
+    const c = parse('@lock')
+    parseConfigLine('@lock: false', c)
+    expect(c.lock).toBe(false)
+  })
+  it('a junk value is a clear error', () => {
+    expect(() => parse('@lock: maybe')).toThrow(/@lock must be "true" or "false"/)
+    expect(() => parse('@lock: on')).toThrow(/@lock/)
+  })
+  it('parses through a whole spec', () => {
+    expect(parseSpec(['@lock', 'y = x'].join('\n')).config.lock).toBe(true)
   })
 })

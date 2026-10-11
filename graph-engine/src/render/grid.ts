@@ -2,7 +2,11 @@ import * as THREE from 'three'
 import type { GraphConfig, StepMode } from '../parser/config'
 import type { Bounds } from './marchingSquares'
 import { AxisLabelPool } from './axisLabelPool'
-import { formatCoord } from '../scene/format'
+import { frameTicks, labelAnchors, type Tick } from '../plot/frame/ticks'
+import { scaleOf, type Scale } from '../plot/frame/scale'
+import { keepLabelsInside, labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
+import { LABEL_MARGIN_PX, LABEL_OFFSET_PX, TITLE } from '../plot/frame/tuning'
+import { defaultSpaceConfig } from '../space/config'
 
 function hexToCss(color: number): string {
   return '#' + color.toString(16).padStart(6, '0')
@@ -117,6 +121,217 @@ export function shouldLabel(index: number, config: GraphConfig): boolean {
   return index % every === 0
 }
 
+export interface GridLabel {
+  value: number // world value of the tick
+  label: string
+  kind: 'major' | 'minor'
+  at: { x: number; y: number } // where the label is drawn, in the plane the camera views
+}
+
+export interface GridPlan {
+  // Line positions in the plane the camera views (transformed coordinates on a log axis).
+  faintX: number[]
+  faintY: number[]
+  strongX: number[]
+  strongY: number[]
+  labelsX: GridLabel[]
+  labelsY: GridLabel[]
+  titles: TitlePlacement[]
+}
+
+interface AxisLines {
+  faint: number[]
+  strong: number[]
+}
+
+// Linear axis: every tick is a faint line, every 5th step a strong one (the old
+// "ruled paper" walk, kept verbatim so linear output does not move).
+function linearLines(min: number, max: number, step: number, ticks: Tick[]): AxisLines {
+  const faint = ticks.map((t) => t.value)
+  const strong: number[] = []
+  const majorStep = step * MAJOR_EVERY
+  const start = Math.ceil(min / majorStep) * majorStep
+  for (let v = start; v <= max; v += majorStep) strong.push(v)
+  return { faint, strong }
+}
+
+// Pi axis: the same every-5th-step rule, counted in steps from zero.
+function piLines(ticks: Tick[]): AxisLines {
+  const faint = ticks.map((t) => t.value)
+  if (ticks.length < 2) return { faint, strong: [] }
+  const step = ticks[1].value - ticks[0].value
+  const strong = ticks.filter((t) => Math.abs(Math.round(t.value / step) % MAJOR_EVERY) === 0).map((t) => t.value)
+  return { faint, strong }
+}
+
+function axisLines(
+  axis: 'x' | 'y',
+  bounds: Bounds,
+  config: GraphConfig,
+  ticks: Tick[],
+  scale: Scale,
+  resolvedStep: number,
+): AxisLines {
+  if (ticks.length === 0) return { faint: [], strong: [] }
+  if (scale.kind === 'log') {
+    return {
+      faint: ticks.filter((t) => t.kind === 'minor').map((t) => scale.forward(t.value)),
+      strong: ticks.filter((t) => t.kind === 'major').map((t) => scale.forward(t.value)),
+    }
+  }
+  if (config.space.ticks[axis]?.pi) return piLines(ticks)
+  const min = axis === 'x' ? bounds.xMin : bounds.yMin
+  const max = axis === 'x' ? bounds.xMax : bounds.yMax
+  // The step the ticks were laid on, so strong lines and tick spacing agree; resolve afresh only without one.
+  const step = resolvedStep > 0 ? resolvedStep : resolveStep(axis === 'x' ? config.xstep : config.ystep, max - min, 6, config.stepMode)
+  return linearLines(min, max, step, ticks)
+}
+
+const LABEL_GAP_PX = 6
+
+// Of the ladder 1, 2, 5, 10, 20, 50, ... the smallest k for which the labels at every k-th tick (counted in whole
+// steps from zero when the step is known, so the survivors are the round values) keep clear of each other once
+// pushed inside the view. Returns the shifted survivors; at the coarsest k that still collides, the greedy
+// leftovers are dropped so no two drawn boxes overlap.
+function thinLabels(
+  labels: GridLabel[],
+  step: number,
+  inside: (ls: GridLabel[]) => GridLabel[],
+  bounds: Bounds,
+  size: { widthPx: number; heightPx: number },
+): GridLabel[] {
+  if (labels.length < 2) return inside(labels)
+  const clear = (ls: GridLabel[]) => {
+    const boxes = labelBoxesPx(ls, bounds, size.widthPx, size.heightPx)
+    const kept: number[] = []
+    for (let i = 0; i < boxes.length; i++) {
+      const prev = kept.length ? boxes[kept[kept.length - 1]] : null
+      const b = boxes[i]
+      const hit = prev && prev.x < b.x + b.w + LABEL_GAP_PX && b.x < prev.x + prev.w + LABEL_GAP_PX && prev.y < b.y + b.h + 2 && b.y < prev.y + prev.h + 2
+      if (!hit) kept.push(i)
+    }
+    return kept
+  }
+  let best: GridLabel[] = []
+  for (let k = 1; ; k = k === 1 ? 2 : String(k)[0] === '2' ? k * 2.5 : k * 2) {
+    const pick = labels.filter((l, i) => (step > 0 ? Math.round(l.value / step) % k === 0 : i % k === 0))
+    const shifted = inside(pick)
+    const kept = clear(shifted)
+    best = kept.map((i) => shifted[i])
+    if (kept.length === shifted.length || pick.length <= 1) return shifted
+    if (k > labels.length * 2) return best
+  }
+}
+
+// Per-axis thinning ignores the other axis, so x labels and y labels can overprint (typically in the corner).
+// While an x box and a y box overlap, drop one: a minor loses to a major; otherwise the y label goes (x labels
+// own the bottom row). An axis never loses its last label.
+function resolveCrossAxis(
+  xs: GridLabel[],
+  ys: GridLabel[],
+  bounds: Bounds,
+  size: { widthPx: number; heightPx: number },
+): { x: GridLabel[]; y: GridLabel[] } {
+  let x = xs
+  let y = ys
+  const PAD = 2
+  for (let guard = 0; guard < 1000 && x.length && y.length; guard++) {
+    const bx = labelBoxesPx(x, bounds, size.widthPx, size.heightPx)
+    const by = labelBoxesPx(y, bounds, size.widthPx, size.heightPx)
+    let hit: [number, number] | null = null
+    outer: for (let i = 0; i < bx.length; i++) {
+      for (let j = 0; j < by.length; j++) {
+        const a = bx[i]
+        const b = by[j]
+        if (a.x < b.x + b.w + PAD && b.x < a.x + a.w + PAD && a.y < b.y + b.h + PAD && b.y < a.y + a.h + PAD) {
+          hit = [i, j]
+          break outer
+        }
+      }
+    }
+    if (!hit) break
+    const [i, j] = hit
+    let dropY = !(x[i].kind === 'minor' && y[j].kind === 'major')
+    if (dropY && y.length < 2) dropY = false
+    if (!dropY && x.length < 2) {
+      if (y.length < 2) break // both axes down to their only label: keep both
+      dropY = true
+    }
+    if (dropY) y = y.filter((_, k) => k !== j)
+    else x = x.filter((_, k) => k !== i)
+  }
+  return { x, y }
+}
+
+// Everything the grid draws, as data: line positions and positioned labels.
+// `bounds` are the camera's (the plane being viewed); on a log axis that plane is
+// (log10 x, log10 y), so ticks are computed on the world values and drawn at
+// scale.forward(value). `margins` inset pinned labels (plane units); `offset` is
+// how far below / left of its axis an on-axis label sits.
+export function gridPlan(
+  bounds: Bounds,
+  config: GraphConfig,
+  size: { widthPx: number; heightPx: number },
+  margins: { x: number; y: number },
+  offset: { x: number; y: number },
+): GridPlan {
+  const sx = scaleOf(config.scales?.x)
+  const sy = scaleOf(config.scales?.y)
+  const world: Bounds = {
+    xMin: sx.inverse(bounds.xMin),
+    xMax: sx.inverse(bounds.xMax),
+    yMin: sy.inverse(bounds.yMin),
+    yMax: sy.inverse(bounds.yMax),
+  }
+  const ticks = frameTicks({ bounds: world, ...size }, config)
+  const lx = axisLines('x', bounds, config, ticks.x, sx, ticks.step?.x ?? 0)
+  const ly = axisLines('y', bounds, config, ticks.y, sy, ticks.step?.y ?? 0)
+
+  const labelsX: GridLabel[] = []
+  const labelsY: GridLabel[] = []
+  if (config.axes && config.labels !== 'none') {
+    const anchors = labelAnchors(ticks, { bounds, ...size }, margins, { x: sx.kind, y: sy.kind })
+    for (const a of anchors.x) {
+      if (a.label === '') continue
+      const onAxis = sy.kind === 'linear' && a.at.y === 0
+      if (onAxis && a.label === '0') continue // "0" comes from the y-axis pass
+      labelsX.push({ ...a, at: { x: sx.forward(a.at.x), y: onAxis ? a.at.y - offset.y : a.at.y } })
+    }
+    for (const a of anchors.y) {
+      if (a.label === '') continue
+      const onAxis = sx.kind === 'linear' && a.at.x === 0
+      labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
+    }
+  }
+  // Keep every label box inside the view (a tick at the edge slides inward instead of being cut off), then thin
+  // each axis to the finest every-k-th tick whose label boxes do not touch: long labels get fewer ticks, never overlap.
+  const inside = <T extends { label: string; at: { x: number; y: number } }>(ls: T[]) => keepLabelsInside(ls, bounds, size.widthPx, size.heightPx)
+  const thin = (ls: GridLabel[], step: number) => thinLabels(ls, step, inside, bounds, size)
+  const shiftedX = thin(labelsX, ticks.step?.x ?? 0)
+  const shiftedY = thin(labelsY, ticks.step?.y ?? 0)
+  const resolved = resolveCrossAxis(shiftedX, shiftedY, bounds, size)
+  labelsX.splice(0, labelsX.length, ...resolved.x)
+  labelsY.splice(0, labelsY.length, ...resolved.y)
+  // A title equal to its axis default ('x' / 'y') counts as not authored, so
+  // plots without @titles do not change. An author who wants a title that is
+  // literally "x" can write "x " or "x (m)".
+  const defaults = defaultSpaceConfig().titles
+  const authored = {
+    x: config.space.titles.x === defaults.x ? '' : config.space.titles.x,
+    y: config.space.titles.y === defaults.y ? '' : config.space.titles.y,
+  }
+  const titles = config.axes
+    ? titleLayout({
+        bounds,
+        widthPx: size.widthPx,
+        heightPx: size.heightPx,
+        titles: authored,
+        labelBoxesPx: labelBoxesPx([...labelsX, ...labelsY], bounds, size.widthPx, size.heightPx),
+      })
+    : []
+  return { faintX: lx.faint, faintY: ly.faint, strongX: lx.strong, strongY: ly.strong, labelsX, labelsY, titles }
+}
+
 // Owns the axis/grid line meshes and redraws them against the current camera
 // bounds. Split out of SceneRenderer since grid drawing is synchronous and
 // cheap (unlike the rest of a scene rebuild — see geometryGroup.ts) and has
@@ -132,6 +347,7 @@ export class GridRenderer {
   private axisLines: THREE.LineSegments
   private xLabels: AxisLabelPool
   private yLabels: AxisLabelPool
+  private titleLabels: AxisLabelPool
 
   constructor(palette: GridPalette) {
     this.gridLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: palette.grid }))
@@ -139,7 +355,8 @@ export class GridRenderer {
     this.axisLines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: palette.axis }))
     this.xLabels = new AxisLabelPool(hexToCss(palette.axis))
     this.yLabels = new AxisLabelPool(hexToCss(palette.axis))
-    this.group.add(this.gridLines, this.gridLinesMajor, this.axisLines, this.xLabels.group, this.yLabels.group)
+    this.titleLabels = new AxisLabelPool(hexToCss(palette.axis), true)
+    this.group.add(this.gridLines, this.gridLinesMajor, this.axisLines, this.xLabels.group, this.yLabels.group, this.titleLabels.group)
   }
 
   setPalette(palette: GridPalette) {
@@ -148,91 +365,88 @@ export class GridRenderer {
     ;(this.axisLines.material as THREE.LineBasicMaterial).color.setHex(palette.axis)
     this.xLabels.setColor(hexToCss(palette.axis))
     this.yLabels.setColor(hexToCss(palette.axis))
+    this.titleLabels.setColor(hexToCss(palette.axis))
   }
 
   // pixelToWorld converts a fixed on-screen pixel size to world units at the
   // current zoom — same convention SceneRenderer uses for point/marker sizes
   // — so tick labels stay a constant, readable pixel size instead of
   // shrinking/growing with the plotted geometry as you zoom.
-  draw(bounds: Bounds, config: GraphConfig, pixelToWorld: (px: number) => number) {
+  // `sizePx` is the canvas size; without it the pixel size is inferred from
+  // pixelToWorld(1) (density only, so an approximation is harmless).
+  draw(
+    bounds: Bounds,
+    config: GraphConfig,
+    pixelToWorld: (px: number) => number,
+    sizePx?: { widthPx: number; heightPx: number },
+    // Per-axis world size of a px length (x and y px-per-unit differ under an authored aspect or one-axis zoom).
+    pixelToWorldXY: (px: number) => { x: number; y: number } = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) }),
+    // Renderer-relative float32: line vertices are written minus this origin and the line objects sit on it.
+    origin: { x: number; y: number } = { x: 0, y: 0 },
+  ) {
+    const { x: ox, y: oy } = origin
+    for (const lines of [this.gridLines, this.gridLinesMajor, this.axisLines]) lines.position.set(ox, oy, 0)
     if (config.grid) {
-      const stepX = resolveStep(config.xstep, bounds.xMax - bounds.xMin, 6, config.stepMode)
-      const stepY = resolveStep(config.ystep, bounds.yMax - bounds.yMin, 6, config.stepMode)
+      const perPx = pixelToWorld(1)
+      const size = sizePx ?? {
+        widthPx: (bounds.xMax - bounds.xMin) / perPx,
+        heightPx: (bounds.yMax - bounds.yMin) / perPx,
+      }
+      const plan = gridPlan(
+        bounds,
+        config,
+        size,
+        { x: pixelToWorldXY(LABEL_MARGIN_PX.x).x, y: pixelToWorldXY(LABEL_MARGIN_PX.y).y },
+        { x: pixelToWorldXY(LABEL_OFFSET_PX.x).x, y: pixelToWorldXY(LABEL_OFFSET_PX.y).y },
+      )
 
       const positions: number[] = []
-      const startX = Math.ceil(bounds.xMin / stepX) * stepX
-      for (let x = startX; x <= bounds.xMax; x += stepX) {
-        positions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      }
-      const startY = Math.ceil(bounds.yMin / stepY) * stepY
-      for (let y = startY; y <= bounds.yMax; y += stepY) {
-        positions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
-      }
+      for (const x of plan.faintX) positions.push(x - ox, bounds.yMin - oy, 0, x - ox, bounds.yMax - oy, 0)
+      for (const y of plan.faintY) positions.push(bounds.xMin - ox, y - oy, 0, bounds.xMax - ox, y - oy, 0)
       updateGeometryPositions(this.gridLines.geometry, positions)
       this.gridLines.visible = positions.length > 0
 
-      const majorStepX = stepX * MAJOR_EVERY
-      const majorStepY = stepY * MAJOR_EVERY
       const majorPositions: number[] = []
-      const majorStartX = Math.ceil(bounds.xMin / majorStepX) * majorStepX
-      for (let x = majorStartX; x <= bounds.xMax; x += majorStepX) {
-        majorPositions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      }
-      const majorStartY = Math.ceil(bounds.yMin / majorStepY) * majorStepY
-      for (let y = majorStartY; y <= bounds.yMax; y += majorStepY) {
-        majorPositions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
-      }
+      for (const x of plan.strongX) majorPositions.push(x - ox, bounds.yMin - oy, 0, x - ox, bounds.yMax - oy, 0)
+      for (const y of plan.strongY) majorPositions.push(bounds.xMin - ox, y - oy, 0, bounds.xMax - ox, y - oy, 0)
       updateGeometryPositions(this.gridLinesMajor.geometry, majorPositions)
       this.gridLinesMajor.visible = majorPositions.length > 0
 
-      // Tick labels ride the same "nice" minor step as the grid lines
-      // themselves (1/2/5 × 10^n) — matches the progression as you zoom
-      // (…1, 2, 5, 10, 20, 50, 100…) rather than the ×5 major-gridline
-      // spacing, which would read as a coarser sequence than the visible
-      // minor lines. Only drawn when axes are on, since labels are placed
-      // relative to the x=0/y=0 lines.
+      // Tick labels (text, thinning and position) come from gridPlan: they ride
+      // the same ticks as the grid lines, sit by the x=0/y=0 axes when those are
+      // in view and pin to the nearest edge when not. Only drawn when axes are on.
       if (config.axes && config.labels !== 'none') {
-        const labelOffsetX = pixelToWorld(14)
-        const labelOffsetY = pixelToWorld(14)
-        const showXLabels = bounds.yMin <= 0 && 0 <= bounds.yMax
-        const showYLabels = bounds.xMin <= 0 && 0 <= bounds.xMax
-        const labelScaleX = pixelToWorld(34)
-        const labelScaleY = pixelToWorld(16)
-
+        const labelScaleX = pixelToWorldXY(34).x
+        const labelScaleY = pixelToWorldXY(16).y
         let xIndex = 0
-        let xTick = 0
-        if (showXLabels) {
-          for (let x = startX; x <= bounds.xMax; x += stepX, xTick++) {
-            if (Math.abs(x) < stepX / 1e6) continue // "0" comes from the y-axis pass below
-            if (!shouldLabel(xTick, config)) continue
-            this.xLabels.place(xIndex++, formatCoord(x), x, -labelOffsetY, labelScaleX, labelScaleY)
-          }
-        }
+        for (const l of plan.labelsX) this.xLabels.place(xIndex++, l.label, l.at.x, l.at.y, labelScaleX, labelScaleY)
         this.xLabels.hideFrom(xIndex)
-
         let yIndex = 0
-        let yTick = 0
-        if (showYLabels) {
-          for (let y = startY; y <= bounds.yMax; y += stepY, yTick++) {
-            if (!shouldLabel(yTick, config)) continue
-            const text = Math.abs(y) < stepY / 1e6 ? '0' : formatCoord(y)
-            this.yLabels.place(yIndex++, text, -labelOffsetX, y, labelScaleX, labelScaleY)
-          }
-        }
+        for (const l of plan.labelsY) this.yLabels.place(yIndex++, l.label, l.at.x, l.at.y, labelScaleX, labelScaleY)
         this.yLabels.hideFrom(yIndex)
       } else {
         this.xLabels.hideFrom(0)
         this.yLabels.hideFrom(0)
       }
+
+      // Axis titles (@titles) are placed by gridPlan; this only draws them.
+      const perPxXY = pixelToWorldXY(1)
+      let titleIndex = 0
+      for (const t of plan.titles) {
+        this.titleLabels.placeAnchored(titleIndex++, t.text, t.at.x, t.at.y, pixelToWorldXY(TITLE.heightPx).y, t.align, t.baseline, perPxXY.x / perPxXY.y)
+      }
+      this.titleLabels.hideFrom(titleIndex)
     } else {
       this.gridLines.visible = false
       this.gridLinesMajor.visible = false
       this.xLabels.hideFrom(0)
       this.yLabels.hideFrom(0)
+      this.titleLabels.hideFrom(0)
     }
 
     if (config.axes) {
-      const axisPositions = [bounds.xMin, 0, 0, bounds.xMax, 0, 0, 0, bounds.yMin, 0, 0, bounds.yMax, 0]
+      // Axes sit at plane 0 (value 1 on a log axis), spanning the view; off-view they are simply not seen.
+      const axisPositions = [bounds.xMin - ox, -oy, 0, bounds.xMax - ox, -oy, 0, -ox, bounds.yMin - oy, 0, -ox, bounds.yMax - oy, 0]
       updateGeometryPositions(this.axisLines.geometry, axisPositions)
       this.axisLines.visible = true
     } else {
@@ -249,5 +463,6 @@ export class GridRenderer {
     ;(this.axisLines.material as THREE.Material).dispose()
     this.xLabels.dispose()
     this.yLabels.dispose()
+    this.titleLabels.dispose()
   }
 }

@@ -3,12 +3,13 @@ import { parseSpec } from './parser/parseSpec'
 import { defaultConfig, type GraphConfig } from './parser/config'
 import { buildScene } from './scene/buildScene'
 import { buildTable, type NamedTableData } from './scene/buildTable'
-import { formatCoord } from './scene/format'
+import { formatCoord, formatForSpan } from './scene/format'
 import { isThreeD, resolvePanels } from './scene/mode'
 import { renderFigure } from './figure/render'
 import { SceneRenderer, type HoverInfo } from './render/SceneRenderer'
 import { SpaceRenderer } from './space/SpaceRenderer'
 import { canvasKey, releaseRenderer } from './viewerCanvas'
+import { createErrorReporter } from './viewerErrors'
 import { resolvePalette } from './render/palette'
 import type { Regression } from './scene/types'
 import type { ParseError, ParseResult } from './parser/types'
@@ -48,11 +49,6 @@ type Renderer = SceneRenderer | SpaceRenderer
 // rebuilds are a separate, already-throttled path inside SceneRenderer
 // itself and aren't affected by this.
 const REBUILD_DEBOUNCE_MS = 80
-// Reduced marching-squares resolution used for regions/implicit curves while
-// actively dragging — see buildScene's `resolution` param. Region fill
-// triangle count scales with the square of this, so it's kept noticeably
-// lower than the settled resolution rather than just halved.
-const DRAG_RESOLUTION = 45
 
 // The reusable, app-agnostic entry point: text spec in, live-rendered scene
 // out. No dependency on anything outside this package. Switches between a 2D
@@ -77,6 +73,10 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
   const viewChangeRef = useRef<() => void>(() => {})
   const onErrorsRef = useRef(onErrors)
   onErrorsRef.current = onErrors
+  // Every error list goes to the host through this (viewerErrors.ts): a text or
+  // theme rebuild always delivers, a pan/zoom rebuild only a list that differs
+  // from the last one delivered.
+  const errorReporterRef = useRef(createErrorReporter((errors) => onErrorsRef.current?.(errors)))
   const themeRef = useRef(theme)
   themeRef.current = theme
 
@@ -121,10 +121,12 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
   useEffect(() => {
     // Shared by both the full (text-driven) rebuild and the lighter
     // view-change-only rebuild. `reportState` is false for the latter: pan/
-    // zoom doesn't change the config, table data, regression stats, or error
-    // list, so skipping those setState calls avoids forcing a React
-    // re-render (of this component and, via onErrors, the parent) on every
-    // single drag frame.
+    // zoom doesn't change the config, table data or regression stats, so
+    // skipping those setState calls avoids forcing a React re-render (of this
+    // component and, via onErrors, the parent) on every single drag frame. The
+    // error list is the one exception: a 2D scene's errors depend on the view
+    // ("this curve is undefined everywhere in view"), so the view-change path
+    // delivers it, but only when it differs from the last list delivered.
     // Fully dispose the renderer (releasing its WebGL context), and retire its
     // canvas if it had one.
     function release() {
@@ -151,7 +153,7 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
           release()
           setFigure(null)
           setFigureHandling(null)
-          onErrorsRef.current?.(parsed.errors)
+          errorReporterRef.current.report(parsed.errors)
         }
         return
       }
@@ -167,7 +169,7 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
           const built = renderFigure(parsed.statements, parsed.config, palette)
           setFigure(built.svg)
           setFigureHandling({ frame: built.frame, items: built.items })
-          onErrorsRef.current?.([...parsed.errors, ...built.errors])
+          errorReporterRef.current.report([...parsed.errors, ...built.errors])
         }
         return
       }
@@ -233,16 +235,27 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
         const errors = (renderer as SpaceRenderer).setSpec(parsed.statements, parsed.config, parsed.statementLines, spec)
         if (reportState) {
           setRegression(null)
-          onErrorsRef.current?.([...parsed.errors, ...errors])
+          errorReporterRef.current.report([...parsed.errors, ...errors])
         }
       } else {
         const renderer2d = renderer as SceneRenderer
-        const resolution = renderer2d.isDragging() ? DRAG_RESOLUTION : undefined
-        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, resolution)
+        // While a gesture runs (a drag, or a wheel burst) the scene is a coarse one: the samplers' coarse
+        // quality preset. The renderer calls this again when the gesture settles, with nothing
+        // interacting, so the settled view is full quality.
+        const interacting = renderer2d.isInteracting()
+        const { width, height } = renderer2d.getViewportPx()
+        const scene = buildScene(parsed.statements, renderer2d.getBounds(), parsed.config, undefined, parsed.statementLines, {
+          widthPx: width,
+          heightPx: height,
+          quality: interacting ? 'coarse' : 'full',
+        })
         renderer2d.setGraphScene(scene)
+        const errors = [...parsed.errors, ...scene.errors]
         if (reportState) {
           setRegression(scene.regression)
-          onErrorsRef.current?.([...parsed.errors, ...scene.errors])
+          errorReporterRef.current.report(errors)
+        } else {
+          errorReporterRef.current.reportIfChanged(errors)
         }
       }
     }
@@ -351,7 +364,7 @@ export default function GraphViewer({ spec, onErrors, theme, focus, coordinates,
         {figure === null && hover && (
           <div className="graph-viewer-hover-label" style={{ left: hover.screenX, top: hover.screenY }}>
             {hover.label ? `${hover.label}: ` : ''}(
-            {formatCoord(hover.worldX)}, {formatCoord(hover.worldY)})
+            {formatForSpan(hover.worldX, hover.span)}, {formatForSpan(hover.worldY, hover.span)})
           </div>
         )}
       </div>

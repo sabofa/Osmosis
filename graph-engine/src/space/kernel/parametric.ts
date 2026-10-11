@@ -50,7 +50,7 @@ function preparedParametric(statement: Statement, context: BuildContext): Prepar
   const vars = boundNames(2)
   const renamed = f.map((e) => {
     reads.add(e, [u.param, v.param])
-    return renameBound(e, [u.param, v.param])
+    return renameBound(e, [u.param, v.param], scope)
   }) as [Expr, Expr, Expr]
   // r (for the pick), and r, r_u, r_v in one frame for sampling: they share
   // most of their terms, which compileMany computes once per vertex.

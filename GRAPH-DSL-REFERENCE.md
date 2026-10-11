@@ -26,6 +26,15 @@ Empty/whitespace-only lines and `#`-comment lines are skipped. Everything
 else must parse as exactly one of the statement forms below, optionally
 followed by a same-line `color:`/`name:` clause (see "Color and name").
 
+**Errors name their line.** A statement that parses but cannot be drawn is
+reported on its own line — in a 2D plot too, since calc P1: a typo in a function name (`y = sinn(x)` is `Unknown
+function "sinn"`), an unknown variable, a bad definition (a name defined twice)
+and a curve that is undefined across the whole view or range ("this curve is
+undefined everywhere in view") are each an error on that statement's line and
+leave the other statements drawn. Before calc P1 these in a plot statement
+(`y =`, `r =`, a parametric curve) drew nothing and said nothing, and a 2D error
+that did appear had no line number.
+
 ## Expression grammar
 
 Every `<expr>` placeholder below is a small recursive-descent arithmetic
@@ -50,6 +59,213 @@ statement anywhere in the spec (see below) makes `<name>` callable/referenceable
 in every other statement, regardless of where in the spec the definition sits
 relative to its use.
 
+## Expressions: the calculus kernel (calc P1)
+
+The syntax below is read by `parseExprString` and `parseConditionString`
+(`graph-engine/src/parser/parseExpr.ts`) and evaluated by the shared calculus
+kernel (`graph-engine/src/math/`, shared with the 3D space engine). Everything
+the "Expression grammar" section describes still parses to the same tree it
+always did, with one exception under "Powers of a function" below. The new
+forms (bars, factorial, primes, braces, conditions, and the sum, product and
+integral forms) each used to be a syntax error.
+
+**Real odd roots.** A power whose exponent is a ratio of integer literals that
+reduces to `p/q` with `q` odd takes the real root, so it is defined for a
+negative base:
+
+```
+x^(1/3)      # real cube root: -2 at x = -8
+x^(2/3)      # the cube root, squared: 4 at x = -8
+```
+
+The rule reads the exponent's shape, never a float: `x^0.333`, `x^0.5` and
+`x^(1/2)` stay the principal power (undefined for negative `x`).
+
+**More built-ins.** The trig functions read their angle, and the inverse trig
+functions return theirs, in the spec's `@angle` unit; the hyperbolic functions
+take plain numbers.
+
+| Function | Meaning | Example |
+|---|---|---|
+| `gamma(x)` | the gamma function; `gamma(n + 1)` is `n!` | `gamma(5)` is 24 |
+| `erf(x)`, `erfc(x)` | the error function and `1 - erf(x)` | `erf(1)` is 0.8427 |
+| `cbrt(x)` | real cube root, negative `x` included | `cbrt(-8)` is -2 |
+| `root(n, x)` | real `n`-th root for a whole `n`; an even root of a negative is undefined | `root(4, 16)` is 2 |
+| `step(x)` | Heaviside step: 0 below zero, 1 from zero up | `step(0)` is 1 |
+| `choose(n, k)` | binomial coefficient | `choose(5, 2)` is 10 |
+| `perm(n, k)` | `n!/(n - k)!`, the ordered selections | `perm(5, 2)` is 20 |
+| `gcd(a, b)`, `lcm(a, b)` | greatest common divisor, least common multiple, of whole numbers | `gcd(12, 18)` is 6 |
+| `asin`, `acos`, `atan`, `atan2(y, x)` | inverse trig | `atan2(1, 1)` is `pi/4` in radians |
+| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` | hyperbolic and their inverses | `asinh(1)` is 0.8814 |
+| `sec`, `csc`, `cot` | reciprocals of `cos`, `sin`, `tan` | `sec(0)` is 1 |
+| `floor`, `ceil`, `round`, `sign` | `round` takes halves away from zero | `round(-2.5)` is -3 |
+| `mod(a, b)` | remainder with the sign of `b` | `mod(-1, 3)` is 2 |
+| `min(a, b, …)`, `max(a, b, …)` | two or more arguments | `max(1, 2, 3)` is 3 |
+| `hypot(a, b, …)` | square root of the sum of squares, two or more arguments | `hypot(3, 4)` is 5 |
+
+`inf` is a constant like `pi` and `e` (∞), meant for the bounds of an integral.
+
+**Absolute value.** `|x - 1|`. A bar where an operand is expected opens a pair;
+a bar after an operand closes the open pair, or multiplies when none is open. So
+`2|x|` is `2·|x|`, `|x||y|` is `|x|·|y|`, and `||x| - 1|` nests. Parentheses
+start over: in `|(2|x|)|` the inner pair multiplies.
+
+**Factorial.** `n!` is postfix and means `gamma(n + 1)`: exact at whole numbers,
+undefined at the negative integers. It binds tighter than `^` and than unary
+minus, so `-3!` is `-(3!)` = -6 and `2^3!` is `2^(3!)` = 64. Parenthesise to
+take the factorial of a sum: `(2k + 1)!`. `!=` is "not equal", so `n!=5` is the
+condition `n != 5`; write `n! = 5` with a space when you mean the factorial
+equation. A statement that has a bare `!=` outside any bracket (`y != 2`,
+`x^2 + y^2 != 1`) is refused, not read as an equation: `!=` is a condition, and
+belongs in a piecewise `{…}` (see "Conditions").
+
+**Derivatives by name.** `f'(x)`, `f''(x + 1)`, up to five primes: the exact
+derivative of a function the document defines, at that point. Only a user
+function can be primed (`sin'(x)` is an error), a function the kernel cannot
+differentiate exactly is refused rather than approximated, and six primes is an
+error.
+
+**Powers of a function.** `sin^2(x)` is `(sin(x))^2`. `sin^-1(x)` is the
+inverse, `asin(x)`, as textbooks write it; the same goes for `cos`, `tan`,
+`sinh`, `cosh` and `tanh`. `sec^-1`, `csc^-1` and `cot^-1` have no built-in and
+are refused with the spelling to use (`acos(1/x)`, `asin(1/x)`, `atan(1/x)`).
+This reads only a built-in's name directly followed by `^`; `x^2(x + 1)` is
+still `x^2·(x + 1)`, and a built-in name raised to a power with no parenthesised
+argument (`gamma^2`) is the name to a power. The one input that read differently
+before is a built-in's name, `^`, an exponent and a parenthesised argument
+(`sin^2(x)`), which used to parse as `sin^2·(x)` with `sin` an unknown variable.
+
+**A name before parentheses.** A name that is a value (a variable, a parameter
+or a constant) and is called with one argument is a product: `x(x + 1)` is
+`x·(x + 1)`, and with `k = 2` defined, `k(x + 1)` is `2·(x + 1)`. Built-in names
+are the exception: `sin(x)` is always the function. A document's own value (a
+`@param` or a constant) takes its name over a built-in function of the same
+name: after `@param gamma = 2`, `gamma` is the parameter, and calling
+`gamma(3)` is the error `"gamma" is a parameter in this document; rename it to
+use the built-in gamma function`. (A *function* the document defines,
+`sin(z) = z^2`, replaces the built-in quietly, as it always has.)
+
+**Piecewise.** `{condition: value, condition: value, …, otherwise}`:
+
+```
+{x < 0: x^2, x <= 2: 2x + 1, 5}
+```
+
+The value is that of the first piece whose condition holds. A final bare value
+is the "otherwise"; without one the expression is undefined where no condition
+holds, and an undefined condition reached before any true one makes the whole
+value undefined. A bare value anywhere but last, a condition that is not a
+comparison (`{x: 1}`) and a missing `:` are errors. Braces multiply like
+parentheses (`2{x < 0: 1, 0}`) and may nest.
+
+**Conditions.** The comparisons are `<`, `<=`, `>`, `>=`, `=` and `!=`; a chain
+`0 < x <= 1` tests each link and requires all of them; `and`, `or` and `not`
+combine them, with `not` binding tightest, then `and`, then `or`:
+
+```
+0 < x < 1
+x < 0 or x > 1 and y != 2      # x < 0, or both x > 1 and y != 2
+not x = 0
+```
+
+Parentheses do not group conditions (they start an expression). A comparison
+is only valid as a condition: `x < 1` on its own, outside braces, is an error,
+and a statement such as `y != 2` is refused rather than read as `y! = 2`.
+`and`, `or` and `not` are keywords only inside a condition, and `to` only inside
+a sum, product or integral; anywhere else they are ordinary names.
+
+**Sums, products and integrals.**
+
+```
+sum(k = 0 to n, x^k)
+prod(k = 1 to n, k)
+integral(t = 0 to x, sin(t)/t)
+integral(t = 0 to inf, exp(-t))
+```
+
+The variable (`k`, `t`) exists only inside the body; the bounds are outside it.
+A sum or product runs over the whole numbers between its bounds: a literal
+bound that is not whole is an error (a bound read from a parameter gives an
+undefined value), at most 100000 terms are allowed, and `inf` is not a sum
+bound. An integral may have infinite bounds (`inf`, `-inf`) and is computed
+numerically; a variable upper bound is differentiable (if the document defines
+`F(x) = integral(t = 0 to x, sin(t)/t)`, then `F'(x)` is `sin(x)/x`). `sum(x)`,
+with no `=`, is still an ordinary call to a function named `sum`.
+
+**Reserved names.** Names that start with `__` are reserved for the kernel. The
+forms above are stored as calls to them (`__piecewise`, `__lt`, `__and`,
+`__factorial`, `__prime`, `__sum`, `__prod`, `__integral` and the like) so that
+no new expression node was needed; do not define or call one yourself.
+
+## How curves are drawn (calc P2)
+
+Explicit (`y = f(x)`, `x = f(y)`), polar and parametric curves are drawn by an
+adaptive sampler that works in screen pixels, and it connects two points only
+when it can show the curve is there between them:
+
+- **Certified joins.** A stretch is joined when interval arithmetic proves the
+  curve defined and continuous across it, or, where it cannot, when the gap
+  between the samples is under a pixel and closes as the stretch is halved.
+  Anything else is a break, never a chord: `tan(x)` and `1/(x - 1)` do not cross
+  their poles, and `floor(x)` has a break at every integer. Steepness is not a
+  reason to break (`y = 1000x` and `y = 1e6 (x - 3)` draw). The one limit is a
+  smooth curve that interval arithmetic cannot vouch for, such as an integral
+  (`integral(t = 0 to x, 2000)`): steeper than about 1000:1 on screen, it
+  cannot be certified and is not drawn, and says so (below).
+- **Holes** are open circles. Where the curve has a limit and no value, the
+  curve runs through and an open circle marks the spot: `(x^2 - 1)/(x - 1)` at
+  1, `sin(x)/x` at 0. A hole at a point no number is exactly (`sin(x)/sin(x)`
+  has one at every multiple of pi, `(x^2 - 2)/(x^2 - 2)` at both roots of 2) is
+  drawn as well: a zero of a denominator is undefined whatever the nearest
+  decimal says. If the curve takes some other value there
+  (`{x != 1: x, 5}`), that point is drawn as a filled dot as well. A curve
+  defined only at points (`y = {x = 1: 5}`) is those points, filled dots with no
+  line between.
+- **Jumps and ends** are open or filled as the condition says. At a jump (a
+  seam of the braces, the ends of an `if` range, `floor`) each side ends in a
+  circle: filled where the curve takes the value there, open where it does not,
+  decided by the operator (`<` and `>` leave the boundary out, `<=` and `>=`
+  include it), even where the boundary is irrational (`{x^2 < 2: 0, 1}`).
+  `{x < 0: x^2, x + 1}` is open at (0, 0) and filled at (0, 1);
+  `y = 2 if 0 < x <= 3` is open at 0 and filled at 3. A natural edge of a
+  domain is run to, and not marked: `ln(x)`, `log(x)` and the log of a quadratic
+  (`ln(1 - x^2)`, `ln(x^2 - 4x + 3)`) dive out of the picture (the curve is drawn
+  to the edge of what is sampled, past the bottom of the view), and `sqrt(x)`
+  meets its endpoint. The vertical tip of a root (`sqrt(1 - x^2)`,
+  `x sqrt(9 - x^2)`, `(4 - x^2)^(1/4)`) is reached, and the stretch to it is
+  joined only if the samples show it closing on the tip; one too slow to draw to
+  (`(1 - x^2)^0.1`) stops short of it, and the edge itself is still found and
+  typed.
+- **Asymptote guides.** At a pole of `y = f(x)` the curve breaks and, with
+  `@asymptotes` on (the default), a dashed vertical line is drawn through it
+  (a horizontal one for `x = f(y)`). Polar and parametric poles break the
+  curve and draw no guide yet. `r = 1/cos(theta)` is a vertical line with no
+  chord across it. The curve runs up to a pole until it leaves the picture
+  (`1/x` across +-1000 and `tan(x)` across +-100 reach the top and the bottom,
+  `ln(abs(x))` the bottom), and the poles of a long range are typed up to 256
+  of them, nearest the middle first (past that the sampler still breaks the
+  curve at the rest, untyped and with no guide).
+- **Bands.** Where a curve turns round more than once inside a pixel
+  (`sin(1/x)` near 0, `sin(500x)`), a polyline would be an aliased zig-zag that
+  changes with every zoom, so the extent the curve sweeps is drawn instead, as a
+  pale filled band. A curve that is flat to within a quarter of a pixel is never
+  a band, however its rounding noise turns: `(x + 1)^2 - x^2 - 2x`, which is
+  the line y = 1, is drawn as that line.
+- **Notes.** A curve is drawn with a fixed budget of evaluations. One that
+  needs more says so on its line and is drawn from what the sampler had:
+  `drawn coarsely: ...` when something drew in the view, `not drawn: ...` when
+  nothing did (the sampler cannot certify an integral, so a capped one has
+  nothing to keep). What an evaluation costs counts: a point of an integral is
+  charged by the integrand evaluations it made, so a curve of dear integrals
+  (`integral(t = 0 to x, 5000 cos(100t))`) is capped in seconds and says so.
+  A smooth stretch too steep to certify says `too steep to draw here: ...`. A
+  curve that is in the view and is not drawn always says why: where the budget
+  was not spent and it is not steep, it says `not drawn: this curve could not
+  be certified anywhere in view` (`floor(1000x)`, a staircase whose treads are a
+  hundredth of a pixel wide). While the view is being dragged the curves are
+  sampled more coarsely (and the `drawn coarsely` note waits for the settled
+  view), and they settle to full detail when the gesture stops.
+
 ## Statement catalog
 
 Every entry is a full line (or, for parametric forms, the shape before the
@@ -60,55 +276,100 @@ Every entry is a full line (or, for parametric forms, the shape before the
 ```
 y = <expr(x)> [if <condition>]
 ```
-Explicit function of `x`. The optional `if <condition>` makes it piecewise —
-`x < 0`, `x >= 2`, or a two-sided range `-1 <= x < 1` (both bounds must use
-`<`/`<=`, never `>`/`>=`).
+Explicit function of `x`. The optional `if <condition>` restricts where it is
+drawn — `x < 0`, `x >= 2`, a chain `-1 <= x < 1`, or any combination with
+`and`, `or`, `not` and `!=` (see "Conditions" above). The condition may test
+only the independent variable (`x` here): `y = x if y > 0` is an error on its
+line (`Unknown variable "y"`), because a test on the value being drawn is a
+region, not a domain — shade it with `y > 0` instead. A domain that is not one
+interval draws as separate pieces and never joins them across the gap, so
+`y = 1 if x < -1 or x > 1` is two half-lines. The bounds in a condition may be
+any constant expression, including your own definitions and `@param` values.
 ```
 y = x^2 - 4
 y = 1/x if x > 0
 y = -x + 1 if -2 <= x < 3
+y = 1 if x < -1 or x > 1
+y = x if x != 0
 ```
 
 ```
 x = <expr(y)> [if <condition>]
 ```
 Explicit function of `y` — same condition grammar as above, mirrored to the
-`y` axis.
+`y` axis (so the condition tests `y`).
 ```
 x = y^2
+x = y^2 if y > 0
 ```
 
 ```
 r = <expr(theta)> [for theta in [a, b]]
 ```
-Polar curve. `theta` defaults to `[0, 2*pi]` when the `for` clause is omitted.
+Polar curve. When the `for` clause is omitted, `theta` runs over a full turn in
+the current angle unit: `[0, 2*pi]`, or `[0, 360]` under `@angle: degrees` (where
+`theta` is in degrees, as it is inside `sin` and `cos`).
 ```
 r = 1 + cos(theta)
 r = theta for theta in [0, 4*pi]
 ```
 
 ```
-<expr(x,y)> = <expr(x,y)>
+<expr(x,y)> = <expr(x,y)> [if <condition>]
 ```
 Implicit curve — anything that isn't `y = ...`, `x = ...`, `z = ...`, or a
-labeled point falls here. Covers conics, circles-by-equation, etc.
+labeled point falls here. Covers conics, circles-by-equation, etc. An optional
+`if <condition>` keeps only the part of the curve where the condition holds;
+unlike an explicit statement's, it may test both `x` and `y`. The clip is
+exact: `x^2 + y^2 = 4 if y > 0` is the upper half circle, ending at (+-2, 0).
+
+The curve is drawn from an interval quadtree of the view, and each crossing is
+certified and bisected to the pixel. Crossings and self-intersections are true
+X's (the lemniscate `(x^2+y^2)^2 = 4(x^2-y^2)`, `sin(x) - cos(y) = 0`), points
+where a curve only touches are kept, and the curve is never joined across a
+pole or an undefined area (`y - tan(x) = 0` has no vertical lines). A curve
+that is undefined everywhere in view says so on its line (`this curve is
+undefined everywhere in view`); one that needs more evaluations than the
+drawing budget allows is drawn from what the sampler had and says
+`drawn coarsely: this curve needs more detail than its drawing budget allows`
+(or `not drawn: ...` when nothing drew). During a pan or zoom the picture may
+be coarse; it settles to full quality when the gesture stops.
 ```
 x^2/9 + y^2/4 = 1
+x^2 + y^2 = 9 if y > 0
+sin(x) - cos(y) = 0
 ```
+`sin(x) = cos(y)` is refused (it reads as a definition named after a built-in):
+write `sin(x) - cos(y) = 0`.
 
 ```
-<expr(x,y)> <|<=|>|>= <expr(x,y)>
+<expr(x,y)> <|<=|>|>= <expr(x,y)> [if <condition>]
+<expr> <|<= <expr(x,y)> <|<= <expr> [if <condition>]
 ```
-Shaded inequality region. **No `if <condition>` clause here** — that's only
-valid on `y=`/`x=` explicit function statements (see above), not on a
-region. To shade a function over a bounded interval, restrict the function
-itself instead: `y = x^2 if 0 <= x <= 3`, not `y > 0 if 0 <= x <= 3`. Writing
-`if` on a region statement is rejected with an explicit error naming this
-mistake.
+Shaded inequality region, or a chained region (`1 < x^2+y^2 < 4`, `-2 <= x < 5`)
+between two bounds. An optional `if <condition>` restricts the shading (and its
+edge) to where the condition holds, with the same grammar as above over both
+`x` and `y`: `and`, `or`, `not`, `!=` and chains all work. The `if` belongs to
+the whole statement, so `y > 0 if 0 <= x <= 3` shades `y > 0` for `x` between 0
+and 3.
 ```
 y > x^2 - 1
 x^2 + y^2 <= 4
+1 < x^2+y^2 < 4
+x^2 + y^2 < 9 if y > 0 and x > -1
+y > 0 if 0 <= x <= 3
+x + y <= 4 if x >= 0 and y >= 0 and y <= 2x + 1
 ```
+The boundary is drawn as the operator says: strict (`<`, `>`) dashed, non-strict
+(`<=`, `>=`) solid, and per side of a chain (`-2 <= x < 5` is solid on the left,
+dashed on the right). Holes are holes (the annulus `1 < x^2+y^2 < 4` leaves its
+centre unshaded). Where the expression is undefined nothing is shaded: `y < ln(x)`
+has nothing at `x <= 0`. The `if` clips the region and its edge exactly. Two
+inequalities cannot be joined with a statement-level `and`; put the second in an
+`if` clause. A region reports the same notes as a curve (`this region is
+undefined everywhere in view`, `drawn coarsely: this region needs more detail
+than its drawing budget allows`, `not drawn: ...`), and is coarse during a pan
+or zoom until it settles.
 
 ```
 field: dy/dx = <expr(x,y)>
@@ -224,10 +485,17 @@ tangent: x^2 - 1 at x = 2
 <name>(<param>) = <expr(param)>
 ```
 Named, reusable function — usable in later statements as `<name>(...)`,
-including composed with itself or other named functions.
+including composed with itself or other named functions. A definition may take
+several parameters, `g(x, a) = a sin(x)`, and is then called with all of them,
+`g(x, 2)`. A function the document defines can be primed, `f'(x)`, and used
+inside piecewise braces, sums and integrals (see "Expressions: the calculus
+kernel" above). A name defined twice is an error on the later line (`"f" is
+defined twice (lines 1 and 2) — the later definition is used`).
 ```
 k(x) = x^2 + 1
 y = k(k(x))
+g(x, a) = a sin(x)
+y = g(x, 2)
 ```
 
 ```
@@ -593,8 +861,12 @@ different keys; for a repeated key, the last one wins.
 
 | Directive | Values | Default | Notes |
 |---|---|---|---|
-| `@bounds` | `xMin,xMax,yMin,yMax` | auto | axis window; `xMin < xMax` and `yMin < yMax` required |
-| `@xstep`, `@ystep` | positive number | auto | gridline spacing |
+| `@bounds` | `xMin,xMax,yMin,yMax` | auto | axis window, four plain numbers separated by commas (not `[a, b] x [c, d]`); `xMin < xMax` and `yMin < yMax` required. Live: editing it re-applies the frame, while pan and zoom survive edits to anything else. On a log axis its range must be positive |
+| `@aspect` | `equal`\|`auto`\|`a:b` | see notes | 2D: `equal` draws a unit the same length on both axes (circles stay round); `auto` stretches the window to fill the plot; `a:b` draws a unit of x `a` long for every `b` of y. With no `@aspect`, a `@bounds` that gives all four numbers resolves to `auto` (both ranges honoured exactly), otherwise `equal`. 3D takes `a:b:c` and refuses `a:b` |
+| `@xscale`, `@yscale` | `linear`\|`log` | `linear` | log axes (base 10): decade labels with 2-9 minor ticks. `log` needs a positive `@bounds` range on that axis; with no `@bounds` the axis shows 0.1..10. See "The frame" below |
+| `@titles` | `x "text", y "text"` | none | axis titles, each quoted, in any order, each axis at most once: `@titles: x "time (s)", y "height (m)"`. A title is drawn only when authored |
+| `@lock` | bare, or `true`\|`false` | `false` | static plot: keeps the authored view (`@bounds`, aspect, scales) and ignores pan, zoom, keys and reset; hover readouts still work, and the page scrolls over it. 2D only |
+| `@xstep`, `@ystep` | positive number, or a rational multiple of pi | auto | gridline spacing. A multiple of pi (`pi/2`, `2pi`, `3*pi/4`) labels the axis in pi: `@xstep: pi/2` gives pi/2, pi, 3pi/2, 2pi. **Meaning change:** `@xstep: 2pi` used to read as 2; it now means 2 pi |
 | `@grid` | `on`\|`off` | `on` | |
 | `@axes` | `on`\|`off` | `on` | |
 | `@angle` | `degrees`\|`radians` | `radians` | affects `sin`/`cos`/`tan` argument interpretation |
@@ -604,7 +876,7 @@ different keys; for a repeated key, the last one wins.
 | `@labels` | `all`\|`coarse`\|`none` | `all` | tick-label density, independent of `@axes` — `coarse` labels only the major (every-5th) gridline, `none` gives a numberless graph with the axes and grid still drawn |
 | `@label-every` | positive integer | `1` | label every nth gridline; overrides `@labels: coarse`'s implicit every-5th when set |
 | `@step-mode` | `nice`\|`geometric`\|`fixed` | `nice` | how a fixed `@xstep`/`@ystep` rescales when the view is zoomed outside its 3-14 division comfort band — see mistake 5 below |
-| `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected vertical asymptote (curve-splitting there always happens; this only toggles the guide line itself) |
+| `@asymptotes` | `on`\|`off` | `on` | dashed guide at a detected pole of `y = f(x)` (vertical) or `x = f(y)` (horizontal) — curve-splitting there always happens; this only toggles the guide line itself (see "How curves are drawn") |
 | `@formulas` | `on`\|`off` | `off` | show a `table:` generator's formula alongside its table |
 | `@givens` | `top-left`\|`top-right`\|`bottom-left`\|`bottom-right`\|`left`\|`right` | `top-left` | which corner or side of the figure the givens table sits on — always outside the drawing |
 | `@givens-title` | text | none | a heading above the givens table's sections, e.g. `Problem 14` |
@@ -613,7 +885,42 @@ different keys; for a repeated key, the last one wins.
 | `@hover` | `all`\|`points`\|`features`\|`none` | `all` | `features` restricts hover snapping to detected feature points only (skipping curves, segments, and plain plotted points); a snapped feature reports its exact analytic value, not an interpolated sample |
 | `@hide` | `<name>[,<name>...]` | — | hide specific named statements/tables (by their `name:` clause) |
 | `@show` | `<name>[,<name>...]` | — | un-hide — a later directive always wins for that specific name, regardless of order |
+| `@param` | `<name> = <value> range [<min>, <max>] [step <s>] [integer]` | — | a named constant with a range, usable in every expression: `@param n = 3 range [0, 12] step 1 integer`. In a 2D graph every expression sees the authored value (there is no slider in the 2D viewer yet). A definition with the same name is an error on its line, and the `@param` is used |
 | `@focus` | `(x, y)`, `(x, y, z)` or `view (u, v)`, optionally followed by `zoom <k>` | fitted view | where a **figure** opens, in the figure's own coordinates — see "`@focus`: where a figure opens" below. Figures only; a plot or a table ignores it |
+
+`@lock` makes a graph static, for a figure that should not wander: the window is the one `@bounds` (or the auto-fit) already gives, and the plot keeps it. Dragging, the wheel, pinch, Alt+wheel, the arrow/zoom keys and reset do nothing, the page scrolls over the plot and the canvas takes no keyboard focus. Hover readouts still work, and editing `@bounds` live still moves the window. Write it bare (`@lock`) or as `@lock: true`; `@lock: false` is the default. 3D specs ignore it.
+
+### The frame: aspect, log axes, controls, deep zoom
+
+`@aspect` shapes the 2D window. A drawn unit is the same on both axes under
+`equal`; under `auto` the `@bounds` window fills the plot exactly; under
+`a:b` the unit ratio is fixed. Set `@bounds` with all four numbers and you get
+`auto` unless you write `@aspect` yourself.
+
+**Controls.** Plain wheel zooms both axes. When the aspect is not `equal`,
+Alt + wheel zooms the x axis only and Alt + Shift + wheel the y axis only,
+about the cursor (this changes the unit ratio; reset restores the authored one).
+Under `auto`, a one-axis zoom is dropped when the plot is resized.
+
+**Log axes.** `@xscale: log` / `@yscale: log` plot the log of that coordinate;
+every expression is rewritten to work on the log plane, so curves, implicit
+curves, regions, fields and feature points follow. A value at or below 0 is a
+domain edge (the curve stops there), not an error. `@yscale: log` with
+`y = e^(-x)` is a straight line; both axes log with `y = x^3` is a line of slope 3.
+
+Known limits on log axes:
+
+- Straight world segments, polygons and vectors are drawn straight between
+  their mapped endpoints, not as the curve the world line would trace.
+- Tangent lines and circles are refused on a log axis.
+- Polar curves are refused on a log axis; write them parametrically.
+- `angle`, `tick` and `rightAngle` marks and geometry constructions stay in world
+  coordinates.
+
+**Deep zoom.** The view height may range from about 1e-9 to 1e12 world units
+(scene coordinates are float64; geometry and grid lines are float32 relative to
+an origin near the view). Tick labels print the digits the zoom needs and thin to
+every k-th tick so their boxes never overlap.
 
 ### `@focus`: where a figure opens
 
@@ -712,10 +1019,13 @@ of discoverable only via a validator error:
 3. **Assuming the tag/taxonomy conventions apply here too.** They don't —
    `graph_spec` has its own grammar, entirely separate from tag slugs. See
    `readme()`'s `tag_conventions` for that one.
-4. **An `if <condition>` clause on an inequality region.** `y > 0 if 0 <= x
-   <= 3` is rejected with an explicit error — `if` only exists on `y=`/`x=`
-   explicit statements. Restrict the function itself instead: `y = x^2 if 0
-   <= x <= 3`. See "Shaded inequality region" above.
+4. **An `if <condition>` on the value being drawn.** An explicit statement's
+   `if` may test only its independent variable: `y = x if y > 0` is an error on
+   its line (`Unknown variable "y"`). A test on the dependent variable is a
+   region — write `y > 0 if …`, or restrict the function by `x`: `y = x^2 if 0
+   <= x <= 3`. See "2D functions and curves" above. (An `if` on a region or an
+   implicit curve is fine: it was rejected before calc P1 and now restricts the
+   drawing.)
 5. **Expecting `@xstep` to survive a zoom.** By default it does not — outside
    3 to 14 visible divisions the step falls back to the universal 1-2-5 ladder,
    so a spec written in 8s shows 10s when zoomed out. Use
@@ -749,7 +1059,7 @@ hypothetical edge cases — worth knowing before authoring around them:
 ## Where the source of truth lives
 
 - Grammar: `graph-engine/src/parser/types.ts`'s top comment, `parseStatement.ts`
-- Expression grammar: `graph-engine/src/parser/parseExpr.ts`, `evalExpr.ts` (builtins/constants)
+- Expression grammar: `graph-engine/src/parser/parseExpr.ts`; evaluation: `graph-engine/src/math/compile.ts` (the shared kernel) through `graph-engine/src/plot/scope.ts` for 2D plots and tables. `parser/evalExpr.ts` (builtins/constants) still serves geometry constructions; `animate:` compiles through the kernel (`compileScalar`) and the renderer calls the resulting closures per frame
 - Config directives: `graph-engine/src/parser/parseConfig.ts`, `config.ts`
 - Feature point / intersection detection: `graph-engine/src/scene/featurePoints.ts`,
   `graph-engine/src/scene/roots.ts` (the old `detectFeaturePoints.ts` sampled-array

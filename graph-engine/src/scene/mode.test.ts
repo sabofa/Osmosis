@@ -202,8 +202,11 @@ describe('space statements (S1)', () => {
     expect(isThreeD(parsed.statements)).toBe(true)
   })
 
-  it('every space form routes the spec to space, definitions included', () => {
-    for (const line of ['f(x, y) = x^2 - y^2', 'u = <1, 2, 3>', 'x^2 + y^2 - z^2 = 1', 'implicit: x^2 + y^2 = 4']) {
+  // A scalar multi-parameter definition alone is the one exception to "every
+  // space form is three-dimensional" (agreed with space, 2026-10-01; its own
+  // describe block, below). It still resolves the graph renderer.
+  it('every other space form routes the spec to space, definitions included', () => {
+    for (const line of ['u = <1, 2, 3>', 'r(t) = (cos t, sin t, t)', 'x^2 + y^2 - z^2 = 1', 'implicit: x^2 + y^2 = 4']) {
       const parsed = parseSpec(line)
       expect(isThreeD(parsed.statements)).toBe(true)
       expect(resolveMode(parsed.statements, parsed.config)).toBe('graph')
@@ -222,5 +225,30 @@ describe('space statements (S1)', () => {
     const parsed = parseSpec('x^2 + y^2 = 25')
     expect(resolveMode(parsed.statements, parsed.config)).toBe('graph')
     expect(isThreeD(parsed.statements)).toBe(false)
+  })
+})
+
+describe('a scalar multi-parameter definition alone is not 3D (agreed with space, 2026-10-01)', () => {
+  const three = (spec: string) => isThreeD(parseSpec(spec).statements)
+
+  it('g(x, a) = a sin(x) with y = g(x, 2) is 2D', () => {
+    expect(three('g(x, a) = a sin(x)\ny = g(x, 2)')).toBe(false)
+  })
+
+  it('f(x, y) = x^2 - y^2 with z = f(x, y) is 3D', () => {
+    expect(three('f(x, y) = x^2 - y^2\nz = f(x, y)')).toBe(true)
+  })
+
+  it('f(x, y) = x^2 - y^2 alone is 2D', () => {
+    expect(three('f(x, y) = x^2 - y^2')).toBe(false)
+  })
+
+  it('a vector function r(t) = (cos t, sin t, t) alone stays 3D', () => {
+    expect(three('r(t) = (cos t, sin t, t)')).toBe(true)
+  })
+
+  it('the definition still routes the spec to the graph renderer, as every space form does', () => {
+    expect(mode('f(x, y) = x^2 - y^2')).toBe('graph')
+    expect(mode('g(x, a) = a sin(x)\ny = g(x, 2)')).toBe('graph')
   })
 })

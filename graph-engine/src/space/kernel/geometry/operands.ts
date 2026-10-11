@@ -9,6 +9,7 @@
 //   parameters in each component).
 
 import type { Expr, Statement } from '../../../parser/types'
+import { paramCallsAsProducts } from '../../../math/compile'
 import { num, substitute } from '../../../math/expr'
 import { isVectorBody } from '../../../math/scope'
 import type { PointOperand, VectorOperand } from '../../grammar/keywords/geometryForms'
@@ -57,7 +58,7 @@ export function prepareVector(op: VectorOperand, context: BuildContext, reads: R
   }
   const at = new Map(fn.params.map((p, i) => [p, args[i]] as const))
   return compileThree(
-    fn.body.map((e) => substitute(e, at)),
+    fn.body.map((e) => substitute(paramCallsAsProducts(e, fn.params, context.scope), at)),
     context,
     reads
   )

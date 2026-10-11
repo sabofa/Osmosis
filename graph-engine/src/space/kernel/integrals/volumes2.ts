@@ -19,7 +19,7 @@
 import type { GraphConfig } from '../../../parser/config'
 import type { Expr, Statement } from '../../../parser/types'
 import { compileScalar } from '../../../math/compile'
-import { num, substitute } from '../../../math/expr'
+import { num } from '../../../math/expr'
 import type { SpaceStyle } from '../../grammar/types'
 import type { Mark, MeshMark, SceneError } from '../../scene/types'
 import { checkBudget, Reads, resolution } from '../common'
@@ -30,7 +30,7 @@ import { approxText, approxTextFull, attempt, COLLAPSED_REL, determined, formOf,
 import type { VolumeSolid } from '../../grammar/keywords/integrals'
 import { resolveDomain, resolveSolid } from './named'
 import { prepareRegion2, type BoundaryPiece } from './regions'
-import { compileOnRegion, POLAR_XY, targetExpr, targetText } from './target'
+import { compileOnRegion, polarCartesian, targetExpr, targetText } from './target'
 import { prepareIterated, type PreparedSolid } from './volumes3'
 
 export const VOLUME_OPACITY = 0.45
@@ -231,7 +231,7 @@ export function prepareBetweenSolid(solid: Extract<VolumeSolid, { kind: 'between
     integrals(exprs: readonly Expr[]) {
       const hs = exprs.map((expr) => {
         reads.add(expr, ['x', 'y', 'z', 'r', 'theta'])
-        return compileScalar(region.coords === 'polar' ? substitute(expr, POLAR_XY) : expr, vars, scope)
+        return compileScalar(region.coords === 'polar' ? polarCartesian(expr, scope) : expr, vars, scope)
       })
       return () => {
         const r = region.build(n)
