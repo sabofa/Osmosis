@@ -15,3 +15,4 @@ export type {
   RenderGraph,
   GraphView,
 } from './types'
+export type { OutlineHeading } from './outline'

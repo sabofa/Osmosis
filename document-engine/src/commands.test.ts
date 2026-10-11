@@ -29,10 +29,17 @@ function state(over: Partial<CommandState> = {}): CommandState {
 const ids = (s: CommandState) => buildCommands(s).map((c) => c.id)
 
 describe('buildCommands matrix', () => {
-  it('view and embedded offer nothing', () => {
-    expect(buildCommands(state({ interaction: 'view' }))).toEqual([])
+  it('embedded offers nothing; view offers zoom and download only', () => {
+    expect(ids(state({ interaction: 'view' }))).toEqual(['zoom-in', 'zoom-out', 'zoom-fit-width', 'zoom-fit-page', 'zoom-fit-height', 'download'])
+    expect(ids(state({ interaction: 'view', allowFit: false, canDownload: false }))).toEqual(['zoom-in', 'zoom-out'])
+    for (const c of buildCommands(state({ interaction: 'view' }))) expect(['view', 'file']).toContain(c.group)
     expect(buildCommands(state({ chrome: 'embedded' }))).toEqual([])
+    expect(buildCommands(state({ interaction: 'view', chrome: 'embedded' }))).toEqual([])
     expect(buildCommands(state({ interaction: 'edit', chrome: 'embedded' }))).toEqual([])
+  })
+  it('annotate groups: zoom in view, highlights in annotate, download in file', () => {
+    const g = Object.fromEntries(buildCommands(state()).map((c) => [c.id, c.group]))
+    expect(g).toMatchObject({ 'zoom-in': 'view', 'zoom-fit-page': 'view', 'highlights-toggle': 'annotate', 'highlight-remove': 'annotate', download: 'file' })
   })
   it('annotate offers everything', () => {
     expect(ids(state())).toEqual([
@@ -124,7 +131,7 @@ describe('graph commands', () => {
   it('absent without graph state, in view, and embedded', () => {
     expect(ids(state())).not.toContain('graph-expand')
     expect(ids(state({ graph: null }))).not.toContain('graph-collapse')
-    expect(buildCommands(state({ interaction: 'view', graph: graph() }))).toEqual([])
+    expect(ids(state({ interaction: 'view', graph: graph() }))).not.toContain('graph-expand')
     expect(buildCommands(state({ chrome: 'embedded', graph: graph() }))).toEqual([])
   })
   it('enabled flags follow the state and run calls through', () => {

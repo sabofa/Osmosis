@@ -36,11 +36,14 @@ export interface GraphCommandState {
   onCollapse: () => void
 }
 
-// What the viewer offers the host's toolbar. 'view' and embedded viewers
-// offer nothing; 'edit' offers zoom and download, or, over a text editor, the
-// editor's commands and download.
+// What the viewer offers the host's toolbar. Embedded viewers offer nothing
+// (they keep their own minimal zoom buttons). Hosted full chrome draws no
+// floating controls, so every mode publishes its zoom and download commands:
+// 'view' offers just those, 'annotate' adds highlights and graph expand, and
+// 'edit' offers zoom and download, or, over a text editor, the editor's
+// commands and download.
 export function buildCommands(s: CommandState): ToolbarCommand[] {
-  if (s.interaction === 'view' || s.chrome === 'embedded') return []
+  if (s.chrome === 'embedded') return []
   if (s.interaction === 'edit' && s.editorCommands) {
     const cmds = [...s.editorCommands]
     if (s.canDownload) cmds.push({ id: 'download', label: 'Download', icon: 'doc-download', group: 'file', enabled: true, active: false, run: s.onDownload })
@@ -74,7 +77,7 @@ export function buildCommands(s: CommandState): ToolbarCommand[] {
       { id: 'highlight-remove', label: 'Remove highlight', icon: 'doc-highlight-remove', group: 'annotate', enabled: s.canRemoveHighlight, active: false, run: s.onRemoveHighlight }
     )
   }
-  if (s.graph) {
+  if (s.graph && s.interaction !== 'view') {
     cmds.push(
       { id: 'graph-expand', label: 'Graph: Expand', icon: 'graph-expand', group: 'graph', enabled: s.graph.canExpand, active: false, run: s.graph.onExpand },
       { id: 'graph-collapse', label: 'Graph: Collapse', icon: 'graph-collapse', group: 'graph', enabled: s.graph.canCollapse, active: false, run: s.graph.onCollapse }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import type { EditorView } from '@codemirror/view'
+import { EditorView } from '@codemirror/view'
 import MarkdownEditor from './editor/MarkdownEditor'
 import Ribbon from './ribbon/Ribbon'
 import { buildEditorRibbon } from './ribbon/ribbonState'
@@ -43,6 +43,8 @@ import {
   menuOpenIn,
 } from './expandModel'
 import { useHostCommands } from './useHostCommands'
+import { extractHeadings, headingBlockIndex, lineRangeAt, sameHeadings, type OutlineHeading } from './outline'
+import { cpToUtf16 } from './core/offsets'
 import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
@@ -105,6 +107,13 @@ export interface DocumentViewerProps {
   onTextChange?: (text: string) => void
   // Keep the editor from changing the text (commands go disabled).
   editorReadOnly?: boolean
+  // Text/markdown assets: the heading outline, called once on mount and again
+  // (debounced) whenever the list of headings actually changes.
+  onOutline?: (headings: OutlineHeading[]) => void
+  // Scroll to a heading from the outline (ids from onOutline). A new nonce
+  // scrolls again, even to the same id. Read mode puts the heading's block at
+  // the top; edit mode moves the caret to the heading line and reveals it.
+  scrollToHeadingId?: { id: string; nonce: number } | null
 }
 
 // Plain text/markdown keeps a narrower numeric range and no fit modes.
@@ -660,6 +669,62 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const showSettingsMenu = caps.settingsMenu && !hasEditor
 
   return (
+
+  // Outline: headings of a text asset, published on mount and (debounced)
+  // when they change.
+  const onOutlineRef = useRef(props.onOutline)
+  onOutlineRef.current = props.onOutline
+  const lastOutline = useRef<OutlineHeading[] | null>(null)
+  const outlineTimer = useRef(0)
+  useEffect(() => {
+    const publish = (next: OutlineHeading[]) => {
+      if (lastOutline.current && sameHeadings(lastOutline.current, next)) return
+      lastOutline.current = next
+      onOutlineRef.current?.(next)
+    }
+    if (!isText) {
+      if (lastOutline.current && lastOutline.current.length > 0) publish([])
+      return
+    }
+    if (lastOutline.current === null) {
+      publish(extractHeadings(text))
+      return
+    }
+    outlineTimer.current = window.setTimeout(() => publish(extractHeadings(text)), 150)
+    return () => window.clearTimeout(outlineTimer.current)
+  }, [text, isText])
+
+  // Scroll to a heading. Read mode: the rendered block whose data-start range
+  // holds the heading line goes to the top of the scroller (rect maths, so CSS
+  // zoom is accounted for). Edit mode: caret to the heading line, revealed.
+  const scrollTarget = props.scrollToHeadingId
+  const scrollNonce = scrollTarget?.nonce
+  useEffect(() => {
+    if (!scrollTarget || !isText) return
+    const heading = extractHeadings(text).find((x) => x.id === scrollTarget.id)
+    if (!heading) return
+    if (hasEditor) {
+      if (!editorView) return
+      const doc = editorView.state.doc.toString()
+      const pos = Math.min(cpToUtf16(doc, heading.offset), doc.length)
+      editorView.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 12 }) })
+      editorView.focus()
+      return
+    }
+    const root = contentRef.current?.querySelector<HTMLElement>('.document-viewer-text')
+    const scroller = scrollRef.current
+    if (!root || !scroller) return
+    const blocks = Array.from(root.children) as HTMLElement[]
+    const starts = blocks.map((b) => {
+      const el = b.hasAttribute('data-start') ? b : b.querySelector<HTMLElement>('[data-start]')
+      return el ? Number(el.getAttribute('data-start')) : null
+    })
+    const idx = headingBlockIndex(starts, lineRangeAt(text, heading.offset).end)
+    if (idx < 0) return
+    const top = blocks[idx].getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    scroller.scrollTop += top - 8
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollNonce, hasEditor && !!editorView])
     <div
       ref={rootRef}
       className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}${showEditorBar ? ' document-viewer-with-bar' : ''}`}

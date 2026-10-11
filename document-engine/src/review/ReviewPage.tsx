@@ -12,6 +12,7 @@ import type { CSSProperties } from 'react'
 import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
 
+import type { OutlineHeading } from '../outline'
 // Dev-only harness: the viewer over a gaudy blurred scene, inside a "sheet"
 // whose opacity comes from the URL (?opacity=55&mode=dark&case=normal).
 
@@ -306,6 +307,96 @@ type Published = { cmds: { id: string; enabled: boolean; active: boolean }[]; la
 
 // ?host=1: stub DocumentHost that records what the viewer publishes.
 function makeHost(onChange: (p: Published) => void): DocumentHost {
+// ?case=hosted&im=view|annotate|edit: the viewer under a stub host. No floating
+// zoom/settings controls; the stub strip lists what the viewer published (each
+// a button that calls its run()), and an outline list built from onOutline
+// scrolls the viewer (scrollToHeadingId). window.__outline = latest headings,
+// window.__outlineCalls = number of onOutline calls, window.__runCmd(id).
+const HOSTED_MD = (() => {
+  const filler = (n: number) =>
+    Array.from({ length: n }, (_, i) => `Filler paragraph ${i + 1}: the quick brown fox jumps over the lazy dog, again and again, to give the page height.`).join('\n\n')
+  return [
+    '# Alpha',
+    '',
+    filler(8),
+    '',
+    '## Notes',
+    '',
+    filler(8),
+    '',
+    '```md',
+    '# not a heading',
+    '```',
+    '',
+    '### Beta **bold** `code` \u{1F600}',
+    '',
+    filler(8),
+    '',
+    'Setext title',
+    '------------',
+    '',
+    filler(8),
+    '',
+    '## Notes',
+    '',
+    filler(10),
+    '',
+    '# Omega',
+    '',
+    filler(3),
+  ].join('\n')
+})()
+
+type HostedGlobals = { __outline: OutlineHeading[]; __outlineCalls: number; __runCmd: (id: string) => boolean }
+const hg = (): HostedGlobals => window as unknown as HostedGlobals
+
+function HostedCase({ tokens, host, published }: { tokens: DocumentTokens; host: DocumentHost | undefined; published: Published | null }): ReactNode {
+  const im = new URLSearchParams(location.search).get('im')
+  const interaction = im === 'view' || im === 'edit' ? im : 'annotate'
+  const [text, setText] = useState(HOSTED_MD)
+  const [outline, setOutline] = useState<OutlineHeading[]>([])
+  const [target, setTarget] = useState<{ id: string; nonce: number } | null>(null)
+  const w = hg()
+  w.__outlineCalls ??= 0
+  w.__runCmd = (id: string) => {
+    const c = (window as unknown as { __hostCmds?: { id: string; run: () => void }[] }).__hostCmds?.find((x) => x.id === id)
+    c?.run()
+    return !!c
+  }
+  const row = { display: 'flex', flexWrap: 'wrap', gap: 4, padding: '4px 10px', fontSize: 12 } as const
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div data-testid="host-buttons" style={row}>
+        {(published?.cmds ?? []).map((c) => (
+          <button key={c.id} type="button" disabled={!c.enabled} onClick={() => w.__runCmd(c.id)}>{c.id}</button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <ol data-testid="outline" style={{ margin: 0, padding: '4px 10px', listStyle: 'none', fontSize: 12, width: 220, overflow: 'auto', borderRight: '1px solid currentColor' }}>
+          {outline.map((h) => (
+            <li key={h.id} style={{ paddingLeft: (h.level - 1) * 10 }}>
+              <button type="button" data-heading={h.id} onClick={() => setTarget((t) => ({ id: h.id, nonce: (t?.nonce ?? 0) + 1 }))}>{h.text || '(empty)'}</button>
+            </li>
+          ))}
+        </ol>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <DocumentViewer
+            host={host}
+            asset={{ type: 'text', mime: 'text/markdown', content: text }}
+            tokens={tokens}
+            interaction={interaction}
+            chrome="full"
+            layers={[]}
+            onTextChange={interaction === 'edit' ? setText : undefined}
+            onOutline={(h) => { setOutline(h); w.__outline = h; w.__outlineCalls++ }}
+            scrollToHeadingId={target}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
   const state: Published = { cmds: [], layers: [] }
   return {
     icons: { kind: 'default' },
@@ -328,7 +419,7 @@ export default function ReviewPage(): ReactNode {
   const alphasParam = q.get('alphas')
   const tokens = useMemo(() => withAlphas(tokensFor(mode), alphasParam), [mode, alphasParam])
   const [published, setPublished] = useState<Published | null>(null)
-  const host = useMemo(() => (q.get('host') === '1' ? makeHost(setPublished) : undefined), [q])
+  const host = useMemo(() => (q.get('host') === '1' || q.get('case') === 'hosted' ? makeHost(setPublished) : undefined), [q])
   const hlQuote = q.get('hl')
   const [hl, setHl] = useState<DocumentHighlight[]>(hlQuote ? [{ id: 'pq', color: 'yellow', start: 0, end: [...hlQuote].length, quote: hlQuote }] : HIGHLIGHTS)
   // ?case=pdf&pdf=/review-shots/sample.pdf&zoom=fit-page|0.25|5&steps=in,in,out&bench=1
@@ -492,6 +583,8 @@ export default function ReviewPage(): ReactNode {
         />
         )}
       </div>
+        ) : kase === 'hosted' ? (
+          <HostedCase tokens={tokens} host={host} published={published} />
     </div>
   )
 }

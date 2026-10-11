@@ -8,8 +8,8 @@ export interface Capabilities {
   settingsMenu: boolean
   layers: boolean
   editStub: boolean
-  // The viewer's own zoom control is drawn. False in edit mode under a host:
-  // the host toolbar owns all chrome there.
+  // The viewer's own zoom control is drawn. False under a host with full
+  // chrome (any interaction): the host toolbar owns all chrome there.
   zoomControl: boolean
   // The in-place editor command row: unhosted full-chrome edit only. (The
   // viewer additionally requires an actual text editor.) Hosted edit draws
@@ -31,7 +31,7 @@ export const EDIT_STUB_MESSAGE = 'Editing arrives in a later release'
 export function capabilities(interaction: Interaction, chrome: Chrome, hosted = false): Capabilities {
   const full = chrome === 'full'
   const annotate = full && interaction === 'annotate'
-  const hostOwnsChrome = hosted && interaction === 'edit'
+  const hostOwnsChrome = hosted && full
   return {
     selection: true,
     highlight: annotate,

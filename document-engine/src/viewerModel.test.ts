@@ -18,10 +18,16 @@ describe('capabilities', () => {
       layers: true, editStub: false, zoomControl: true, editorBar: false,
     })
   })
-  it('edit under a host: no zoom control, settings menu or popover; standalone edit keeps them', () => {
-    expect(capabilities('edit', 'full', true)).toMatchObject({ zoomControl: false, settingsMenu: false, highlightPopover: false })
-    expect(capabilities('edit', 'full', false)).toMatchObject({ zoomControl: true, settingsMenu: true })
-    expect(capabilities('annotate', 'full', true)).toMatchObject({ zoomControl: true, settingsMenu: true, highlightPopover: true })
+  it('hosted full chrome: no zoom control or settings menu in any mode; unhosted keeps them', () => {
+    for (const i of ['view', 'annotate', 'edit'] as const) {
+      expect(capabilities(i, 'full', true)).toMatchObject({ zoomControl: false, settingsMenu: false })
+      expect(capabilities(i, 'full', false)).toMatchObject({ zoomControl: true, settingsMenu: true })
+    }
+    expect(capabilities('annotate', 'full', true)).toMatchObject({ highlightPopover: true })
+    expect(capabilities('edit', 'full', true)).toMatchObject({ highlightPopover: false })
+  })
+  it('hosted embedded keeps its minimal zoom buttons, no settings', () => {
+    expect(capabilities('view', 'embedded', true)).toMatchObject({ zoomControl: true, settingsMenu: false })
   })
   it('editor command row: unhosted full-chrome edit only', () => {
     const rows = (['view', 'annotate', 'edit'] as const).flatMap((i) =>
