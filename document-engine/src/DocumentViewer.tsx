@@ -669,11 +669,6 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       : null,
   }
   useHostCommands(host, latest)
-  const showEditorBar = hasEditor && caps.editorBar
-  const showZoomControl = caps.zoomControl && !hasEditor
-  const showSettingsMenu = caps.settingsMenu && !hasEditor
-
-  return (
 
   // Outline: headings of a text asset, published on mount and (debounced)
   // when they change.
@@ -730,6 +725,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     scroller.scrollTop += top - 8
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollNonce, hasEditor && !!editorView])
+  const showEditorBar = hasEditor && caps.editorBar
+  const showZoomControl = caps.zoomControl && !hasEditor
+  const showSettingsMenu = caps.settingsMenu && !hasEditor
+
+  return (
     <div
       ref={rootRef}
       className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}${showEditorBar ? ' document-viewer-with-bar' : ''}`}

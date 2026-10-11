@@ -12,6 +12,7 @@ import type { BlockStyle } from '../editor/editorCommands'
 import type { CSSProperties } from 'react'
 import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
+import type { OutlineHeading } from '../outline'
 
 // ?typo=clean|retro: emulates the two example workspace themes of
 // src/typography.md by setting the document-typography hooks on the sheet.
@@ -31,7 +32,6 @@ const TYPO: Record<string, Record<string, string>> = {
   },
 }
 
-import type { OutlineHeading } from '../outline'
 // Dev-only harness: the viewer over a gaudy blurred scene, inside a "sheet"
 // whose opacity comes from the URL (?opacity=55&mode=dark&case=normal).
 
@@ -219,16 +219,6 @@ const EDITOR_MD = [
   'a 😀 b',
   '',
   'Final line of text.',
-].join('\n')
-
-type EditorGlobals = {
-  __doc: { text: string; changes: number }
-  __setDoc: (s: string) => void
-  __hl: { id: string; start: number; end: number; quote?: string }[]
-  __view: () => EditorView | null
-  __comp: string[]
-  __keys: string[]
-  __capKeys: string[]
   '',
   '## Math and graphs',
   '',
@@ -243,6 +233,16 @@ type EditorGlobals = {
   '```',
   '',
   'Marked text after the graph.',
+].join('\n')
+
+type EditorGlobals = {
+  __doc: { text: string; changes: number }
+  __setDoc: (s: string) => void
+  __hl: { id: string; start: number; end: number; quote?: string }[]
+  __view: () => EditorView | null
+  __comp: string[]
+  __keys: string[]
+  __capKeys: string[]
   // Set true to make the parent ignore onTextChange (state stays at the last
   // __setDoc value) so a queued external value can be seen applying.
   __hold: boolean
@@ -250,6 +250,7 @@ type EditorGlobals = {
 const eg = (): EditorGlobals => window as unknown as EditorGlobals
 if (typeof window !== 'undefined') {
   const w = eg()
+  ;(w as unknown as { __lpGraph: typeof graphCounters }).__lpGraph = graphCounters
   w.__comp ??= []
   w.__keys ??= []
   w.__capKeys ??= []
@@ -260,7 +261,6 @@ if (typeof window !== 'undefined') {
 }
 
 function edRange(needle: string, text: string): { start: number; end: number; quote: string } {
-  ;(w as unknown as { __lpGraph: typeof graphCounters }).__lpGraph = graphCounters
   const i = text.indexOf(needle)
   if (i < 0) throw new Error('needle missing: ' + needle)
   const start = cp(text.slice(0, i))
@@ -272,6 +272,8 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
   const [hl, setHl] = useState<DocumentHighlight[]>(() => [
     { id: 'above', color: 'yellow', ...edRange('Intro line', EDITOR_MD) },
     { id: 'below', color: 'green', ...edRange('Final line', EDITOR_MD) },
+    { id: 'tail', color: 'pink', ...edRange('Marked text after', EDITOR_MD) },
+    { id: 'emoji', color: 'blue', ...edRange('a 😀 b', EDITOR_MD) },
   ])
   const w = eg()
   w.__doc = { text, changes: (w.__doc?.changes ?? 0) }
@@ -282,8 +284,6 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
   useEffect(() => {
     if (!lpOff) return
     let raf = 0
-    { id: 'tail', color: 'pink', ...edRange('Marked text after', EDITOR_MD) },
-    { id: 'emoji', color: 'blue', ...edRange('a 😀 b', EDITOR_MD) },
     const tryOff = () => { const v = eg().__view(); if (v) setLivePreview(v, false); else raf = requestAnimationFrame(tryOff) }
     tryOff()
     return () => cancelAnimationFrame(raf)
@@ -343,24 +343,6 @@ function RibbonCase({ tokens }: { tokens: DocumentTokens }): ReactNode {
   )
 }
 
-function tokensFor(mode: 'light' | 'dark'): DocumentTokens {
-  const m = builtinById(DEFAULT_THEME_ID)
-  if (!m) throw new Error('default theme missing')
-  return toDocumentTokens(resolve(m), m, mode)
-}
-
-// ?alphas=surface,callout,media (each 0..1) overrides tokens.alphas.
-function withAlphas(t: DocumentTokens, param: string | null): DocumentTokens {
-  if (!param) return t
-  const [surface, callout, media] = param.split(',').map(Number)
-  const ok = (n: number | undefined, d: number) => (n === undefined || Number.isNaN(n) ? d : Math.min(1, Math.max(0, n)))
-  return { ...t, alphas: { ...t.alphas, surface: ok(surface, t.alphas.surface), callout: ok(callout, t.alphas.callout), media: ok(media, t.alphas.media) } }
-}
-
-type Published = { cmds: { id: string; enabled: boolean; active: boolean }[]; layers: string[] }
-
-// ?host=1: stub DocumentHost that records what the viewer publishes.
-function makeHost(onChange: (p: Published) => void): DocumentHost {
 // ?case=hosted&im=view|annotate|edit: the viewer under a stub host. No floating
 // zoom/settings controls; the stub strip lists what the viewer published (each
 // a button that calls its run()), and an outline list built from onOutline
@@ -451,6 +433,24 @@ function HostedCase({ tokens, host, published }: { tokens: DocumentTokens; host:
   )
 }
 
+function tokensFor(mode: 'light' | 'dark'): DocumentTokens {
+  const m = builtinById(DEFAULT_THEME_ID)
+  if (!m) throw new Error('default theme missing')
+  return toDocumentTokens(resolve(m), m, mode)
+}
+
+// ?alphas=surface,callout,media (each 0..1) overrides tokens.alphas.
+function withAlphas(t: DocumentTokens, param: string | null): DocumentTokens {
+  if (!param) return t
+  const [surface, callout, media] = param.split(',').map(Number)
+  const ok = (n: number | undefined, d: number) => (n === undefined || Number.isNaN(n) ? d : Math.min(1, Math.max(0, n)))
+  return { ...t, alphas: { ...t.alphas, surface: ok(surface, t.alphas.surface), callout: ok(callout, t.alphas.callout), media: ok(media, t.alphas.media) } }
+}
+
+type Published = { cmds: { id: string; enabled: boolean; active: boolean }[]; layers: string[] }
+
+// ?host=1: stub DocumentHost that records what the viewer publishes.
+function makeHost(onChange: (p: Published) => void): DocumentHost {
   const state: Published = { cmds: [], layers: [] }
   return {
     icons: { kind: 'default' },
@@ -627,6 +627,8 @@ export default function ReviewPage(): ReactNode {
         )}
         {kase === 'ribbon' ? (
           <RibbonCase tokens={tokens} />
+        ) : kase === 'hosted' ? (
+          <HostedCase tokens={tokens} host={host} published={published} />
         ) : kase === 'editor' ? (
           <EditorCase tokens={tokens} host={host} />
         ) : (
@@ -645,8 +647,6 @@ export default function ReviewPage(): ReactNode {
         />
         )}
       </div>
-        ) : kase === 'hosted' ? (
-          <HostedCase tokens={tokens} host={host} published={published} />
     </div>
   )
 }
