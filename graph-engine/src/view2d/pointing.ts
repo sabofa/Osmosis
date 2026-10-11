@@ -32,7 +32,9 @@ export type HitShape =
       start: number
       end: number
     }
-  | { kind: 'polygon'; points: Vec[] } // an area
+  // An area. `rings`, when given, are its loops as they are DRAWN (a highlight
+  // outline); `points` may join several loops with bridges, for hit-testing.
+  | { kind: 'polygon'; points: Vec[]; rings?: Vec[][] }
   | { kind: 'rect'; rect: Rect } // an area
 
 export interface HitItem {
