@@ -682,8 +682,9 @@ Deviations:
 Known leftovers:
 
 - Angle-label distance is still computed from the x scale only.
-- The ribbon weight taper along a curve is intentional; Ben's taste knob is
-  `CURVE_WEIGHT_INTENSITY`.
+- The curve weight taper is removed (2026-10-10, Ben): curves draw at one
+  uniform 3 px (`CURVE_BASE_WIDTH_PX`), including on unequal axes. Line
+  character (taper, pressure) is left to the planned graph style engine.
 - Tick-label collision uses a 7 px per character estimate, not measured text.
 - Under `auto` aspect, an Alt+wheel one-axis zoom resets when the plot resizes.
 - 8.4 (layer alphas from theme-core) is not built; see the P4 handoff.

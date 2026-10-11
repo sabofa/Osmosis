@@ -19,7 +19,7 @@
 - Learn sync of the spec and reference (6.3 second half) if not yet copied.
 - Leftovers (see the spec): angle-label distance x-only, 7 px/char label collision estimate, Alt+wheel under auto aspect resets on resize.
 
-**Ben's feel check** (needs hands, not testable headless): drag and coast, pinch, double-click reset; Alt+wheel (x) and Alt+Shift+wheel (y) on the 2:1 example (some Linux window managers swallow Alt+wheel); `@lock` (page must scroll over the plot); deep zoom (labels stay distinct, curve smooth); curve weight taper (`CURVE_WEIGHT_INTENSITY`, his taste knob).
+**Ben's feel check** (needs hands, not testable headless): drag and coast, pinch, double-click reset; Alt+wheel (x) and Alt+Shift+wheel (y) on the 2:1 example (some Linux window managers swallow Alt+wheel); `@lock` (page must scroll over the plot); deep zoom (labels stay distinct, curve smooth); curve weight (taper removed 2026-10-10 on Ben's order: uniform `CURVE_BASE_WIDTH_PX` = 3 px; `CURVE_WEIGHT_INTENSITY` is gone, line character goes to the future graph style engine).
 
 **How to run:** `cd graph-engine && npx vite --port 5183 --host 0.0.0.0`, then the Frame group in the examples (pi ticks, semi-log, log-log, 2:1 aspect with titles, deep zoom, `@lock`).
 

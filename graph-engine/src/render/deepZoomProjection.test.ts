@@ -37,7 +37,7 @@ describe('deep zoom projection (a 2e-8 window at (1000, 1000))', () => {
 })
 
 describe('ribbon weight at deep zoom', () => {
-  it('tapers by curvature on a 2e-8 curve as it does on a 2-unit one', () => {
+  it('keeps the uniform curve weight on a 2e-8 curve as on a 2-unit one', () => {
     const widthsOf = (scale: number) => {
       const mgr = new GeometryGroupManager()
       const pts = Array.from({ length: 300 }, (_, i) => {
@@ -50,6 +50,9 @@ describe('ribbon weight at deep zoom', () => {
     }
     const big = widthsOf(2)
     const small = widthsOf(2e-8)
-    big.forEach((w, i) => expect(small[i]).toBeCloseTo(w, 2))
+    big.forEach((w, i) => {
+      expect(w).toBeCloseTo(3e-3, 5)
+      expect(small[i]).toBeCloseTo(w, 2)
+    })
   })
 })

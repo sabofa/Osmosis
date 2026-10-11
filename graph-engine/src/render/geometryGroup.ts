@@ -51,16 +51,14 @@ function finishIndexedUpdate(geometry: THREE.BufferGeometry, indexCount: number)
   geometry.computeBoundingSphere()
 }
 
-// Curve ribbon tuning — matches the "Ink-Framed Ruled Grid" reference's
-// defaults (lineWeightIntensity 0.85, baseLineWidth 3, weightStyle
-// "curvature"). Not exposed as a DSL/config knob.
-const CURVE_WEIGHT_INTENSITY = 0.85
+// Curve ribbon weight: one uniform on-screen width, in px. A graph style engine
+// is planned to own line character (taper, pressure, texture); until then a
+// curve is a plain line. Not exposed as a DSL/config knob.
 const CURVE_BASE_WIDTH_PX = 3
 
 // Constant visual weight for straight lines (segments/region boundaries) —
 // same "fixed on-screen size" pixelToWorld convention as the curve ribbon
-// and point markers, just without a curvature-driven taper (a straight run
-// doesn't have a meaningful curvature to vary against).
+// and point markers.
 const LINE_WIDTH_PX = 2.5
 
 // Fixed on-screen dash/gap size — same pixelToWorld convention as
@@ -78,85 +76,12 @@ const LINE_WIDTH_PX = 2.5
 const DASH_SIZE_PX = 7
 const GAP_SIZE_PX = 5
 
-// Per-point "how sharply is the curve turning here" estimate: the angle
-// between the incoming and outgoing direction, sampled a few points back/
-// ahead (not just adjacent samples) so it isn't swamped by near-collinear
-// jitter between neighboring points, divided by the arc length spanned by
-// that same window — true curvature is angle change *per unit length*
-// (dθ/ds), not angle change alone. Skipping that division was a real bug:
-// the spacing of a curve's vertices is not constant (it follows the zoom, and
-// the adaptive sampler spaces vertices by how flat the curve is, so a gentle
-// stretch is a few long segments and a bend many short ones). For a curve whose
-// slope varies (e.g. a parabola away from its vertex), a wider spacing alone
-// produces a bigger raw angle between stride-separated points — indistinguishable
-// from genuine sharp turning if you don't normalize by how far apart those
-// points actually are — so the ribbon got wider where the points were sparser,
-// on stretches that aren't actually curving any more sharply than before.
-// Dividing by arc length makes this a property of the curve's actual shape
-// again, independent of sampling density or zoom.
-//
-// Normalized against the curve's own max so the taper is always visible
-// regardless of how gently or sharply the whole curve bends. Width is
-// computed in screen pixels then converted to world units via pixelToWorld —
-// same "fixed on-screen size" convention as point markers/hover dots — so
-// the ribbon's apparent weight stays constant across zoom instead of
-// thinning out as you zoom in.
-function computeCurveWidths(rawPoints: Vec2[], pixelToWorld: (px: number) => number, ry = 1): number[] {
-  // Curvature is a property of the curve as drawn, so with unequal px-per-unit it is measured in pixel space
-  // (y stretched by 1/ry, in units of the x pixel); ry = 1 leaves the points untouched.
-  const points = ry === 1 ? rawPoints : rawPoints.map((p) => ({ x: p.x, y: p.y / ry }))
-  const n = points.length
-  const stride = Math.max(4, Math.round(n / 40))
-  const raw: number[] = new Array(n)
-  // The curve's own scale, so the "degenerate leg" and "nearly straight" floors below mean the same thing at a 1e-8
-  // window as at a 20-unit one (absolute 1e-9 / 1e-6 floors flattened every leg of a deep-zoom curve to no turn).
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-  for (const p of points) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-  const extent = Math.max(maxX - minX, maxY - minY, 0)
-  const legEps = extent * 1e-10
-  for (let i = 0; i < n; i++) {
-    const a = points[Math.max(0, i - stride)]
-    const p = points[i]
-    const c = points[Math.min(n - 1, i + stride)]
-    const distAP = Math.hypot(p.x - a.x, p.y - a.y)
-    const distPC = Math.hypot(c.x - p.x, c.y - p.y)
-    // A short point array (e.g. a 2-point straight regression line) clamps
-    // both neighbor indices back onto i itself, making a or c coincide with
-    // p — atan2(0, 0) on that zero-length leg used to read as a sharp turn
-    // instead of "no direction here," so a perfectly straight line reported
-    // near-maximum curvature at both of its own endpoints and rendered far
-    // thicker than every other curve. Treating a degenerate leg as
-    // contributing no turn (rather than a defined-but-meaningless angle)
-    // fixes that without changing the curvature estimate for any curve long
-    // enough for both neighbors to be real, distinct points.
-    let d = 0
-    if (distAP > legEps && distPC > legEps && distAP > 0 && distPC > 0) {
-      const ang1 = Math.atan2(p.y - a.y, p.x - a.x)
-      const ang2 = Math.atan2(c.y - p.y, c.x - p.x)
-      d = Math.abs(ang2 - ang1)
-      if (d > Math.PI) d = 2 * Math.PI - d
-    }
-    const arcLen = distAP + distPC
-    raw[i] = arcLen > legEps && arcLen > 0 ? d / arcLen : 0
-  }
-  let maxRaw = extent > 0 ? 1e-5 / extent : 1e-6
-  for (const d of raw) if (d > maxRaw) maxRaw = d
-
-  const widths: number[] = new Array(n)
-  for (let i = 0; i < n; i++) {
-    const t = Math.pow(raw[i] / maxRaw, 0.6)
-    const widthPx = CURVE_BASE_WIDTH_PX * 0.5 * (1 - CURVE_WEIGHT_INTENSITY) + CURVE_WEIGHT_INTENSITY * (CURVE_BASE_WIDTH_PX * 3.2) * t + 1
-    widths[i] = pixelToWorld(widthPx)
-  }
-  return widths
+// Every vertex of a curve ribbon gets the same width: CURVE_BASE_WIDTH_PX on screen,
+// converted to world units via pixelToWorld (same "fixed on-screen size" convention
+// as point markers/hover dots, so the weight stays constant across zoom). Unequal
+// axes are handled by fillRibbonPositions, which offsets along the on-screen normal.
+function computeCurveWidths(n: number, pixelToWorld: (px: number) => number): number[] {
+  return new Array<number>(n).fill(pixelToWorld(CURVE_BASE_WIDTH_PX))
 }
 
 // Fills `pos` (>= n*2*3 long) with the ribbon's left/right offset vertices —
@@ -368,8 +293,7 @@ function buildQuadMesh(chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: nu
 
 // The chunks a dashed curve is drawn as: its polyline cut into the pixel-sized
 // dashes and gaps a dashed segment has, at the constant LINE_WIDTH_PX weight of
-// one. The curvature taper is the pen of a plotted function; a dashed curve is a
-// boundary or a guide, and reads as a dashed segment does.
+// one. A dashed curve is a boundary or a guide, and reads as a dashed segment does.
 function dashedCurveChunks(points: readonly Vec2[], pixelToWorld: (px: number) => number, ry = 1): [Vec2, Vec2][] {
   const dashLen = pixelToWorld(DASH_SIZE_PX)
   return inPixelSpace(ry, points, (pts) => splitPolylineIntoDashChunks(pts, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen))
@@ -393,9 +317,8 @@ export type GeometryPalette = Pick<Palette, 'curve' | 'segment' | 'region' | 'ba
 // bottleneck, not the math) — see growAttribute's comment above.
 //
 // Every kind here renders as a filled ribbon mesh rather than a raw WebGL
-// line — 'curve' with a curvature-driven taper (see computeCurveWidths, an
-// "artist line weight" effect), everything else at LINE_WIDTH_PX's constant
-// weight — a dashed 'curve' too (see dashedCurveChunks). This isn't just
+// line — 'curve' at CURVE_BASE_WIDTH_PX (see computeCurveWidths), everything
+// else at LINE_WIDTH_PX's constant weight — a dashed 'curve' too (see dashedCurveChunks). This isn't just
 // cosmetic: THREE.LineBasicMaterial's `linewidth`
 // is not honored by most browsers/platforms (a long-standing WebGL/ANGLE
 // limitation — every plain THREE.Line renders at 1px regardless of what
@@ -459,7 +382,7 @@ export class GeometryGroupManager {
         writeQuadChunks(geometry, dashedCurveChunks(obj.points, pixelToWorld, this.ry), pixelToWorld(LINE_WIDTH_PX) / 2, this.origin, this.ry)
       } else {
         const n = obj.points.length
-        const widths = computeCurveWidths(obj.points, pixelToWorld, this.ry)
+        const widths = computeCurveWidths(n, pixelToWorld)
         const pos = growAttribute(geometry, 'position', n * 2, 3)
         fillRibbonPositions(pos, obj.points, widths, this.origin.x, this.origin.y, this.ry)
         // Only rebuild the index buffer when the point count actually changed
@@ -508,7 +431,7 @@ export class GeometryGroupManager {
       if (obj.dashed) {
         return buildQuadMesh(dashedCurveChunks(obj.points, pixelToWorld, this.ry), pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.curve, palette), this.origin, this.ry)
       }
-      const widths = computeCurveWidths(obj.points, pixelToWorld, this.ry)
+      const widths = computeCurveWidths(n, pixelToWorld)
       const positions = new Float32Array(n * 2 * 3)
       fillRibbonPositions(positions, obj.points, widths, this.origin.x, this.origin.y, this.ry)
       const geometry = new THREE.BufferGeometry()

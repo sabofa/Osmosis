@@ -55,10 +55,9 @@ describe('GeometryGroupManager', () => {
     })
   })
 
-  // The headline feature of the ribbon rendering: width tapers with local
-  // curvature, like an artist easing off the pen on a straight run and
-  // pressing harder through a turn.
-  it('widens the ribbon through a sharp turn relative to a straight run', () => {
+  // A curve is a plain line: one uniform width (3 px) at every vertex, however
+  // sharply it turns.
+  it('draws a curve at one uniform width through a sharp turn and a straight run', () => {
     const mgr = new GeometryGroupManager()
     const points: Vec2[] = []
     for (let i = 0; i <= 20; i++) points.push({ x: i, y: 0 })
@@ -68,27 +67,16 @@ describe('GeometryGroupManager', () => {
     const mesh = mgr.group.children[0] as THREE.Mesh
     const positions = mesh.geometry.getAttribute('position').array
 
-    function widthAt(i: number): number {
-      const li = i * 2
-      const ri = i * 2 + 1
-      const dx = positions[li * 3] - positions[ri * 3]
-      const dy = positions[li * 3 + 1] - positions[ri * 3 + 1]
-      return Math.hypot(dx, dy)
-    }
-
-    const straightWidth = widthAt(10) // well within the straight run
-    const turnWidth = widthAt(20) // right at the sharp bend
-    expect(turnWidth).toBeGreaterThan(straightWidth)
+    points.forEach((_, i) => {
+      const dx = positions[i * 6] - positions[i * 6 + 3]
+      const dy = positions[i * 6 + 1] - positions[i * 6 + 4]
+      expect(Math.hypot(dx, dy)).toBeCloseTo(3 * 0.01, 5)
+    })
   })
 
-  // Regression test for a real bug: a scatter plot's regression line is
-  // built as a 2-point straight "curve" (see buildScene.ts's buildScatter).
-  // With only 2 points, computeCurveWidths's neighbor-lookup clamps straight
-  // back onto the point itself at both ends, and atan2(0, 0) on that
-  // zero-length leg used to read as a sharp turn — so a perfectly straight
-  // line rendered at near-maximum ribbon width instead of the thin weight a
-  // zero-curvature run should get.
-  it('renders a 2-point straight line at minimum width, not maximum', () => {
+  // A scatter plot's regression line is a 2-point straight "curve" (see
+  // buildScene.ts's buildScatter); it gets the same uniform width as any curve.
+  it('renders a 2-point straight line at the uniform curve width', () => {
     const mgr = new GeometryGroupManager()
     const obj: GeometryItem = { kind: 'curve', points: [{ x: 0, y: 0 }, { x: 10, y: 5 }], color: null }
     mgr.update([obj], palette, pixelToWorld)
@@ -103,11 +91,9 @@ describe('GeometryGroupManager', () => {
       return Math.hypot(dx, dy)
     }
 
-    // Minimum width at t=0: CURVE_BASE_WIDTH_PX * 0.5 * (1 - 0.85) + 1, in
-    // world units via the test's pixelToWorld (px * 0.01).
-    const expectedMinWidth = (3 * 0.5 * (1 - 0.85) + 1) * 0.01
-    expect(widthAt(0)).toBeCloseTo(expectedMinWidth, 5)
-    expect(widthAt(1)).toBeCloseTo(expectedMinWidth, 5)
+    // CURVE_BASE_WIDTH_PX (3) in world units via the test's pixelToWorld (px * 0.01).
+    expect(widthAt(0)).toBeCloseTo(3 * 0.01, 5)
+    expect(widthAt(1)).toBeCloseTo(3 * 0.01, 5)
   })
 
   // Regression test for a real, visible bug: a ribbon is an *indexed*
@@ -523,9 +509,8 @@ describe('GeometryGroupManager', () => {
   })
 })
 
-// On a plot whose axes have different px-per-unit, the ribbon's on-screen thickness must follow the curvature
-// taper (by design: thin on straight runs, heavy through a turn) and nothing else: the same on-screen shape drawn
-// on equal axes gets the same pixel thickness at every vertex, in the same direction-independent way.
+// On a plot whose axes have different px-per-unit, the ribbon's on-screen thickness is the uniform curve width
+// in px at every vertex, whatever the direction: the same on-screen shape drawn on equal axes gets the same thickness.
 describe('GeometryGroupManager: ribbon thickness on unequal axes', () => {
   const W = 1200
   const H = 700
@@ -546,9 +531,8 @@ describe('GeometryGroupManager: ribbon thickness on unequal axes', () => {
     stretched.forEach((w, i) => expect(w).toBeCloseTo(equal[i], 3))
   })
 
-  it('has the curvature taper range as its only variation (about 1.2 px on flanks to 9.4 px at a peak)', () => {
+  it('is the uniform 3 px at every vertex', () => {
     const w = pxWidths(sample(300), { x: (2 * Math.PI) / W, y: 2.4 / H })
-    expect(Math.max(...w)).toBeCloseTo(9.36, 1)
-    expect(Math.min(...w)).toBeLessThan(2.5)
+    w.forEach((x) => expect(x).toBeCloseTo(3, 3))
   })
 })
