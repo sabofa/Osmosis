@@ -10,7 +10,21 @@
 // can't land exactly on a stripped character (an acceptable, rare edge
 // case), but everything else resolves exactly like plain text did.
 
-export type BlockType = 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'oli' | 'math' | 'fence'
+export type BlockType = 'h1' | 'h2' | 'h3' | 'p' | 'li' | 'oli' | 'math' | 'fence' | 'quote'
+
+// One source line's visible slice (absolute offsets into the raw text).
+export interface Seg {
+  start: number
+  end: number
+}
+
+// `> [!kind] Title` on a quote's first line. The bracket marker is omitted
+// from rendering; the title (when present) is the label's source range.
+export interface Callout {
+  kind: string
+  titleStart: number
+  titleEnd: number
+}
 
 export interface MdBlock {
   type: BlockType
@@ -20,6 +34,13 @@ export interface MdBlock {
   end: number
   // Fence info string (e.g. "graph", "python"); '' when absent. Fences only.
   info?: string
+  // Only inside a quote, where a block's lines are not contiguous in the raw
+  // text (the `>` markers sit between them): one slice per line. `start`/`end`
+  // then span first..last for ordering only; render from `segs`.
+  segs?: Seg[]
+  // Quotes only: the blocks parsed from the marker-stripped content.
+  children?: MdBlock[]
+  callout?: Callout
 }
 
 const HEADING_RE = /^(#{1,3})\s+/
@@ -28,9 +49,11 @@ const LI_RE = /^[-*]\s+/
 const FENCE_OPEN_RE = /^\s*```(.*)$/
 const FENCE_CLOSE_RE = /^\s*```\s*$/
 const MATH_FENCE_RE = /^\s*\$\$/
+const QUOTE_RE = /^ {0,3}> ?/
+const CALLOUT_RE = /^\[!([A-Za-z][\w-]*)\][+-]?[ \t]*/
 
 function isBlockStart(t: string): boolean {
-  return HEADING_RE.test(t) || OLI_RE.test(t) || LI_RE.test(t) || FENCE_OPEN_RE.test(t) || MATH_FENCE_RE.test(t)
+  return HEADING_RE.test(t) || OLI_RE.test(t) || LI_RE.test(t) || FENCE_OPEN_RE.test(t) || MATH_FENCE_RE.test(t) || QUOTE_RE.test(t)
 }
 
 function hasMathClose(lines: { text: string }[], from: number): boolean {
@@ -41,8 +64,14 @@ function hasMathClose(lines: { text: string }[], from: number): boolean {
   return false
 }
 
+interface Line {
+  start: number
+  end: number
+  text: string
+}
+
 export function parseBlocks(text: string): MdBlock[] {
-  const lines: { start: number; end: number; text: string }[] = []
+  const lines: Line[] = []
   let pos = 0
   const len = text.length
   while (pos <= len) {
@@ -52,13 +81,79 @@ export function parseBlocks(text: string): MdBlock[] {
     if (lineEnd === len) break
     pos = lineEnd + 1
   }
+  return parseLines(lines, len, false)
+}
 
+// Content of one quote line with the `>` marker (and one following space)
+// removed; offsets stay absolute. A trailing CR (CRLF source) is dropped.
+function stripQuote(line: Line): Line {
+  const m = QUOTE_RE.exec(line.text)
+  const skip = m ? m[0].length : 0
+  let text = line.text.slice(skip)
+  if (text.endsWith('\r')) text = text.slice(0, -1)
+  return { start: line.start + skip, end: line.start + skip + text.length, text }
+}
+
+// Gathers the lines of a quote starting at lines[i]: every `>` line, plus lazy
+// continuations (a non-blank, non-block-start line right after a quote line
+// whose content is paragraph text). Lazy lines are kept unstripped.
+function takeQuote(lines: Line[], i: number): { taken: Line[]; next: number } {
+  const taken: Line[] = []
+  let j = i
+  let inFence = false
+  let lastParagraph = false
+  while (j < lines.length) {
+    const l = lines[j]
+    if (QUOTE_RE.test(l.text)) {
+      const c = stripQuote(l)
+      taken.push(c)
+      if (FENCE_OPEN_RE.test(c.text)) inFence = !inFence
+      lastParagraph = !inFence && c.text.trim().length > 0 && !HEADING_RE.test(c.text) && !FENCE_OPEN_RE.test(c.text)
+      j++
+      continue
+    }
+    if (lastParagraph && l.text.trim().length > 0 && !isBlockStart(l.text)) {
+      let text = l.text
+      if (text.endsWith('\r')) text = text.slice(0, -1)
+      taken.push({ start: l.start, end: l.start + text.length, text })
+      j++
+      continue
+    }
+    break
+  }
+  return { taken, next: j }
+}
+
+// `nested`: the lines are quote content, so block extents are not contiguous
+// in the raw text and multi-line blocks carry `segs`.
+function parseLines(lines: Line[], len: number, nested: boolean): MdBlock[] {
   const blocks: MdBlock[] = []
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
     if (line.text.trim().length === 0) {
       i++
+      continue
+    }
+    if (QUOTE_RE.test(line.text)) {
+      const { taken, next } = takeQuote(lines, i)
+      let body = taken
+      let callout: Callout | undefined
+      const cm = CALLOUT_RE.exec(taken[0].text)
+      if (cm) {
+        const t0 = taken[0]
+        callout = { kind: cm[1].toLowerCase(), titleStart: t0.start + cm[0].length, titleEnd: t0.end }
+        body = taken.slice(1)
+      }
+      const q: MdBlock = {
+        type: 'quote',
+        start: taken[0].start,
+        end: taken[taken.length - 1].end,
+        children: parseLines(body, len, true),
+      }
+      if (callout) q.callout = callout
+      blocks.push(q)
+      i = next
       continue
     }
     const fence = FENCE_OPEN_RE.exec(line.text)
@@ -75,7 +170,9 @@ export function parseBlocks(text: string): MdBlock[] {
       } else {
         start = end = Math.min(line.end + 1, len)
       }
-      blocks.push({ type: 'fence', start, end, info: fence[1].trim() })
+      const fenceBlock: MdBlock = { type: 'fence', start, end, info: fence[1].trim() }
+      if (nested) fenceBlock.segs = lines.slice(i + 1, j).map((l) => ({ start: l.start, end: l.end }))
+      blocks.push(fenceBlock)
       i = j + 1
       continue
     }
@@ -90,7 +187,7 @@ export function parseBlocks(text: string): MdBlock[] {
       }
       let j = i + 1
       while (j < lines.length && lines[j].text.trim() !== '$$') j++
-      if (j < lines.length) {
+      if (j < lines.length && !nested) {
         // Body starts right after the opening `$$` (same line) when it has
         // content, else at the next line.
         const firstLineBody = rest.trim().length > 0
@@ -125,15 +222,17 @@ export function parseBlocks(text: string): MdBlock[] {
     // source lines), so they don't each get their own paragraph margin.
     const pStart = line.start
     let pEnd = line.end
+    const segs: Seg[] = [{ start: line.start, end: line.end }]
     i++
     while (i < lines.length) {
       const next = lines[i]
       if (next.text.trim().length === 0) break
       if (isBlockStart(next.text) && !(MATH_FENCE_RE.test(next.text) && !hasMathClose(lines, i))) break
       pEnd = next.end
+      segs.push({ start: next.start, end: next.end })
       i++
     }
-    blocks.push({ type: 'p', start: pStart, end: pEnd })
+    blocks.push(nested ? { type: 'p', start: pStart, end: pEnd, segs } : { type: 'p', start: pStart, end: pEnd })
   }
   return blocks
 }
@@ -146,6 +245,8 @@ export interface InlineRun {
   code?: boolean
   // Inline math: start/end cover the TeX source between the dollars.
   math?: boolean
+  // Soft break (a line join inside a quote) immediately before this run.
+  br?: boolean
 }
 
 // Pandoc-style inline math: the opening `$` is followed by a non-space, the
@@ -308,6 +409,7 @@ export const BLOCK_TAG: Record<BlockType, string> = {
   oli: 'div',
   math: 'div',
   fence: 'pre',
+  quote: 'blockquote',
 }
 
 export const BLOCK_CLASS: Record<BlockType, string> = {
@@ -319,4 +421,39 @@ export const BLOCK_CLASS: Record<BlockType, string> = {
   oli: 'document-viewer-md-li',
   math: 'document-viewer-math-block',
   fence: 'document-viewer-md-fence',
+  quote: 'document-viewer-md-quote',
+}
+
+// A quote paragraph's lines are separated by `> ` markers in the raw text, so
+// inline parsing runs over the lines joined with '\n' and the runs are mapped
+// back to absolute offsets, split at line joins. A piece that starts a line
+// (after the first) carries `br`: a soft break precedes it.
+export function parseInlineSegs(text: string, segs: Seg[]): InlineRun[] {
+  const lineStart: number[] = []
+  let joined = ''
+  segs.forEach((sg, k) => {
+    if (k > 0) joined += '\n'
+    lineStart.push(joined.length)
+    joined += text.slice(sg.start, sg.end)
+  })
+  const out: InlineRun[] = []
+  for (const run of parseInline(joined, 0)) {
+    let from = run.start
+    while (from < run.end) {
+      let k = 0
+      while (k + 1 < segs.length && lineStart[k + 1] <= from) k++
+      const lineEnd = lineStart[k] + (segs[k].end - segs[k].start)
+      if (from >= lineEnd) {
+        from = lineEnd + 1 // the join newline itself
+        continue
+      }
+      const to = Math.min(run.end, lineEnd)
+      const abs = segs[k].start + (from - lineStart[k])
+      const piece: InlineRun = { ...run, start: abs, end: abs + (to - from) }
+      if (k > 0 && from === lineStart[k]) piece.br = true
+      out.push(piece)
+      from = to
+    }
+  }
+  return out
 }

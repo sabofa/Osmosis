@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { ResolvedMarker } from './viewerModel'
 import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
-import { parseBlocks, parseInline, BLOCK_TAG, BLOCK_CLASS, type InlineRun } from './markdown'
+import { parseBlocks, parseInline, parseInlineSegs, BLOCK_TAG, BLOCK_CLASS, type InlineRun, type MdBlock, type Seg } from './markdown'
 import { renderMath } from './mathRender'
 import {
   graphFenceModel,
@@ -241,7 +241,7 @@ export default function TextContent({
       if (run.math) {
         // Rendered glyphs have no per-character mapping to the TeX source, so
         // a math run stays one atomic leaf (markers inside it are ignored).
-        leaves.push({ start: run.start, end: run.end, math: true })
+        leaves.push({ start: run.start, end: run.end, math: true, br: run.br })
         continue
       }
       const overlapping = markerSpans.filter((m) => m.span.end > run.start && m.span.start < run.end)
@@ -250,11 +250,11 @@ export default function TextContent({
         const s = Math.max(span.start, run.start)
         const e = Math.min(span.end, run.end)
         if (s < cursor) continue // overlapping marker tokens — keep the first
-        if (s > cursor) leaves.push({ start: cursor, end: s, bold: run.bold, italic: run.italic, code: run.code })
-        leaves.push({ start: s, end: e, bold: run.bold, italic: run.italic, code: run.code, marker })
+        if (s > cursor) leaves.push({ start: cursor, end: s, bold: run.bold, italic: run.italic, code: run.code, br: cursor === run.start ? run.br : undefined })
+        leaves.push({ start: s, end: e, bold: run.bold, italic: run.italic, code: run.code, marker, br: s === run.start ? run.br : undefined })
         cursor = e
       }
-      if (cursor < run.end) leaves.push({ start: cursor, end: run.end, bold: run.bold, italic: run.italic, code: run.code })
+      if (cursor < run.end) leaves.push({ start: cursor, end: run.end, bold: run.bold, italic: run.italic, code: run.code, br: cursor === run.start ? run.br : undefined })
     }
     return leaves
   }
@@ -278,16 +278,18 @@ export default function TextContent({
     )
   }
 
-  function renderFence(start: number, end: number): ReactNode {
+  function renderFence(start: number, end: number, segs?: Seg[]): ReactNode {
     // One span per source line so highlight/selection mapping (data-start on
     // text-bearing leaves) keeps working; newlines are plain text between.
-    const lines = text.slice(start, end).split('\n')
+    // Inside a quote the lines come from `segs` (the `>` markers are omitted).
+    const lines = segs ? segs.map((sg) => text.slice(sg.start, sg.end)) : text.slice(start, end).split('\n')
     const out: ReactNode[] = []
     let pos = start
     lines.forEach((ln, idx) => {
       if (idx > 0) out.push('\n')
+      if (segs) pos = segs[idx].start
       if (ln.length > 0) out.push(<span key={pos} data-start={pos}>{ln}</span>)
-      pos += ln.length + 1
+      if (!segs) pos += ln.length + 1
     })
     return out
   }
@@ -320,51 +322,79 @@ export default function TextContent({
   const blocks = parseBlocks(text)
   let graphOrdinal = 0
 
+  function renderBlock(block: MdBlock): ReactNode {
+    if (block.type === 'quote') {
+      const co = block.callout
+      const titled = !!co && co.titleEnd > co.titleStart
+      return (
+        <blockquote
+          key={block.start}
+          className={co ? `${BLOCK_CLASS.quote} document-viewer-md-callout` : BLOCK_CLASS.quote}
+          data-callout={co ? co.kind : undefined}
+          inert={inertOthers || undefined}
+        >
+          {co && (
+            <div className="document-viewer-md-callout-label">
+              {titled
+                ? leavesFor([{ start: co.titleStart, end: co.titleEnd }]).map(renderLeaf)
+                : co.kind.charAt(0).toUpperCase() + co.kind.slice(1)}
+            </div>
+          )}
+          {(block.children ?? []).map(renderBlock)}
+        </blockquote>
+      )
+    }
+    if (block.type === 'math') {
+      return renderMathNode(block.start, block.end, true, 'div')
+    }
+    if (block.type === 'fence') {
+      const graph = renderGraph && !block.segs ? graphFenceModel(block, text) : null
+      if (graph && renderGraph) {
+        // Keyed by ordinal among graph fences (so edits elsewhere keep the
+        // plot mounted) plus the spec (so a new spec remounts, which resets
+        // the fence's error state without an effect racing the child's).
+        const ordinal = graphOrdinal++
+        const key = `graph-${ordinal}:${graphOptionsSignature(graph.options)}:${graph.spec}`
+        return (
+          <GraphFence
+            key={key}
+            ordinal={ordinal}
+            expanded={expandedGraph === ordinal}
+            onExpand={onExpandGraph}
+            onActive={onActiveGraph}
+            icons={icons}
+            spec={graph.spec}
+            options={graph.options}
+            startOffset={graph.startOffset}
+            renderGraph={renderGraph}
+            onErrors={onGraphErrors}
+            inert={expandedGraph !== null && expandedGraph !== ordinal ? true : undefined}
+          />
+        )
+      }
+      return (
+        <pre key={block.start} className={BLOCK_CLASS.fence} data-info={block.info || undefined} inert={inertOthers || undefined}>
+          {renderFence(block.start, block.end, block.segs)}
+        </pre>
+      )
+    }
+    const Tag = BLOCK_TAG[block.type] as ElementType
+    const runs = block.segs ? parseInlineSegs(text, block.segs) : parseInline(text.slice(block.start, block.end), block.start)
+    const out: ReactNode[] = []
+    for (const leaf of leavesFor(runs)) {
+      if (leaf.br) out.push(' ')
+      out.push(renderLeaf(leaf))
+    }
+    return (
+      <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined} inert={inertOthers || undefined}>
+        {out}
+      </Tag>
+    )
+  }
+
   return (
     <div className="document-viewer-text document-viewer-markdown" ref={rootRef}>
-      {blocks.map((block) => {
-        if (block.type === 'math') {
-          return renderMathNode(block.start, block.end, true, 'div')
-        }
-        if (block.type === 'fence') {
-          const graph = renderGraph ? graphFenceModel(block, text) : null
-          if (graph && renderGraph) {
-            // Keyed by ordinal among graph fences (so edits elsewhere keep the
-            // plot mounted) plus the spec (so a new spec remounts, which resets
-            // the fence's error state without an effect racing the child's).
-            const ordinal = graphOrdinal++
-            const key = `graph-${ordinal}:${graphOptionsSignature(graph.options)}:${graph.spec}`
-            return (
-              <GraphFence
-                key={key}
-                ordinal={ordinal}
-                expanded={expandedGraph === ordinal}
-                onExpand={onExpandGraph}
-                onActive={onActiveGraph}
-                icons={icons}
-                spec={graph.spec}
-                options={graph.options}
-                startOffset={graph.startOffset}
-                renderGraph={renderGraph}
-                onErrors={onGraphErrors}
-                inert={expandedGraph !== null && expandedGraph !== ordinal ? true : undefined}
-              />
-            )
-          }
-          return (
-            <pre key={block.start} className={BLOCK_CLASS.fence} data-info={block.info || undefined} inert={inertOthers || undefined}>
-              {renderFence(block.start, block.end)}
-            </pre>
-          )
-        }
-        const Tag = BLOCK_TAG[block.type] as ElementType
-        const runs = parseInline(text.slice(block.start, block.end), block.start)
-        return (
-          <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined} inert={inertOthers || undefined}>
-            {leavesFor(runs).map(renderLeaf)}
-          </Tag>
-        )
-      })}
+      {blocks.map(renderBlock)}
     </div>
   )
 }

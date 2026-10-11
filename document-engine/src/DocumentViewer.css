@@ -148,6 +148,31 @@
   margin-bottom: 0;
 }
 
+.document-viewer-markdown .document-viewer-md-quote {
+  margin: 0 0 0.9em;
+  padding-inline-start: 1em;
+  border-inline-start: 3px solid color-mix(in srgb, var(--de-text) calc(var(--de-alpha-callout) * 30%), transparent);
+  color: var(--de-text-muted);
+}
+
+.document-viewer-markdown .document-viewer-md-quote:last-child {
+  margin-bottom: 0;
+}
+
+.document-viewer-markdown .document-viewer-md-quote .document-viewer-md-quote {
+  margin-top: 0.35em;
+}
+
+/* Callout (`> [!note] Title`): a quote with a muted label line. D2c styles
+   the kinds via [data-callout]. */
+.document-viewer-markdown .document-viewer-md-callout-label {
+  margin: 0 0 0.35em;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--de-text-muted);
+}
+
 .document-viewer-markdown code {
   font-family: var(--de-font-stack-code);
   background: var(--de-surface);

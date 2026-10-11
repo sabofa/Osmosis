@@ -46,6 +46,14 @@ const MD = [
   'x in [-3, 3]',
   '```',
   '',
+  '> A quoted line with **bold** text that wraps',
+  '> onto a second source line.',
+  '>',
+  '> > Nested quote highlight target.',
+  '',
+  '> [!note] Callout title',
+  '> callout body text',
+  '',
   'Closing paragraph with the author anchor on this phrase and a marker here.',
 ].join('\n')
 
@@ -60,6 +68,8 @@ function range(needle: string): { start: number; end: number; quote: string } {
 const HIGHLIGHTS: DocumentHighlight[] = [
   { id: 'h1', color: 'yellow', ...range('Emoji: 😀 after the smiley') },
   { id: 'h2', color: 'green', ...range('this sentence is highlighted') },
+  { id: 'h3', color: 'blue', ...range('onto a second source line') },
+  { id: 'h4', color: 'pink', ...range('Nested quote highlight') },
 ]
 
 const LAYER: DocumentLayer = {
