@@ -3,6 +3,11 @@ import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-
 import type { DocumentTokens } from 'theme-core'
 import { EditorView } from '@codemirror/view'
 import DocumentViewer from '../DocumentViewer'
+import Ribbon from '../ribbon/Ribbon'
+import { buildRibbon, DEFAULT_RICH_STATE, type RichState, type RibbonValueId, type RibbonValue } from '../ribbon/ribbonModel'
+import { tokensToCssVars } from '../tokenVars'
+import type { BlockStyle } from '../editor/editorCommands'
+import type { CSSProperties } from 'react'
 import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
 
@@ -155,7 +160,7 @@ const instrumentedGraph: RenderGraph = (spec, ctx) => {
 // window.__keys = keydown events that reached the wrapper in the bubble phase
 // and a capture-phase Mod-s probe on the wrapper (mimics web's handler).
 // ?host=1 publishes the editor commands to the stub strip (window.__hostCmds);
-// without it the unhosted viewer draws EditorCommandBar in place.
+// without it the unhosted viewer draws the Ribbon in place.
 const EDITOR_MD = [
   '# Edit sheet',
   '',
@@ -240,6 +245,35 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
         onTextChange={(t) => { eg().__doc.changes++; eg().__doc.text = t; if (!eg().__hold) setText(t) }}
         renderGraph={stubGraph}
       />
+    </div>
+  )
+}
+
+// ?case=ribbon: the ribbon alone in rich mode with fake handlers (the engine
+// has no rich editor yet). window.__ribbonLog records every handler call.
+function RibbonCase({ tokens }: { tokens: DocumentTokens }): ReactNode {
+  const [rich, setRich] = useState<RichState>({ ...DEFAULT_RICH_STATE })
+  const [style, setStyle] = useState<BlockStyle>('h2')
+  const [bold, setBold] = useState(true)
+  const [log, setLog] = useState<string[]>([])
+  const cssVars = useMemo(() => tokensToCssVars(tokens), [tokens])
+  const note = (m: string) => { setLog((l) => [...l.slice(-6), m]); (window as unknown as { __ribbonLog: string[] }).__ribbonLog = [...((window as unknown as { __ribbonLog?: string[] }).__ribbonLog ?? []), m] }
+  const ribbon = buildRibbon({
+    mode: 'rich',
+    state: {
+      marks: { bold, italic: false, strike: false, code: false, heading: false, bullet: false, numbered: false, task: false, quote: false },
+      blockStyle: style, selectionEmpty: false, undoDepth: 2, redoDepth: 0, readOnly: false, clipboard: true, rich,
+    },
+    handlers: {
+      command: (id) => { note('command ' + id); if (id === 'bold') setBold((b) => !b) },
+      blockStyle: (st) => { note('style ' + st); setStyle(st) },
+      setValue: (id: RibbonValueId, v: RibbonValue) => { note(`set ${id}=${v}`); if (id === 'font-family') setRich((r) => ({ ...r, fontFamily: String(v) })); if (id === 'font-size') setRich((r) => ({ ...r, fontSize: Number(v) })); if (id === 'text-color') setRich((r) => ({ ...r, color: v as string | null })) },
+    },
+  })
+  return (
+    <div className="document-viewer" style={cssVars as CSSProperties} data-mode={tokens.mode}>
+      <Ribbon ribbon={ribbon} icons={{ kind: 'default' }} onDone={() => note('done')} />
+      <pre data-testid="ribbon-log" style={{ padding: 12, fontSize: 12 }}>{log.join(' | ')}</pre>
     </div>
   )
 }
@@ -428,7 +462,9 @@ export default function ReviewPage(): ReactNode {
               : 'host: nothing published'}
           </pre>
         )}
-        {kase === 'editor' ? (
+        {kase === 'ribbon' ? (
+          <RibbonCase tokens={tokens} />
+        ) : kase === 'editor' ? (
           <EditorCase tokens={tokens} host={host} />
         ) : (
         <DocumentViewer

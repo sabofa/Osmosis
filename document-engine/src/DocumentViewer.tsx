@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { EditorView } from '@codemirror/view'
 import MarkdownEditor from './editor/MarkdownEditor'
-import EditorCommandBar from './editor/EditorCommandBar'
-import { buildEditorCommands } from './editor/editorCommands'
+import Ribbon from './ribbon/Ribbon'
+import { buildEditorRibbon } from './ribbon/ribbonState'
+import { ribbonToToolbarCommands } from './ribbon/ribbonModel'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
@@ -346,7 +347,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // The editor's view, re-read (animation-frame throttled) on selection and
   // document changes so the published commands' enabled/active flags follow.
   const [editorView, setEditorView] = useState<EditorView | null>(null)
-  const [, setEditorTick] = useState(0)
+  const [editorTick, setEditorTick] = useState(0)
   const editorRaf = useRef(0)
   useEffect(() => () => cancelAnimationFrame(editorRaf.current), [])
   const onEditorViewUpdate = useCallback(() => {
@@ -603,6 +604,20 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     body = <div className="document-viewer-placeholder">Preview not available for this file type.</div>
   }
 
+  // The editor's ribbon, rebuilt from the live editor state on every render
+  // (which the rAF-throttled view-update tick drives). Hosted: it is flattened
+  // to the ToolbarCommand list; unhosted: drawn in place below.
+  const editorRibbon = useMemo(
+    () => (hasEditor ? buildEditorRibbon(editorView, { readOnly: props.editorReadOnly }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasEditor, editorView, props.editorReadOnly, editorTick]
+  )
+  // After a ribbon command the editor takes focus back (unless a command
+  // already moved it inside the editor, e.g. into the search panel).
+  const focusEditor = useCallback(() => {
+    if (editorView && !editorView.dom.contains(document.activeElement)) editorView.focus()
+  }, [editorView])
+
   const canDownload = !!asset.url || (asset.type === 'text' && !!asset.content)
 
   // Commands for the host toolbar. `run` goes through a ref to the latest
@@ -626,7 +641,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     onToggleOverlays: () => setShowOverlays((v) => !v),
     onRemoveHighlight: removeHighlight,
     onDownload: handleDownload,
-    editorCommands: hasEditor ? buildEditorCommands(editorView, { readOnly: props.editorReadOnly }) : null,
+    editorCommands: editorRibbon ? ribbonToToolbarCommands(editorRibbon) : null,
     graph: expandable
       ? {
           canExpand: canExpandCommand(expand, graphCount),
@@ -662,7 +677,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           {gate.placeholder}
         </div>
       )}
-      {showEditorBar && <EditorCommandBar commands={latest.editorCommands ?? []} icons={iconRef} />}
+      {showEditorBar && editorRibbon && <Ribbon ribbon={editorRibbon} icons={iconRef} onDone={focusEditor} />}
       <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}${paged ? ' document-viewer-scroll-fit' : ''}`} ref={scrollRef}>
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}${gate.contentHidden ? ' document-viewer-content-hidden' : ''}`}
@@ -678,7 +693,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       </div>
 
       {(showZoomControl || showSettingsMenu) && (
-      <div className="document-viewer-toolbar" data-component="tool-row">
+      <div className="document-viewer-toolbar">
         {showZoomControl && <ZoomControl icons={iconRef} zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />}
         {showSettingsMenu && (
           <SettingsMenu

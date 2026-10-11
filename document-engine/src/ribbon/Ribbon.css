@@ -1,0 +1,432 @@
+/* The ribbon (Ribbon.tsx). A flat strip that reads as part of the sheet: no
+   frame, no focus ring on the bar, no shadows on the bar. Every colour is a
+   --de-* token (guarded by chromeStyles.test.ts); the engine's own component
+   names (ribbon, ribbon-tab, ribbon-group, ribbon-button, ribbon-select,
+   ribbon-gallery) carry these fallbacks, so a shell theme can restyle them
+   later without the generic pill/tool-row look leaking in.
+   Sizes are px for the fixed control grid; radius derives from --de-radius-sm. */
+
+.de-ribbon {
+  --r-rule: color-mix(in srgb, var(--de-rule) 55%, transparent);
+  --r-line: color-mix(in srgb, var(--de-rule) 85%, transparent);
+  --r-tint: color-mix(in srgb, currentColor 8%, transparent);
+  --r-pressed: color-mix(in srgb, var(--de-accent) 14%, transparent);
+  --r-selected: color-mix(in srgb, var(--de-accent) 7%, transparent);
+  --r-pressed-hover: color-mix(in srgb, var(--de-accent) 22%, transparent);
+  --r-radius: calc(var(--de-radius-sm) * 0.5);
+  --r-surface: color-mix(in srgb, var(--de-page) calc(var(--de-alpha-callout) * 100%), transparent);
+
+  position: relative;
+  z-index: 3;
+  flex: none;
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--de-text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--r-rule);
+  box-shadow: none;
+  user-select: none;
+}
+
+.de-ribbon button,
+.de-ribbon input {
+  font: inherit;
+  color: inherit;
+}
+
+.de-ribbon svg:not(.de-r-chevron) * {
+  stroke-width: 1.6;
+}
+
+.de-ribbon :focus-visible {
+  outline: 2px solid var(--de-accent);
+  outline-offset: -2px;
+}
+
+/* ---- tabs */
+
+.de-rtabs {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  padding: 0 8px;
+}
+
+.de-rtab {
+  appearance: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--r-radius) var(--r-radius) 0 0;
+  background: none;
+  color: var(--de-text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.de-rtab:hover {
+  background: var(--r-tint);
+}
+
+.de-rtab[aria-selected='true'] {
+  color: var(--de-text);
+  border-bottom-color: var(--de-accent);
+}
+
+/* ---- panel and groups */
+
+.de-rpanel {
+  height: 68px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--de-rule) transparent;
+}
+
+.de-rtoolbar {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  width: max-content;
+  min-width: 100%;
+  padding: 0 4px;
+}
+
+.de-rg {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px 0;
+}
+
+.de-rg + .de-rg {
+  background: linear-gradient(var(--r-rule), var(--r-rule)) left center / 1px 78% no-repeat;
+}
+
+.de-rg-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 0;
+}
+
+.de-rg[data-rows='2'] .de-rg-body {
+  flex-wrap: wrap;
+  align-content: center;
+  row-gap: 2px;
+  width: 22.5em;
+}
+
+.de-rg-label {
+  height: 18px;
+  padding-bottom: 3px;
+  font-size: 0.8em;
+  line-height: 15px;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--de-text-muted);
+}
+
+.de-r-anchor {
+  display: inline-flex;
+}
+
+.de-r-sep {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--r-rule);
+}
+
+/* In a two-row group the first separator is the line break instead of a rule. */
+.de-r-brk {
+  flex-basis: 100%;
+  width: auto;
+  height: 0;
+  margin: 0;
+  background: none;
+}
+
+/* Two rows of 22px fit the 46px body (Word's compact group). */
+.de-rg[data-rows='2'] .de-rb,
+.de-rg[data-rows='2'] .de-rsel,
+.de-rg[data-rows='2'] .de-rnum {
+  height: 22px;
+  min-width: 24px;
+}
+
+.de-rg[data-rows='2'] .de-rsel {
+  padding: 0 4px 0 6px;
+}
+
+/* ---- buttons */
+
+.de-rb {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-radius);
+  background: none;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.de-rb:hover:not(:disabled),
+.de-rsel:hover:not(:disabled),
+.de-gal-tile:hover:not(:disabled),
+.de-gal-more:hover:not(:disabled),
+.de-r-opt:hover {
+  background: var(--r-tint);
+}
+
+.de-rb[aria-pressed='true'],
+.de-r-opt[aria-selected='true'] {
+  background: var(--r-pressed);
+  color: var(--de-accent);
+}
+
+.de-rb[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--r-pressed-hover);
+}
+
+.de-rb:disabled,
+.de-rsel:disabled,
+.de-gal-tile:disabled,
+.de-gal-more:disabled,
+.de-rnum:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.de-rb[data-size='large'] {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 44px;
+  height: 46px;
+  padding: 6px 6px 0;
+}
+
+.de-rb-label {
+  font-size: 0.8em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ---- select, number, colour */
+
+.de-rsel {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--r-line);
+  border-radius: var(--r-radius);
+  background: none;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.de-rsel[data-compact] {
+  border-color: transparent;
+  padding: 0 4px;
+  gap: 2px;
+}
+
+.de-rsel-text {
+  min-width: 5em;
+  max-width: 9em;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.de-rsel[aria-expanded='true'] {
+  background: var(--r-tint);
+}
+
+.de-r-chevron {
+  flex: none;
+  color: var(--de-text-muted);
+}
+
+.de-rnum-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.de-rnum {
+  width: 3.2em;
+  height: 28px;
+  padding: 0 4px;
+  border: 1px solid var(--r-line);
+  border-radius: var(--r-radius);
+  background: none;
+  text-align: center;
+}
+
+.de-rnum-unit {
+  color: var(--de-text-muted);
+}
+
+.de-rcolor {
+  flex-direction: column;
+  gap: 2px;
+  justify-content: center;
+}
+
+.de-rcolor-bar {
+  width: 14px;
+  height: 3px;
+  border-radius: var(--r-radius);
+  background: currentColor;
+}
+
+.de-rcolor-bar[data-auto] {
+  background: var(--de-text-muted);
+}
+
+/* ---- styles gallery */
+
+.de-gal-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  height: 46px;
+}
+
+.de-gal {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.de-gal-tile {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 7.2em;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-radius);
+  background: none;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.de-gal-tile[aria-selected='true'] {
+  border-color: var(--de-accent);
+  background: var(--r-selected);
+}
+
+.de-gal-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--de-font-stack-body);
+}
+
+.de-gal-more {
+  appearance: none;
+  width: 18px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: var(--r-radius);
+  background: none;
+  cursor: pointer;
+}
+
+/* ---- popovers */
+
+.de-r-pop {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 10em;
+  max-height: 22em;
+  overflow: auto;
+  padding: 4px;
+  gap: 1px;
+  background: var(--r-surface);
+  color: var(--de-text);
+  border: 1px solid var(--r-line);
+  border-radius: var(--r-radius);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--de-text) 14%, transparent);
+}
+
+.de-r-pop-gallery {
+  min-width: 14em;
+}
+
+.de-r-opt {
+  appearance: none;
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--r-radius);
+  background: none;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.de-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 22px);
+  gap: 4px;
+  padding: 4px;
+}
+
+.de-swatch {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--r-line);
+  border-radius: var(--r-radius);
+  cursor: pointer;
+}
+
+.de-swatch[aria-pressed='true'] {
+  outline: 2px solid var(--de-accent);
+  outline-offset: 1px;
+}
+
+.de-more-grid {
+  display: grid;
+  grid-template-columns: repeat(6, auto);
+  gap: 2px;
+}
+
+/* ---- narrow: one flat icon row */
+
+.de-rrow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  padding: 0 8px;
+}
+
+/* On a dark sheet a light-ink shadow reads as a glow: the hairline alone separates the popover. */
+.document-viewer[data-mode='dark'] .de-r-pop {
+  box-shadow: none;
+}
