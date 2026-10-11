@@ -8,7 +8,9 @@ import { ribbonToToolbarCommands } from './ribbon/ribbonModel'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
-import { ZoomControl, SettingsMenu } from './Toolbar'
+import { ZoomControl, SettingsMenu, ViewerControls } from './Toolbar'
+import { AdapterProvider } from './adapter/useAdapter'
+import { useAdapterRuntime, useEmitOnChange } from './adapter/useAdapterRuntime'
 import {
   SCROLLBAR_ALLOWANCE,
   ZOOM_ANIM_MS,
@@ -50,8 +52,9 @@ import { getSelectionOffsetRange, getSelectionRect } from './selectionUtils'
 import { toggleHighlightRange, removeHighlightRange } from './highlightOps'
 import { toInternalRange, fromInternalRange, resolveForPaint, resolveMarkersForPaint, attachQuotes } from './offsetBoundary'
 import { HIGHLIGHT_PALETTE } from './highlightPalette'
-import { DEFAULT_TOKENS, tokensToCssVars, highlightCss as buildHighlightCss } from './tokenVars'
+import { DEFAULT_TOKENS, highlightCss as buildHighlightCss } from './tokenVars'
 import type { DocumentTokens } from 'theme-core'
+import type { DocumentAdapter } from './adapter/types'
 import { EDIT_STUB_MESSAGE, engineLayers, capabilities, gatedPresentation, offsetText, awaitingPdfText, resolveLayers } from './viewerModel'
 import type {
   DocumentViewerAsset,
@@ -73,6 +76,9 @@ export interface DocumentViewerProps {
   tokens?: DocumentTokens
   // Workspace host: the viewer publishes its layer list through it.
   host?: DocumentHost
+  // Theme adapter (src/adapter/types.ts). Wins over host.adapter. Needed for an
+  // UNHOSTED viewer: a hosted one has its zoom/settings/ribbon drawn by the host.
+  adapter?: DocumentAdapter
   // What the reader may do: 'view' (select/search/zoom/theme only),
   // 'annotate' (default: view + highlights and the colour popover), 'edit'
   // (stub until editing lands; content stays read-only).
@@ -141,7 +147,7 @@ function sidePanelSized(sizes: Size[], split: boolean): Size[] {
 }
 
 export default function DocumentViewer(props: DocumentViewerProps) {
-  const { asset, tokens = DEFAULT_TOKENS, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
+  const { asset, tokens: inputTokens = DEFAULT_TOKENS, highlights, onHighlightsChange, onErrors, gated, gatedLabel, renderGraph } = props
   const gate = gatedPresentation(gated, gatedLabel)
   const { host } = props
   // Publish the layer list once per host identity.
@@ -165,6 +171,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
   const hasEditor = interaction === 'edit' && isText && !!props.onTextChange
+  const adapter = props.adapter ?? host?.adapter
+  // Theme adapter (host.adapter): tokens / css vars / css / highlight / init / events, all through safeCall.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const adapterRt = useAdapterRuntime(adapter, rootRef, inputTokens, { interaction, chrome, kind: isPdf ? 'pdf' : isImage ? 'image' : 'prose', host })
+  const tokens = adapterRt.tokens
   const usesPdfLayer = isPdf && !!asset.url && !embedded
   // null = the PDF layer's text has not arrived yet; '' = arrived, empty (scanned).
   const [pdfText, setPdfText] = useState<string | null>(null)
@@ -183,7 +194,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   }
   const groupPrefix = instanceIdRef.current
 
-  const cssVars = useMemo(() => tokensToCssVars(tokens), [tokens])
+  const cssVars = adapterRt.vars
 
   const paged = (isPdf && !!asset.url) || (isImage && !!asset.url)
   const zoomMin = paged ? ZOOM_MIN : TEXT_ZOOM_MIN
@@ -413,7 +424,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   // ::highlight() rules for this instance's groups — one per palette color
   // plus the anchor, generated from the tokens (see tokenVars.highlightCss
   // for the palette -> token mapping and why alpha is not optional).
-  const highlightCss = useMemo(() => buildHighlightCss(groupPrefix, tokens), [groupPrefix, tokens])
+  const highlightCss = useMemo(() => buildHighlightCss(groupPrefix, tokens, adapterRt.highlightHook), [groupPrefix, tokens, adapterRt.highlightHook])
 
   function zoomIn() {
     setZoom(stepZoom(scaleRef.current, 'in', zoomMin, zoomMax))
@@ -484,7 +495,6 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   }
 
   // Graph expand. Ordinals count graph fences in document order.
-  const rootRef = useRef<HTMLDivElement | null>(null)
   const graphCount = useMemo(() => (isText && renderGraph ? graphBlocks(text).length : 0), [isText, renderGraph, text])
   const [expandState, setExpandState] = useState(INITIAL_EXPAND)
   const expand = clampExpand(expandState, graphCount)
@@ -495,6 +505,35 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const onExpandGraph = (ordinal: number | null) =>
     setExpandState((s) => (ordinal === null ? collapseGraph(s) : expandGraph(s, ordinal)))
   const onActiveGraph = (ordinal: number) => setExpandState((s) => setActiveGraph(s, ordinal))
+  // Adapter events (never awaited; every hook runs through safeCall). Each one
+  // fires on CHANGE only, never for the initial value.
+  const emitAdapter = adapterRt.emit
+  useEmitOnChange(scale, emitAdapter, (v) => ({ type: 'zoom', scale: v }))
+  useEmitOnChange(interaction, emitAdapter, (v) => ({ type: 'mode', interaction: v }))
+  useEmitOnChange(expandedGraph, emitAdapter, (v) => ({ type: 'expand', graph: v }))
+  useEmitOnChange(pendingSelection !== null, emitAdapter, (v) => ({ type: 'selection', hasSelection: v }))
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !adapter) return
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        emitAdapter({ type: 'scroll', y: el.scrollTop, h: el.scrollHeight })
+      })
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(raf)
+    }
+  }, [adapter, emitAdapter])
+  // 'edit' (kind 'type') once per loaded asset; 'save' is host-driven, so not emitted here.
+  const editedRef = useRef(false)
+  useEffect(() => {
+    editedRef.current = false
+  }, [asset.url])
   // Esc collapses an expanded graph before anything else (shell included) sees it.
   const anyExpanded = expandedGraph !== null
   // Listens on the document in the capture phase so Esc works wherever focus
@@ -534,7 +573,13 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         <MarkdownEditor
           key={props.editorReadOnly ? 'ro' : 'rw'}
           value={text}
-          onChange={(t) => props.onTextChange?.(t)}
+          onChange={(t) => {
+            if (!editedRef.current) {
+              editedRef.current = true
+              emitAdapter({ type: 'edit', kind: 'type' })
+            }
+            props.onTextChange?.(t)
+          }}
           onReady={setEditorView}
           onViewUpdate={onEditorViewUpdate}
           highlights={localHighlights}
@@ -750,13 +795,16 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const showSettingsMenu = caps.settingsMenu && !hasEditor
 
   return (
+    <AdapterProvider state={adapterRt.state}>
     <div
       ref={rootRef}
+      data-de-instance={groupPrefix}
       className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}${showEditorBar ? ' document-viewer-with-bar' : ''}`}
       data-mode={tokens.mode}
       style={cssVars as CSSProperties}
     >
       {!embedded && <style>{highlightCss}</style>}
+      {adapterRt.cssText && <style data-adapter-css="">{adapterRt.cssText}</style>}
       {caps.editStub && !hasEditor && (
         <div className="document-viewer-edit-stub" data-component="well" role="status">
           {EDIT_STUB_MESSAGE}
@@ -783,7 +831,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       </div>
 
       {(showZoomControl || showSettingsMenu) && (
-      <div className="document-viewer-toolbar">
+      <ViewerControls>
         {showZoomControl && <ZoomControl icons={iconRef} zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />}
         {showSettingsMenu && (
           <SettingsMenu
@@ -793,7 +841,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
             onDownload={canDownload && !gate.gated ? handleDownload : null}
           />
         )}
-      </div>
+      </ViewerControls>
       )}
 
       {caps.highlightPopover && pendingSelection && !gate.gated && (
@@ -827,5 +875,6 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         </div>
       )}
     </div>
+    </AdapterProvider>
   )
 }

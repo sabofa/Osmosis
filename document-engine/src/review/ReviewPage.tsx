@@ -8,6 +8,7 @@ import DocumentViewer from '../DocumentViewer'
 import Ribbon from '../ribbon/Ribbon'
 import { buildRibbon, DEFAULT_RICH_STATE, type RichState, type RibbonValueId, type RibbonValue } from '../ribbon/ribbonModel'
 import { tokensToCssVars } from '../tokenVars'
+import { DemoGate, useDemoAdapter } from './demoAdapter'
 import type { BlockStyle } from '../editor/editorCommands'
 import type { CSSProperties } from 'react'
 import type { ZoomMode } from '../zoomModel'
@@ -275,6 +276,7 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
     { id: 'tail', color: 'pink', ...edRange('Marked text after', EDITOR_MD) },
     { id: 'emoji', color: 'blue', ...edRange('a 😀 b', EDITOR_MD) },
   ])
+  const demoAdapter = useDemoAdapter()
   const w = eg()
   w.__doc = { text, changes: (w.__doc?.changes ?? 0) }
   w.__hl = hl.map((h) => ({ id: h.id, start: h.start, end: h.end, quote: h.quote }))
@@ -297,8 +299,9 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
       onCompositionStart={() => eg().__comp.push('start')}
       onCompositionEnd={() => eg().__comp.push('end')}
     >
-      <DocumentViewer
+      <DemoGate><DocumentViewer
         host={host}
+        adapter={demoAdapter}
         asset={{ type: 'text', mime: 'text/markdown', content: text }}
         tokens={tokens}
         // ?ro=1 shows the same text in the read-only (annotate) viewer.
@@ -309,7 +312,7 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
         onHighlightsChange={setHl}
         onTextChange={(t) => { eg().__doc.changes++; eg().__doc.text = t; if (!eg().__hold) setText(t) }}
         renderGraph={instrumentedGraph}
-      />
+      /></DemoGate>
     </div>
   )
 }
@@ -474,6 +477,7 @@ export default function ReviewPage(): ReactNode {
   const tokens = useMemo(() => withAlphas(tokensFor(mode), alphasParam), [mode, alphasParam])
   const [published, setPublished] = useState<Published | null>(null)
   const host = useMemo(() => (q.get('host') === '1' || q.get('case') === 'hosted' ? makeHost(setPublished) : undefined), [q])
+  const demoAdapter = useDemoAdapter()
   const hlQuote = q.get('hl')
   const [hl, setHl] = useState<DocumentHighlight[]>(hlQuote ? [{ id: 'pq', color: 'yellow', start: 0, end: [...hlQuote].length, quote: hlQuote }] : HIGHLIGHTS)
   // ?case=pdf&pdf=/review-shots/sample.pdf&zoom=fit-page|0.25|5&steps=in,in,out&bench=1
@@ -632,8 +636,9 @@ export default function ReviewPage(): ReactNode {
         ) : kase === 'editor' ? (
           <EditorCase tokens={tokens} host={host} />
         ) : (
-        <DocumentViewer
+        <DemoGate><DocumentViewer
           host={host}
+          adapter={demoAdapter}
           asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: kase === 'graphs' ? GRAPHS_MD : MD, extractedText: kase === 'graphs' ? GRAPHS_MD : MD }}
           initialZoom={initialZoom}
           tokens={tokens}
@@ -644,7 +649,7 @@ export default function ReviewPage(): ReactNode {
           highlights={kase === 'graphs' ? [] : hl}
           onHighlightsChange={setHl}
           renderGraph={kase === 'graphs' ? instrumentedGraph : stubGraph}
-        />
+        /></DemoGate>
         )}
       </div>
     </div>
