@@ -13,6 +13,24 @@ import type { CSSProperties } from 'react'
 import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
 
+// ?typo=clean|retro: emulates the two example workspace themes of
+// src/typography.md by setting the document-typography hooks on the sheet.
+const TYPO: Record<string, Record<string, string>> = {
+  clean: {
+    '--de-title-font': 'Georgia, serif', '--de-title-size': '2.5em', '--de-title-weight': '600',
+    '--de-title-leading': '1.08', '--de-title-tracking': '-0.018em', '--de-lede-size': '1.19em',
+    '--de-section-mark': '""', '--de-section-mark-width': '14px', '--de-section-mark-height': '2px',
+    '--de-section-mark-bg': 'var(--de-accent)',
+  },
+  retro: {
+    '--de-title-size': '1.8em', '--de-lede-size': '1.1em', '--de-section-size': '1em',
+    '--de-section-mark': 'counter(de-section, decimal-leading-zero)',
+    '--de-section-mark-font': 'var(--de-font-mono)', '--de-section-mark-size': '0.7em',
+    '--de-section-mark-padding': '0.15em 0.45em', '--de-section-mark-bg': 'var(--de-accent)',
+    '--de-section-mark-color': 'var(--de-page)', '--de-section-mark-radius': 'var(--de-radius-sm)',
+  },
+}
+
 import type { OutlineHeading } from '../outline'
 // Dev-only harness: the viewer over a gaudy blurred scene, inside a "sheet"
 // whose opacity comes from the URL (?opacity=55&mode=dark&case=normal).
@@ -55,6 +73,14 @@ const MD = [
   '> callout body text',
   '',
   'Closing paragraph with the author anchor on this phrase and a marker here.',
+  '',
+  '## First section',
+  '',
+  'Section text one with a selectable phrase.',
+  '',
+  '## Second section',
+  '',
+  'Section text two.',
 ].join('\n')
 
 const cp = (s: string) => [...s].length
@@ -567,6 +593,14 @@ export default function ReviewPage(): ReactNode {
     return () => cancelAnimationFrame(raf)
   }, [q])
   useEffect(() => { document.body.style.margin = '0' }, [])
+  // ?typo=: set the hooks inline on every viewer root (where --de-accent etc. resolve).
+  useEffect(() => {
+    const vars = TYPO[q.get('typo') ?? '']
+    if (!vars) return
+    for (const r of document.querySelectorAll<HTMLElement>('.document-viewer')) {
+      for (const [k, v] of Object.entries(vars)) r.style.setProperty(k, v)
+    }
+  })
   const sheetBg = `color-mix(in srgb, ${tokens.colors.page} ${opacity * 100}%, transparent)`
 
   return (

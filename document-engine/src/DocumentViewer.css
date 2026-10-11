@@ -133,6 +133,68 @@
   font-size: 1.08em;
 }
 
+/* Document typography hooks (contract: src/typography.md). Blocks carry
+   data-role="title" | "lede" | "section" (+ data-section-index) from
+   documentRoles.ts. Every property below is a theme hook with a default as
+   its var() fallback, so a workspace theme or the theme adapter can set it on
+   any ancestor. The section mark is a pseudo-element only: it is not in the
+   text, so selection and highlight offsets never see it.
+     Clean:  --de-title-font: Georgia, serif; --de-title-size: 2.5em;
+             --de-title-weight: 600; --de-title-leading: 1.08;
+             --de-title-tracking: -0.018em; --de-lede-size: 1.19em;
+             --de-section-mark: ""; --de-section-mark-width: 14px;
+             --de-section-mark-height: 2px; --de-section-mark-bg: var(--de-accent)
+     Retro:  --de-title-size: 1.8em; --de-lede-size: 1.1em; --de-section-size: 1em;
+             --de-section-mark: counter(de-section, decimal-leading-zero);
+             --de-section-mark-font: var(--de-font-mono);
+             --de-section-mark-size: 0.7em; --de-section-mark-padding: 0.15em 0.45em;
+             --de-section-mark-bg: var(--de-accent); --de-section-mark-color: var(--de-page);
+             --de-section-mark-radius: var(--de-radius-sm) */
+.document-viewer-markdown {
+  counter-reset: de-section;
+}
+
+.document-viewer-markdown [data-role='title'] {
+  font-family: var(--de-title-font, var(--de-font-display));
+  font-size: var(--de-title-size, 1.9em);
+  font-weight: var(--de-title-weight, 600);
+  line-height: var(--de-title-leading, 1.12);
+  letter-spacing: var(--de-title-tracking, -0.015em);
+}
+
+.document-viewer-markdown [data-role='lede'] {
+  font-size: var(--de-lede-size, 1.2em);
+  color: var(--de-lede-color, var(--de-text-muted));
+  line-height: var(--de-lede-leading, 1.5);
+  text-wrap: pretty;
+}
+
+.document-viewer-markdown [data-role='section'] {
+  counter-increment: de-section;
+  font-family: var(--de-section-font, var(--de-font-display));
+  font-size: var(--de-section-size, 1.3em);
+  font-weight: var(--de-section-weight, 700);
+}
+
+.document-viewer-markdown [data-role='section']::before {
+  content: var(--de-section-mark, none);
+  display: inline-block;
+  box-sizing: content-box;
+  vertical-align: middle;
+  margin-inline-end: var(--de-section-mark-gap, 0.5em);
+  width: var(--de-section-mark-width, auto);
+  height: var(--de-section-mark-height, auto);
+  padding: var(--de-section-mark-padding, 0);
+  font-family: var(--de-section-mark-font, inherit);
+  font-size: var(--de-section-mark-size, inherit);
+  font-weight: var(--de-section-mark-weight, inherit);
+  line-height: 1.4;
+  letter-spacing: normal;
+  color: var(--de-section-mark-color, currentColor);
+  background: var(--de-section-mark-bg, transparent);
+  border-radius: var(--de-section-mark-radius, 0);
+}
+
 .document-viewer-markdown p {
   margin: 0 0 0.9em;
   white-space: pre-wrap;

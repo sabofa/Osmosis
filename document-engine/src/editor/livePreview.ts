@@ -11,6 +11,7 @@ import {
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
 import { inlineMathInLine, insideBlock, touchesSel } from './liveScan'
+import { documentRoles, roleKindOfNode, type BlockRole } from '../documentRoles'
 import { MathWidget, blocksOf, liveWidgetExtensions, rebuildLiveWidgets } from './liveWidgets'
 
 export interface LiveSpan { from: number; to: number }
@@ -82,8 +83,29 @@ export function toggleTaskAt(view: EditorView, pos: number): boolean {
 
 // ------------------------------------------------------------ decorations
 
-const lineDeco = (cls: string, style?: string) =>
-  Decoration.line({ attributes: style ? { class: cls, style } : { class: cls } })
+const lineDeco = (cls: string, style?: string, extra?: Record<string, string>) =>
+  Decoration.line({ attributes: { class: cls, ...(style ? { style } : {}), ...extra } })
+
+// Roles for the document's top-level blocks (title / lede / section), keyed by
+// the block's first-line start, over the whole tree (the viewport may start
+// mid-document but section numbers count from the top).
+function topLevelRoles(tree: ReturnType<typeof syntaxTree>): Map<number, BlockRole & { to: number }> {
+  const nodes: { from: number; to: number; type: string }[] = []
+  for (let c = tree.topNode.firstChild; c; c = c.nextSibling) nodes.push({ from: c.from, to: c.to, type: roleKindOfNode(c.name) })
+  const roles = documentRoles(nodes)
+  const map = new Map<number, BlockRole & { to: number }>()
+  nodes.forEach((n, i) => map.set(n.from, { ...roles[i], to: n.to }))
+  return map
+}
+
+const roleClass = (r: BlockRole | undefined) => (r?.role ? ` cm-lp-${r.role}` : '')
+
+function headingExtra(m: string, role: BlockRole | undefined): Record<string, string> {
+  const e: Record<string, string> = { 'data-level': m }
+  if (role?.role) e['data-role'] = role.role
+  if (role?.sectionIndex) e['data-section-index'] = String(role.sectionIndex)
+  return e
+}
 const markDeco = (cls: string) => Decoration.mark({ class: cls })
 const HIDE = Decoration.replace({})
 
@@ -128,6 +150,7 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
   const withSpace = (_from: number, mTo: number) => (doc.sliceString(mTo, mTo + 1) === ' ' ? mTo + 1 : mTo)
 
   const tree = syntaxTree(state)
+  const roles = topLevelRoles(tree)
   const lineItems = new Map<number, { depth: number; first: boolean }>()
   const quoteLines = new Set<number>()
 
@@ -142,7 +165,8 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
 
         if ((m = HEADING.exec(name))) {
           const line = doc.lineAt(nodeRef.from)
-          pushLine(line.from, lineDeco(`cm-lp-h cm-lp-h${m[1]}`))
+          const role = roles.get(nodeRef.from)
+          pushLine(line.from, lineDeco(`cm-lp-h cm-lp-h${m[1]}${roleClass(role)}`, role?.sectionIndex ? `--de-section-index:${role.sectionIndex}` : undefined, headingExtra(m[1], role)))
           if (!touches(sel, line.from, line.to)) {
             const hm = childrenOf(node, 'HeaderMark')[0]
             if (hm && hm.from === nodeRef.from) hide(hm.from, withSpace(hm.from, hm.to))
@@ -151,7 +175,13 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
         }
         if ((m = SETEXT.exec(name))) {
           const a = doc.lineAt(nodeRef.from), b = doc.lineAt(nodeRef.to)
-          for (let n = a.number; n <= b.number; n++) pushLine(doc.line(n).from, lineDeco(`cm-lp-h cm-lp-h${m[1]}`))
+          const role = roles.get(nodeRef.from)
+          // Role attributes (and so the section mark) on the first line only.
+          for (let n = a.number; n <= b.number; n++) {
+            pushLine(doc.line(n).from, n === a.number
+              ? lineDeco(`cm-lp-h cm-lp-h${m[1]}${roleClass(role)}`, role?.sectionIndex ? `--de-section-index:${role.sectionIndex}` : undefined, headingExtra(m[1], role))
+              : lineDeco(`cm-lp-h cm-lp-h${m[1]}`, undefined, { 'data-level': m[1] }))
+          }
           return
         }
         switch (name) {
@@ -272,6 +302,12 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
     })
   }
 
+  for (const [from, r] of roles) {
+    if (r.role !== 'lede') continue
+    for (let n = doc.lineAt(from).number, e = doc.lineAt(r.to).number; n <= e; n++) {
+      pushLine(doc.line(n).from, lineDeco('cm-lp-lede', undefined, { 'data-role': 'lede' }))
+    }
+  }
   for (const from of quoteLines) pushLine(from, lineDeco('cm-lp-quote'))
   for (const [from, { depth, first }] of lineItems) {
     const pad = (depth + 1) * 1.5
@@ -412,10 +448,65 @@ const INK_RULE = 'color-mix(in srgb, var(--de-text) 32%, transparent)'
 // Heading sizes come from line decorations here, so the highlight style used
 // with live preview carries none (see extensions.ts).
 export const livePreviewTheme = EditorView.theme({
+  // Numeric defaults of the typography hooks (kept out of var() fallbacks).
+  '&': {
+    '--de-title-size-default': '1.9em',
+    '--de-title-weight-default': '600',
+    '--de-title-leading-default': '1.12',
+    '--de-title-tracking-default': '-0.015em',
+    '--de-lede-size-default': '1.2em',
+    '--de-lede-leading-default': '1.5',
+    '--de-section-size-default': '1.3em',
+    '--de-section-weight-default': '700',
+    '--de-section-mark-gap-default': '0.5em',
+    '--de-section-mark-padding-default': '0',
+    '--de-section-mark-radius-default': '0',
+  },
   '.cm-lp-h': { fontFamily: 'var(--de-font-display)', fontWeight: '700', lineHeight: '1.25' },
   // Word-like steps from the body size.
   '.cm-lp-h1': { fontSize: '1.9em' },
   '.cm-lp-h2': { fontSize: '1.55em' },
+  // Document typography hooks (src/typography.md); defaults are the var()
+  // fallbacks, so a theme sets them on any ancestor.
+  '.cm-lp-title': {
+    fontFamily: 'var(--de-title-font, var(--de-font-display))',
+    fontSize: 'var(--de-title-size, var(--de-title-size-default))',
+    fontWeight: 'var(--de-title-weight, var(--de-title-weight-default))',
+    lineHeight: 'var(--de-title-leading, var(--de-title-leading-default))',
+    letterSpacing: 'var(--de-title-tracking, var(--de-title-tracking-default))',
+  },
+  '.cm-lp-lede': {
+    fontSize: 'var(--de-lede-size, var(--de-lede-size-default))',
+    color: 'var(--de-lede-color, var(--de-text-muted))',
+    lineHeight: 'var(--de-lede-leading, var(--de-lede-leading-default))',
+  },
+  '.cm-lp-section': {
+    fontFamily: 'var(--de-section-font, var(--de-font-display))',
+    fontSize: 'var(--de-section-size, var(--de-section-size-default))',
+    fontWeight: 'var(--de-section-weight, var(--de-section-weight-default))',
+    // Lines are virtualised: take the number from the line, not from a running count.
+    counterSet: 'de-section var(--de-section-index)',
+  },
+  // Inline-block (not flex): a flex line would turn each mark span into its own
+  // flex item and break the text flow. Pseudo only: never part of the text.
+  '.cm-lp-section::before': {
+    content: 'var(--de-section-mark, none)',
+    display: 'inline-block',
+    boxSizing: 'content-box',
+    verticalAlign: 'middle',
+    marginInlineEnd: 'var(--de-section-mark-gap, var(--de-section-mark-gap-default))',
+    width: 'var(--de-section-mark-width, auto)',
+    height: 'var(--de-section-mark-height, auto)',
+    padding: 'var(--de-section-mark-padding, var(--de-section-mark-padding-default))',
+    fontFamily: 'var(--de-section-mark-font, inherit)',
+    fontSize: 'var(--de-section-mark-size, inherit)',
+    fontWeight: 'var(--de-section-mark-weight, inherit)',
+    lineHeight: '1.4',
+    letterSpacing: 'normal',
+    color: 'var(--de-section-mark-color, currentColor)',
+    background: 'var(--de-section-mark-bg, transparent)',
+    borderRadius: 'var(--de-section-mark-radius, var(--de-section-mark-radius-default))',
+  },
   '.cm-lp-h3': { fontSize: '1.3em' },
   '.cm-lp-h4': { fontSize: '1.15em' },
   '.cm-lp-h5, .cm-lp-h6': { fontSize: '1em', color: 'var(--de-text-muted)' },

@@ -65,6 +65,18 @@ export const CHROME_FALLBACKS: Record<string, string> = {
   '--de-chrome-radius-round': '50%',
 }
 
+// Theme-provided document typography. Request these from theming as the
+// tokens doc-font-title, doc-title-size, doc-title-weight, doc-lede-size,
+// doc-lede-color, doc-section-mark.
+export type DocumentTypography = Partial<{
+  titleFont: string; titleSize: string; titleWeight: string
+  ledeSize: string; ledeColor: string; sectionMark: string
+}>
+const TYPOGRAPHY_VARS: Record<keyof DocumentTypography, string> = {
+  titleFont: '--de-title-font', titleSize: '--de-title-size', titleWeight: '--de-title-weight',
+  ledeSize: '--de-lede-size', ledeColor: '--de-lede-color', sectionMark: '--de-section-mark',
+}
+
 export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   const c = t.colors
   const v: Record<string, string> = {
@@ -105,6 +117,16 @@ export function tokensToCssVars(t: DocumentTokens): Record<string, string> {
   for (const k of ['surface', 'callout', 'media'] as const) {
     const n = a?.[k]
     v[`--de-alpha-${k}`] = String(typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : d[k])
+  }
+  // Optional document typography (src/typography.md). theme-core's
+  // DocumentTokens does not carry it yet, so it is read defensively; an absent
+  // or non-string value emits nothing and the CSS defaults stay in force.
+  const ty = (t as { typography?: DocumentTypography }).typography
+  if (ty && typeof ty === 'object') {
+    for (const [k, prop] of Object.entries(TYPOGRAPHY_VARS) as [keyof DocumentTypography, string][]) {
+      const val = ty[k]
+      if (typeof val === 'string' && val.trim() !== '') v[prop] = val
+    }
   }
   return { ...v, ...CHROME_FALLBACKS }
 }

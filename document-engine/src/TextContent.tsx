@@ -4,6 +4,7 @@ import { markerSpanInternal } from './offsetBoundary'
 import { usePaintHighlights } from './highlightPainter'
 import { parseBlocks, parseInline, parseInlineSegs, BLOCK_TAG, BLOCK_CLASS, type InlineRun, type MdBlock, type Seg } from './markdown'
 import { renderMath } from './mathRender'
+import { documentRoles, type BlockRole } from './documentRoles'
 import {
   graphFenceModel,
   graphErrorSummary,
@@ -320,6 +321,9 @@ export default function TextContent({
   }
 
   const blocks = parseBlocks(text)
+  // Roles (title / lede / section) for top-level blocks only; see documentRoles.ts.
+  const roleOf = new Map<MdBlock, BlockRole>()
+  documentRoles(blocks).forEach((r, i) => roleOf.set(blocks[i], r))
   let graphOrdinal = 0
 
   function renderBlock(block: MdBlock): ReactNode {
@@ -385,8 +389,17 @@ export default function TextContent({
       if (leaf.br) out.push(' ')
       out.push(renderLeaf(leaf))
     }
+    const role = roleOf.get(block)
+    const level = /^h([1-6])$/.exec(block.type)?.[1]
     return (
-      <Tag key={block.start} className={BLOCK_CLASS[block.type] || undefined} inert={inertOthers || undefined}>
+      <Tag
+        key={block.start}
+        className={BLOCK_CLASS[block.type] || undefined}
+        inert={inertOthers || undefined}
+        data-level={level}
+        data-role={role?.role}
+        data-section-index={role?.sectionIndex}
+      >
         {out}
       </Tag>
     )

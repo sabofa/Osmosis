@@ -136,6 +136,45 @@ describe('highlightCss with a malformed tokens object', () => {
   })
 })
 
+describe('optional typography tokens', () => {
+  it('missing typography leaves the defaults untouched (no --de-title/lede/section vars)', () => {
+    const v = tokensToCssVars(T)
+    expect(Object.keys(v).filter((k) => /^--de-(title|lede|section)/.test(k))).toEqual([])
+  })
+  it('passes theme-provided extras through; ignores blanks and non-strings', () => {
+    const t = { ...T, typography: { titleFont: 'Serif', titleSize: '2.5em', titleWeight: '600', ledeSize: '1.2em', ledeColor: 'X', sectionMark: '""', bogus: 'z' } } as unknown as typeof T
+    const v = tokensToCssVars(t)
+    expect(v['--de-title-font']).toBe('Serif')
+    expect(v['--de-title-size']).toBe('2.5em')
+    expect(v['--de-title-weight']).toBe('600')
+    expect(v['--de-lede-size']).toBe('1.2em')
+    expect(v['--de-lede-color']).toBe('X')
+    expect(v['--de-section-mark']).toBe('""')
+    expect(Object.keys(v).some((k) => k.includes('bogus'))).toBe(false)
+    const bad = { ...T, typography: { titleFont: '  ', titleSize: 5 } } as unknown as typeof T
+    expect(Object.keys(tokensToCssVars(bad)).filter((k) => /^--de-title/.test(k))).toEqual([])
+    expect(() => tokensToCssVars({ ...T, typography: null } as unknown as typeof T)).not.toThrow()
+  })
+})
+
+describe('typography hooks in the CSS', () => {
+  const css = readFileSync(fileURLToPath(new URL('./DocumentViewer.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+  it('every hook has a default and the section mark is pseudo-only', () => {
+    for (const p of ['title-font', 'title-size', 'title-weight', 'title-leading', 'title-tracking', 'lede-size', 'lede-color', 'lede-leading', 'section-font', 'section-size', 'section-weight', 'section-mark-gap', 'section-mark-bg', 'section-mark-color', 'section-mark-radius']) {
+      expect(css, p).toContain(`var(--de-${p},`)
+    }
+    expect(css).toContain("content: var(--de-section-mark, none)")
+    expect(css).toContain('counter-reset: de-section')
+    expect(css).toContain('counter-increment: de-section')
+    expect(css).toContain("[data-role='section']::before")
+  })
+  it('has no colour/font/px literals in the typography rules', () => {
+    const block = css.slice(css.indexOf('counter-reset: de-section'), css.indexOf('.document-viewer-markdown p {'))
+    expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|\d+px/)
+    expect(block).not.toMatch(/font-family:[ 	]*(?![ 	]|var\()/)
+  })
+})
+
 describe('DocumentViewer.css guard', () => {
   const css = readFileSync(fileURLToPath(new URL('./DocumentViewer.css', import.meta.url)), 'utf8')
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '')
