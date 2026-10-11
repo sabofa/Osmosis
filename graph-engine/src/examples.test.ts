@@ -245,3 +245,22 @@ describe('the Styles examples', () => {
     })
   }
 })
+
+describe('Frame examples', () => {
+  const cfg = (label: string) => parseSpec(EXAMPLES.find((e) => e.label === label)!.spec).config
+  it('carry the frame directives they demonstrate', () => {
+    const frame = EXAMPLES.filter((e) => e.group === 'Frame')
+    expect(frame.length).toBe(6)
+    const pi = cfg('Frame: pi ticks')
+    expect(pi.xstep).toBeCloseTo(Math.PI / 2)
+    expect(pi.space.ticks.x).toBeTruthy()
+    expect(cfg('Frame: semi-log').scales).toMatchObject({ y: 'log' })
+    expect(cfg('Frame: semi-log').scales.x).not.toBe('log')
+    expect(cfg('Frame: log-log').scales).toMatchObject({ x: 'log', y: 'log' })
+    const aspect = cfg('Frame: 2:1 aspect with titles').space
+    expect(aspect.aspect).toEqual({ kind: 'ratioXY', x: 2, y: 1 })
+    expect(aspect.titles).toMatchObject({ x: 'time (s)', y: 'height (m)' })
+    expect(cfg('Frame: locked').lock).toBe(true)
+    expect(cfg('Frame: deep zoom').bounds).toMatchObject({ xMin: 999.99999999, xMax: 1000.00000001 })
+  })
+})

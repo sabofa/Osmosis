@@ -24,6 +24,7 @@ export const EXAMPLE_GROUPS = [
   'Nets and paths',
   'Styles',
   'Calculus',
+  'Frame',
 ] as const
 
 export type ExampleGroup = (typeof EXAMPLE_GROUPS)[number]
@@ -1443,5 +1444,52 @@ y < ln(x)`,
     group: 'Calculus',
     spec: `@bounds: -1, 6, -1, 6
 x + y <= 4 if x >= 0 and y >= 0 and y <= 2x + 1`,
+  },
+  // Frame (track 4, calc P4): the plot frame's authored pieces, to look at in the app.
+  {
+    label: 'Frame: pi ticks',
+    group: 'Frame',
+    spec: `@bounds: 0, 6.283185307179586, -1.2, 1.2
+@xstep: pi/2
+y = sin(x)`,
+  },
+  {
+    label: 'Frame: semi-log',
+    group: 'Frame',
+    spec: `@bounds: 0, 10, 0.0001, 10
+@yscale: log
+y = e^(-x)`,
+  },
+  {
+    label: 'Frame: log-log',
+    group: 'Frame',
+    spec: `@bounds: 0.1, 10, 0.01, 1000
+@xscale: log
+@yscale: log
+y = x^3`,
+  },
+  {
+    label: 'Frame: 2:1 aspect with titles',
+    group: 'Frame',
+    spec: `@bounds: -3, 3, -1, 9
+@aspect: 2:1
+@titles: x "time (s)", y "height (m)"
+y = x^2`,
+  },
+  // A 1e-8 window around x = 1000. A render check only: it needs the origin-relative
+  // rendering (calc 5.5) to draw a clean parabola and honest tick labels.
+  {
+    label: 'Frame: deep zoom',
+    group: 'Frame',
+    spec: `@bounds: 999.99999999, 1000.00000001, 999999.99998, 1000000.00002
+y = x^2`,
+  },
+  {
+    label: 'Frame: locked',
+    group: 'Frame',
+    spec: `@bounds: -5, 5, -3, 3
+@lock
+y = x^2 - 3
+y = sin(x)`,
   },
 ]
