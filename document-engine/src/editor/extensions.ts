@@ -21,6 +21,7 @@ import { structureKeymap } from './structureKeys'
 import { compositionGuard } from './compositionGuard'
 import { altGraphObserver } from './editorCommands'
 import { wordSelectionStyle } from './selectionFeel'
+import { pasteHtmlExtension } from './pasteHtml'
 import { smoothCaret, smoothCaretCompartment, type SmoothCaretOptions } from './smoothCaret'
 
 export interface EditorExtensionOptions {
@@ -298,6 +299,7 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     comfortScroll,
     compositionGuard,
     altGraphObserver,
+    pasteHtmlExtension,
     wordSelectionStyle,
     autocorrectSlot(opts.autocorrect !== false),
     // Above the Markdown keymap's own Enter / Backspace, below autocorrect's revert.

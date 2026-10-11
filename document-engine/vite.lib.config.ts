@@ -40,6 +40,9 @@ export default defineConfig({
       external: [
         'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'pdfjs-dist', /^pdfjs-dist\//,
         /^@codemirror\//, /^@lezer\//,
+        // Turndown (HTML paste) is a regular dependency too: one hoisted copy,
+        // and the host's bundler picks its browser build (no domino).
+        'turndown', 'turndown-plugin-gfm',
       ],
     },
   },
