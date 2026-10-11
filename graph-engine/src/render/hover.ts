@@ -191,16 +191,21 @@ export class HoverResolver {
     // "stroke cut into the paper" treatment (see SceneRenderer.ts's point
     // builder) so the hover indicator reads as the same family of marker.
     // Unit circles scaled per axis, so a round dot stays round on screen when px-per-unit differ in x and y.
+    // Halo and dot sit in a group on the origin with origin-relative positions, like the guide line.
+    const o = camera2d.origin()
+    const markers = new THREE.Group()
+    markers.position.set(o.x, o.y, 0)
+    this.group.add(markers)
     const haloR = pixelToWorldXY(7)
     const halo = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: backgroundColor }))
     halo.scale.set(haloR.x, haloR.y, 1)
-    halo.position.set(target.point.x, target.point.y, 0.1)
-    this.group.add(halo)
+    halo.position.set(target.point.x - o.x, target.point.y - o.y, 0.1)
+    markers.add(halo)
     const dotR = pixelToWorldXY(6)
     const dot = new THREE.Mesh(new THREE.CircleGeometry(1, 24), new THREE.MeshBasicMaterial({ color: hoverColor }))
     dot.scale.set(dotR.x, dotR.y, 1)
-    dot.position.set(target.point.x, target.point.y, 0.11)
-    this.group.add(dot)
+    dot.position.set(target.point.x - o.x, target.point.y - o.y, 0.11)
+    markers.add(dot)
 
     const screen = camera2d.worldToScreen(target.point.x, target.point.y, rectWidth, rectHeight)
     const readout = hoverReadout(target.point, camera2d.getBounds(), scales)

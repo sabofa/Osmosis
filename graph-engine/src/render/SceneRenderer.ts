@@ -344,8 +344,13 @@ export class SceneRenderer {
   private applyLock(locked: boolean) {
     if (locked && !this.controller.locked) {
       this.controller.cancel() // a gesture in flight must not strand
+      for (const id of this.activePointers) {
+        try { this.canvas.releasePointerCapture(id) } catch { /* not captured */ }
+      }
       this.activePointers.clear()
-      this.interaction.pointerUp()
+      const moved = this.interaction.pointerUp()
+      this.applyView() // the cancelled drag's dragEnd never reaches onIntents
+      if (moved && !this.controller.moving) this.settle()
     }
     this.controller.locked = locked
     this.canvas.tabIndex = locked ? -1 : 0

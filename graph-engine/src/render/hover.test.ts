@@ -89,7 +89,7 @@ describe('hover dot on an anisotropic view', () => {
     const resolver = new HoverResolver()
     const s = camera.worldToScreen(0, 0, CANVAS, CANVAS)
     resolver.resolve(scene, 'all', s, { x: 0, y: 0 }, camera, CANVAS, CANVAS, HOVER_COLOR, BG_COLOR, pixelToWorld, (px) => ({ x: px * 0.01, y: px * 0.02 }))
-    const [halo, dot] = resolver.group.children as THREE.Mesh[]
+    const [halo, dot] = (resolver.group.children[0] as THREE.Group).children as THREE.Mesh[]
     expect(halo.scale.x).toBeCloseTo(0.07)
     expect(halo.scale.y).toBeCloseTo(0.14)
     expect(dot.scale.x).toBeCloseTo(0.06)
@@ -230,8 +230,19 @@ describe('hover readout on log axes', () => {
     const r = hoverReadout({ x: 2, y: 1 }, bounds, log)
     expect(r.worldX).toBeCloseTo(100)
     expect(r.worldY).toBe(1)
-    // local extent: the smaller of x (10^4 - 10^0 about 100 -> huge) and y (4)
+    // local extent: the smaller of x (10^4 - 10^0 = 9999) and y (4)
     expect(r.span).toBe(4)
+  })
+  it('x wins the span when the log x extent is the smaller one', () => {
+    // u in [0, 0.2] at u=0.1: 10^0.2 - 10^0 is about 0.585, well under the y span of 4
+    const r = hoverReadout({ x: 0.1, y: 1 }, { xMin: 0, xMax: 0.2, yMin: -1, yMax: 3 }, log)
+    expect(r.span).toBeCloseTo(Math.pow(10, 0.2) - 1, 9)
+    expect(r.span).toBeLessThan(4)
+  })
+  it('a huge window never gives NaN', () => {
+    const r = hoverReadout({ x: 0, y: 1 }, { xMin: -400, xMax: 400, yMin: -1, yMax: 3 }, log)
+    expect(Number.isNaN(r.span)).toBe(false)
+    expect(Number.isFinite(r.span) || r.span === Infinity).toBe(true)
   })
   it('linear is unchanged', () => {
     const r = hoverReadout({ x: 2, y: 1 }, bounds)
@@ -261,5 +272,12 @@ describe('hover guide line is origin-relative', () => {
     resolver.refreshGuideLine(camera)
     expect(line.geometry.getAttribute('position').getX(1)).toBeCloseTo(3e-9, 12)
     expect(line.geometry.getAttribute('position').getY(0)).toBeCloseTo(-1e-8, 12)
+    const markers = resolver.group.children[1] as THREE.Group
+    expect(markers.position.x).toBe(1000)
+    for (const m of markers.children) {
+      expect(Math.abs(m.position.x)).toBeLessThan(1e-8)
+      expect(m.position.x).toBeCloseTo(3e-9, 12)
+    }
+    expect(markers.children.length).toBe(2)
   })
 })
