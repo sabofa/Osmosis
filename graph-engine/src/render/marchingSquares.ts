@@ -1,11 +1,9 @@
-import type { Vec2 } from '../scene/types'
+import type { Bounds, Vec2 } from '../scene/types'
 
-export interface Bounds {
-  xMin: number
-  xMax: number
-  yMin: number
-  yMax: number
-}
+// Bounds moved to the scene contract (it is the sampler's view as well as the
+// tracer's); re-exported so the renderer modules that import it from here keep
+// working.
+export type { Bounds }
 
 // Edge indices per cell: 0=bottom, 1=right, 2=top, 3=left.
 // table[mask] lists which edge pairs get a segment, where mask bit i is set

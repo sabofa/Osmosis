@@ -29,31 +29,67 @@ engine — the mode matrix, the markdown editor, the spreadsheet page, and the
 text-encoding standard both engines obey. **This document owns the shared
 document format**; that one references it.
 
-## Milestones
+## Build order
 
-**Milestone A — the graphing engine proper: tracks 1 through 4.** The rest of
-Osmosis and the document-engine work wait behind this. The point of the
-boundary is that tracks 1-4 make the graph engine genuinely good at its
-existing job, and everything after expands its job.
+Revised 2026-09-22. This supersedes the earlier A/B/C milestone grouping. The
+order interleaves engine work with the wider Osmosis build, because several
+engine tracks are worth little until the surfaces that host them exist.
 
-**Milestone B — track 5**, customization and UI, so the engine looks
-deliberate before it is expanded.
-
-**Milestone C — tracks 6 and 7**, the diagram engine and the live tutor layer.
-
-| Track | Subject | Milestone |
+| # | Step | Owned by |
 |---|---|---|
-| 1 | Reading the graph: feature points, hover, axis labels, step scaling | A |
-| 2 | Geometry v2: construction-based figures and solids | A |
-| 3 | 3D / multivariable: the chart layer the 3D view never had | A |
-| 4 | Calc-proofing the 2D engine | A |
-| 5 | Customization and UI | B |
-| 6 | Diagram / flowchart mode | C |
-| 7 | Live tutor layer | C |
+| 1 | **Milestone A — tracks 1-4** *(in flight)* | this spec |
+| 2 | 2a — retention loop and identity backfill | Osmosis app |
+| 3 | **Graph theme tokens**; **exact/symbolic values**; decide sandbox ownership | this spec (track 5 split; cross-cutting) |
+| 4 | **D1-D3** — viewer/encoding, markdown editor, spreadsheet | document-engine spec |
+| 5 | Sandbox build | Osmosis app |
+| 6 | Shell docs, then shell + item presentation | Osmosis app |
+| 7 | **Container / multi-page — the tie-in** | this spec (document model) |
+| 8 | **Track 6, track 7, D4** — diagrams, live tutor, code pages | both specs |
+| 9 | **Track 5 + D5 as one pass** | both specs |
+| 10 | Homework and the rest | Osmosis app |
 
-Track 1 is first within Milestone A, because the live tutor tools selected for
-track 7 (feature marking and measurement) depend on feature points being
-correct and typed, and because tracks 2 and 4 both annotate features.
+**After Milestone A the engine work pauses**, while the sandbox, items and the
+rest of Osmosis are built out. Steps 7 onward depend on those surfaces
+existing.
+
+Within Milestone A, track 1 comes first: the live tutor tools selected for
+track 7 depend on feature points being correct and typed, and tracks 2 and 4
+both annotate features.
+
+### What the revision changes
+
+**Track 5 splits in two.** Its *theme tokens* move early, to step 3; the rest
+of its customization and UI work moves late, to step 9. This is the right cut:
+the token set is a **contract** that the document engine's D5 must share, so it
+has to be settled before D1-D3 build against it, while the visual polish it
+enables is only worth doing once there is a finished surface to polish. Step 9
+pairs track 5 with D5 deliberately — a plot, a sheet and a page of prose in one
+document must read as one object, which cannot be achieved by two passes months
+apart.
+
+**The container moves out on its own, to step 7.** The IR still takes its full
+shape during Milestone A (see "What lands when"); only the serialized
+multi-page container waits, and it now waits until after the shell exists to
+open files with.
+
+**D4 (code pages) detaches from D1-D3** and moves to step 8 alongside tracks 6
+and 7, which suits it: an execution surface wants the diagram engine for
+call-graph and data-structure rendering, and the live layer for tutor-driven
+stepping.
+
+### A sequencing consequence worth stating
+
+**D3 lands at step 4, but the container that makes its headline feature work
+lands at step 7.** The spreadsheet is specified as "the data page of the
+document, whose defining property is that other pages read from it" —
+`scatter from Data!A2:B40`. Cross-page references need multi-page documents.
+
+So D3 builds the grid, the formula engine, the dependency graph and CSV import
+against a single-page document, and the cross-page reference it exists to serve
+cannot be demonstrated until step 7. That is workable, but it should be a
+decision rather than a surprise: either D3 ships knowingly incomplete in its
+most important dimension for three steps, or a minimal cross-page reference
+mechanism is pulled forward with it.
 
 ## What v1 got wrong
 
@@ -325,6 +361,11 @@ rasterizer. The look being complained about comes from stock
 `MeshLambertMaterial` plus a missing frame; both are addressed without giving
 up the parts three.js does well.
 
+*Revised 2026-09-26, for space:* the paragraph above no longer holds for space,
+which is now a hand-made WebGL2 engine with no three.js. See Track 3,
+"Revised 2026-09-26 — space is a hand-made engine". The 2D plot renderer is
+unaffected.
+
 **Test-style solids are 2D drawings, not 3D scenes.** A cylinder in a test
 figure is an ellipse, two verticals and a dashed back-arc: an axonometric
 projection with hidden-line convention, deterministic, no camera, no lighting.
@@ -355,6 +396,52 @@ of a correct one-shot render.
 
 **Extensions register renderers or widgets, never outcome shapes.** If the
 engine grows a plugin point, it cannot touch the outcome path.
+
+**Values can be exact, and exactness comes from construction rather than from
+guessing.** Every number the engine displays currently goes through
+`formatCoord`, which produces a decimal. That is not a formatting preference;
+it silently destroys mathematical content. A unit circle labelled `0.866`
+instead of `√3/2` teaches nothing, a radian axis labelled `1.571` instead of
+`π/2` is unreadable, and an intercept at `√3` shown as `1.73` has lost the fact
+that it is exact.
+
+A displayed value therefore carries an optional **exact form** alongside its
+number. The closed set of forms is deliberately small — `(p/q)·√r·πᵉ`, with
+`p`, `q` integers, `r` a squarefree positive integer (`r = 1` meaning no
+radical) and `e ∈ {0, 1}`. That covers `1/2`, `√2`, `√3/2`, `2√5`, `π`, `π/6`,
+`3π/2` and `0`, which is the range school and undergraduate work actually uses.
+**Sums are out of scope** — `1 + √2` and `4 + 2√3` fall back to decimal — as
+are `e`, logarithms and everything transcendental beyond π.
+
+**Exactness is structural, never inferred.** An exact form exists only when the
+thing that produced the value knows it: a literal `sqrt(3)/2` written in the
+source, a π-scaled axis whose ticks are multiples of π by construction, a
+closed-form triangle solver that produced `4√3`. The engine does **not** inspect
+a float and guess that `0.3333333` was meant to be `1/3`. Inferring exactness is
+a small and tempting feature that asserts something false about the mathematics
+whenever it is wrong, and a wrong exact label is worse than an honest decimal.
+
+```
+@values: auto        # show exact where it is known, decimal otherwise (default)
+@values: exact       # show exact where known; a value with no exact form is an error
+@values: decimal     # always decimal, ignoring any exact form
+```
+
+`auto` is the default and changes nothing today, because nothing currently
+produces exact forms; it begins paying off as producers are added. `exact` is
+for figures where a decimal leaking through is a defect worth failing on.
+
+One formatter serves every surface — tick labels, point and feature coordinate
+labels, hover readouts, measure labels and table cells — so exactness cannot be
+correct in one place and lost in another. Inside the engine the rendered form is
+Unicode text (`√3/2`, `π/6`, `-2√5/3`); the formatter also exposes a LaTeX
+string for hosts that can typeset it.
+
+**Where this lands in the build order:** early, alongside theme tokens at step
+3. Like them it is a contract rather than a feature — geometry's measure labels,
+the unit circle, and calc-proofing's π-scaled trig axes and radical intercepts
+all build against it, and retrofitting it means changing what a coordinate is
+allowed to be after three tracks have assumed otherwise.
 
 **The live protocol separates durable from ephemeral operations.** Overlays,
 parameter values, revealed statements and snapshots are state: they ride the
@@ -424,13 +511,23 @@ mode.
 
 ```
 @step-mode: nice        # 1-2-5 x 10^n ladder (current behavior, default)
-@step-mode: geometric   # the step multiplies by its own base
+@step-mode: geometric   # the step doubles upward and floors at its own base
 @step-mode: fixed       # never rescale, guarded against pathological counts
 ```
 
-Under `geometric`, base 8 runs 8 -> 64 -> 512 zooming out and 8 -> 1 -> 0.125
-zooming in; base 10 runs 10 -> 100 -> 1000. The author's chosen step family
-survives zoom instead of being replaced by the universal ladder.
+Under `geometric`, base 8 runs 8 -> 16 -> 32 -> 64 zooming out, and **zooming
+in never goes below 8 at all** — the base is a floor, not just a starting
+point.
+
+Both halves of that exist for one reason, and it is pedagogical rather than
+aesthetic: the mode is how an author withholds coordinates. A grid that
+subdivides back to single units as the learner zooms in hands them the exact
+values the question was meant to hide, so the floor is the feature and the
+upward ladder is the concession. Every step stays a whole multiple of the
+author's base.
+
+A consequence worth stating: under doubling, base 10 runs 10 -> 20 -> 40 -> 80
+and never reaches 100.
 
 ## Track 2 — Geometry v2
 
@@ -457,7 +554,36 @@ circle x circle), `centroid`, `incenter`, `circumcenter`, `orthocenter`,
 Solved shapes: `triangle` in the five classic cases, `right triangle`,
 `rectangle`, `square`, `parallelogram`, `trapezoid`, `regular n-gon`.
 
-Circle vocabulary — absent in v1 beyond the outline: `chord`, `arc`, `sector`,
+**Circle vocabulary, in full (2026-09-23).** v1 could draw a circle's outline
+and nothing else, which is most of why circle geometry was unauthorable. The
+vocabulary, with what each one is *for*:
+
+| Construction | Why it is needed |
+|---|---|
+| `chord P-Q on O` | The basic circle segment; power-of-a-point and inscribed-angle work start here |
+| `arc P-Q on O` | Minor/major arc as a drawn path, with a stated direction so which arc is meant is never ambiguous |
+| `sector P-Q on O` | The filled wedge — area problems |
+| `segment P-Q on O` | The region between a chord and its arc, distinct from the sector |
+| `tangent at P on O` | The tangent line at a point of the circle |
+| `tangent from P to O` | The two tangent lines from an external point; **two solutions, so it needs the same ordering rule as `intersect`** |
+| `secant through P on O` | A line cutting the circle twice — the other half of power-of-a-point |
+| `radius O to P`, `diameter P-Q on O` | Drawn as marked segments rather than left implicit |
+| `inscribed angle P-Q-R on O` | The angle-at-the-circumference mark |
+| `central angle P-Q on O` | The angle-at-the-centre mark, and the thing an arc measure names |
+
+**Arc measure and radians.** An arc has a measure, and it is the measure a
+problem asks about. `label: arc PQ` prints it, honouring `@angle` — so degrees
+or radians, and **radians print as multiples of π once exact values land**
+(`π/3`, not `1.047`). Until then they print as decimals like every other
+measure. An arc's measure and its central angle are the same number, and the
+engine should not let those disagree.
+
+**Tangency needs a tolerance rule, not an equality test.** Whether a line
+touches a circle is a floating-point question after any chain of
+constructions. Use the shared `GEOM_EPS`, and make the near-miss case fail
+legibly rather than drawing a "tangent" that visibly crosses.
+
+Original summary line, kept for continuity — `chord`, `arc`, `sector`,
 `segment` (the region), `tangent at P`, `tangent from P`, `radius`, `diameter`,
 central and inscribed angle marks, and `incircle`/`circumcircle` of a triangle,
 which carry the correct radius (`r = Area/s`, `R = abc/(4*Area)`) and tangent
@@ -474,16 +600,261 @@ intersecting a circle with a ray yields zero, one or two triangles
 simultaneously, which is precisely the picture that answers "why can't this be
 determined." A constraint solver would have silently picked one.
 
-### Figure mode
+### Measure labels
 
-`@mode: figure` renders paper rather than a plot: no axes, no grid, locked 1:1
-aspect, auto-fit with padding, and the "figure not drawn to scale" convention
-available as a flag that permits labels to disagree with drawn lengths.
+v1 can only write a measure as free text — `angle: A-B-C label: 60°` — which
+nothing checks against the figure. A constructive engine has already solved the
+triangle, so refusing to print what it computed wastes the model's main
+advantage.
 
-**Constructions are orthogonal to mode.** `midpoint`, `foot`, `intersect` and
-`bisector` all work in graph mode with axes and grid on, alongside `y = x^2`.
-Mode controls chrome only. Coordinate-plane geometry is therefore better served
-by v2 than by v1, not narrowed by it.
+```
+label: AB               # prints the computed length
+label: AB = 8           # prints 8, and FAILS if the computed length is not 8
+label: AB = x           # prints "x" — a symbolic placeholder, no assertion
+label: angle A          # prints the computed measure
+label: angle A = 30     # prints 30, and fails if the computed measure is not 30
+label: angle A = θ      # symbolic
+label: arc PQ           # arc measure
+```
+
+**The `= <number>` form asserts.** A figure whose labels contradict its own
+geometry is a wrong figure, and this is the cheapest possible way to catch one.
+The assertion is suppressed by the not-to-scale flag below: under
+`@scale: false` the stated value is printed and the computed value ignored,
+which is exactly what that flag is for. The two features are designed together
+— without the assertion the flag is meaningless, and without the flag the
+assertion would make deliberately-not-to-scale figures unauthorable.
+
+Angle measures honour `@angle: degrees|radians`, so `label: angle A` prints
+`30°` or `π/6` depending on the mode — and `π/6` rather than `0.524` only
+because exact values exist (see Cross-cutting decisions). This is the seam
+where that contract earns its place.
+
+### The unit circle
+
+Absent from v1 entirely, and the central object of trigonometry teaching.
+
+```
+unit-circle:                    # the standard figure: circle, axes, special angles
+unit-circle: angles 30          # mark every 30 degrees
+unit-circle: angles pi/6        # the same, written in radians
+unit-circle: mark 3*pi/4        # terminal ray, labelled point, reference angle
+unit-circle: quadrant 1         # restrict to one quadrant
+```
+
+Draws the circle with marked special angles, each carrying both its angle label
+(`π/6` or `30°`, following `@angle`) and its **exact** coordinates
+(`(√3/2, 1/2)`), plus a terminal ray and reference-angle mark for any marked
+angle.
+
+**This feature is the reason exact values are a contract and not a nicety.** A
+unit circle labelled with decimals is not a unit circle; it is a circle of
+radius one with the interesting part removed. Do not build this before exact
+display exists.
+
+Works in figure mode and in graph mode — a unit circle drawn on real axes is a
+different and equally common picture from one drawn on bare paper.
+
+### Figure mode — a separate renderer, not hidden chrome
+
+**Revised 2026-09-22.** Figure mode is not the plot renderer with its axes
+switched off. It is **its own renderer**, selected the way `@mode: table`
+already selects `TableView`: the three.js renderer is disposed entirely and a
+figure view takes over. No camera, no canvas, no pan/zoom, no plot chrome —
+because a geometry figure is paper, not a graph with things drawn on it.
+
+**Figures render as SVG.** The deciding argument is text. A geometry figure is
+mostly labels — vertex names, side measures, angle values — and in three.js
+those are sprite atlases with hand-computed metrics, which is the entire reason
+label layout is a specced sub-phase with a collision-scoring algorithm. In SVG
+text is native and `getBBox()` gives real metrics, which collapses most of that
+problem. The rest follows: a figure is tens of elements rather than thousands
+of curve samples, so canvas's throughput advantage does not apply; dashed
+strokes, arcs and tick marks are SVG primitives instead of hand-built geometry;
+output is crisp at print resolution and embeds directly into a document page;
+and there is no WebGL context to lose.
+
+`@mode` therefore takes three values: `graph | figure | table`.
+
+Figure mode locks 1:1 aspect, auto-fits with padding, and supports the "figure
+not drawn to scale" flag that permits labels to disagree with drawn lengths.
+
+#### Constructions stay shared
+
+**The construction layer is maths and belongs to neither renderer.**
+`midpoint`, `foot`, `intersect`, `bisector`, the triangle solvers and the
+centres all produce plain coordinates, and **both renderers consume them**.
+
+So `M = midpoint A-B` still works in graph mode beside `y = x^2`, on real axes,
+with grid and numbers. "Geometry has no graphing interface" means the *figure
+renderer* has none — not that constructions are banished from graphs.
+Coordinate-plane geometry remains better served by v2 than by v1, which is the
+commitment this document made earlier and still makes.
+
+#### Selection is automatic, but declaring it is the house rule
+
+Mode is inferred when not stated: a spec whose drawable content is entirely
+geometry renders as a figure; a spec containing any plotted function
+(`y = f(x)`, implicit curves, regions, polar, parametric, fields, scatter,
+surfaces) renders as a graph, constructions included.
+
+**Authors — and the tutor above all — should state the mode explicitly
+anyway, including `@mode: graph`.** Inference is a safety net, not the
+recommended path, and the reason is concrete: under inference, adding one
+plotted function to a figure silently changes the entire presentation from
+paper to plot. An explicit `@mode:` line makes that impossible and makes the
+author's intent legible to the next reader. A spec that declares its mode
+cannot be surprised by its own content.
+
+This must be stated as a rule in `GRAPH-DSL-REFERENCE.md` and, more
+importantly, in `server/src/domain/bootstrap.ts`'s condensed reference — the
+one the tutor actually reads. Write it as hygiene the tutor is expected to
+follow, not as an optional stylistic note.
+
+#### Revision 2026-09-23: the figure view is navigable, not static
+
+An earlier decision made the figure view deliberately static — no pan, no zoom,
+no camera. **That is reversed.** A competition figure is dense enough that the
+reader needs to get closer to part of it, and a figure that cannot be
+manipulated is a picture rather than a tool.
+
+The figure view gains pan and zoom over the SVG. This is cheaper than the
+equivalent on canvas: panning and zooming an SVG is a viewBox transform, with
+no redraw and no re-layout, so the figure stays crisp at any magnification
+rather than resampling. Labels keep their on-screen size as the view zooms, the
+same convention the plot renderer already uses for tick labels and markers.
+
+What stays true from the original decision: the figure has **no plot camera**.
+There are no axes, no grid and no world-coordinate readout. Navigation is
+"move and magnify the drawing", not "change the plotted window".
+
+#### Geometry notation, not just text
+
+Labels must be able to carry real mathematical notation, because that is what
+the subject is written in:
+
+- **Segment** — an overbar: the segment through two vertices
+- **Ray** and **line** — the corresponding arrow and double-arrow overmarks
+- **Angle** — `∠ABC`; **triangle** — `△ABC`; **arc** — the arc overmark
+- **Relations** — congruent `≅`, similar `~`, parallel `∥`, perpendicular `⊥`
+- **Degrees** — `°`, and exact angle measures once exact values land
+
+Overbars and arrow marks are drawn as SVG geometry above the glyphs rather than
+composed from Unicode combining characters, which render inconsistently across
+fonts and cannot be positioned reliably. The relation symbols are ordinary
+characters and need no special handling.
+
+#### A givens table
+
+Dense figures reach a point where inline labelling makes them worse, not
+better. The renderer therefore supports an optional **boxed panel** — placed in
+a corner or beside the figure — listing given values and relations rather than
+crowding them onto the drawing. This is the convention competition figures
+already use, and it is the pressure valve for the label-density problem: when
+placement gets hard, move some of it out of the drawing entirely.
+
+Inline and boxed labelling coexist; an author chooses per label.
+
+**Revised 2026-09-23: it is a table, not a list of lines.** The first
+implementation stacked each given as one run of text inside a border. That is
+a caption block, and it stops being readable at the length a competition
+problem actually reaches. A statement of givens is tabular data — a subject, a
+relation, and a value — and it should be set as one:
+
+- **Aligned columns.** Subjects share a left edge, relations share theirs,
+  values share theirs. Ragged rows are what makes a stacked list hard to scan.
+- **An optional header**, so the box can say what it is (`Given`, `Find`).
+- **Rules between rows**, or at minimum consistent row rhythm, so a long list
+  stays legible.
+- **Notation inside cells** — a cell holds `AB` with its overbar, `∠BAC`,
+  `⊥`, `≅`, `≅`-marked congruences, all of it. Column alignment must measure
+  the *rendered* run including its overmarks, not the bare glyphs, or the
+  columns will be visibly off wherever a bar appears.
+
+This is **not** the existing `@mode: table` data table, which exists to present
+rows of data and belongs to a different part of the engine. A givens table is
+part of the figure, sized and placed with it, and inside the same SVG.
+
+**Sections.** A problem often states givens and then asks for something. The
+table should support more than one section — conventionally `Given` and
+`Find` — rather than forcing everything into one undifferentiated list.
+
+#### Figures and tables share a view
+
+`@mode` is currently one-of, which forces a problem containing both a figure
+and a data table to choose. Real problems contain both.
+
+So the renderer composes **panels** rather than selecting a single mode: a spec
+containing geometry and table statements renders both, laid out side by side.
+Mode selection still exists and still matters — it decides which renderer draws
+the *drawable* content — but a table is additive rather than exclusive.
+
+`@mode: table` keeps its current meaning of "table only", so nothing already
+stored changes.
+
+#### The complexity target is AIME / AMC 12, not SAT
+
+This matters because it changes the renderer's requirements rather than just
+its vocabulary. A competition figure is not a bigger SAT figure:
+
+- **Element count is an order of magnitude higher.** Twenty to fifty objects in
+  one configuration is normal — multiple circles, cevians, auxiliary lines,
+  a dozen or more labelled points.
+- **Label density is the binding constraint.** With twenty labelled points,
+  naive placement is unreadable, and unreadable means wrong. Label layout is
+  therefore **core to the renderer, not a later sub-phase** — the single
+  decision most likely to determine whether this is usable.
+- **Overlap is the norm, so draw order is semantic.** Fills must sit behind
+  lines, marks behind points, labels above everything. SVG paints in document
+  order, so the renderer emits explicit layers rather than relying on emission
+  sequence.
+- **Auxiliary construction lines are first-class**, usually dashed, and often
+  outnumber the "real" figure.
+- **Long construction chains accumulate floating-point drift.** A point derived
+  through six steps and then tested for concurrency with another such point
+  needs a tolerance policy, not exact comparison.
+
+Vocabulary this target implies, beyond the SAT set already specced: excircles,
+the nine-point circle, radical axes, power-of-a-point configurations,
+internally and externally tangent circles, cevians and their concurrency,
+cyclic quadrilaterals, and homothety/spiral-similarity constructions. Those are
+later phases; what matters now is that the renderer is built to carry them.
+
+#### 3D solids render through the same SVG renderer
+
+The spec already decided that test-style solids are 2D drawings rather than 3D
+scenes — computed as 3D geometry, projected through a fixed axonometric camera,
+emitted as 2D lines with hidden-line convention. **SVG is the natural target
+for exactly that**, and it means there is no third renderer: a projection module
+turns 3D geometry into 2D primitives plus a visible/hidden classification, and
+the figure renderer draws them, dashing what is hidden.
+
+Competition 3D adds tetrahedra, skew lines, dihedral angles, inscribed and
+circumscribed spheres, and cross-sections of all of them — but none of it
+changes the pipeline, only what feeds it.
+
+#### A side benefit worth designing for
+
+SVG elements are DOM nodes, so hit-testing and highlighting are free. Track 7's
+tutor tools — "point at this", "mark that intersection", emphasis and spotlight
+— are substantially cheaper against SVG than against a canvas, where every
+interaction needs manual hit-testing against projected coordinates. Give
+emitted elements stable identity (a data attribute naming the statement and
+object that produced them) so that layer can address them later without a
+second lookup mechanism.
+
+#### A migration consequence to face deliberately
+
+Inference changes how **existing stored questions render**. A v1 spec using
+`polygon:`, `circle:`, `angle:` and `tick:` with no plotted function currently
+draws on the graphing canvas with axes and grid; under inference it becomes a
+bare figure. That is almost certainly the better picture — those specs were
+drawing geometry onto a plot because there was nowhere else to draw it — but it
+is a change to content already in the bank, not a new-content-only feature.
+
+The escape hatch is an explicit `@mode: graph`, which restores the old
+presentation exactly. Before this ships, existing geometry questions should be
+swept and spot-checked rather than assumed fine.
 
 ### Label layout
 
@@ -507,6 +878,7 @@ camera, and emitted as 2D lines drawn by the figure renderer.
 Slicing a cone yields circle, ellipse, parabola and hyperbola: the same conics
 the 2D engine plots, derivable from the figure that defines them.
 
+*(Superseded 2026-09-25 by the glass rule — see "Revised 2026-09-25" below.)*
 **Composite solids are limited to four canonical arrangements** — coaxially
 stacked, embedded, coaxially subtracted, and face-adjacent — each with an
 occlusion rule computed from the shared axis. General boolean solid modeling
@@ -514,11 +886,276 @@ with exact silhouette extraction is a CAD kernel and would consume the track.
 Arrangements outside the set fail with a legible message naming the
 requirement.
 
+#### How solids are actually represented (2026-09-23)
+
+The projection pipeline built in phase 2 models a solid as
+`{ vertices, faces }` — a **polyhedron** — and classifies an edge as hidden
+when every face meeting it turns away from the camera. That is exactly right
+for a convex polyhedron and is the rule a textbook drawing follows. It is also
+the whole of what exists, and it cannot express most of the vocabulary above.
+
+**A cylinder has no edges in that sense.** Its outline is two lines and two
+elliptical arcs; a sphere's is a circle; a cone's is two lines and an ellipse.
+None of that is vertices-and-faces, and none of it fits the current
+`ProjectedEdge`, which carries a straight segment only.
+
+**Decision: two representations behind one interface.** Polyhedra keep
+vertices-and-faces. Curved primitives carry their parameters and know how to
+emit their own **analytic silhouette** under the camera. Both satisfy one
+`outline(solid, camera)` contract returning drawn edges, and **that edge type
+widens to carry arcs as well as segments**.
+
+The alternative — facet curved solids into fine polyhedra so one code path
+serves everything — was rejected. Faceting makes silhouettes visibly polygonal
+the moment a reader zooms, which the figure view now lets them do; it generates
+dozens of spurious facet edges that then have to be suppressed; and it discards
+the crispness that chose SVG in the first place. A cylinder drawn as two lines
+and two arcs is both correct and smaller than its faceted approximation.
+
+**Hidden-line removal is only solved for convex solids.** The
+every-adjacent-face-turns-away rule is wrong for a non-convex polyhedron, where
+a front-facing face can still be occluded by another part of the same solid,
+and it does not consider other solids at all. This is why composites are
+pre-constrained to four arrangements with per-arrangement rules. A non-convex
+single solid outside those arrangements is **out of scope**, and must fail
+rather than draw something plausible and wrong.
+
+**The camera is fixed, but not to one direction.** Free orbit stays rejected —
+these are drawings. But a single fixed viewpoint is degenerate for solids whose
+features align with the view direction. The engine therefore offers a small set
+of **named viewpoints** (`@view: isometric | front | top | front-right`, or
+similar), which preserves determinism and adds no camera control, while letting
+an author escape a bad projection.
+
+**Every primitive states its placement**, the same way a solved triangle does.
+Constraints fix a solid's shape, not where it sits; without a stated convention
+"deterministic" fails exactly as it would have for triangles.
+
+#### Cross-sections and nets produce 2D geometry
+
+This is the seam most worth getting right. A cross-section is a plane figure.
+So is a net. Both are **3D input, 2D figure output**.
+
+So the 3D layer is not a second renderer. It is a **producer feeding the
+existing SVG figure renderer**, in two modes:
+
+- **projected** — the solid drawn in axonometric with hidden edges dashed
+- **true-shape** — the cross-section or unfolded net handed back as ordinary
+  2D geometry, drawn by the same code that draws every other figure, and
+  therefore able to carry measures, notation and labels for free
+
+Getting this seam right makes cross-sections and nets nearly free once the
+solids exist. Getting it wrong means building a second figure pipeline.
+
+#### Build order within the solids work
+
+1. **Polyhedra** — grammar, placement conventions, dimension labels with
+   leader lines. The existing convex visibility rule already serves this, so
+   prisms, pyramids and tetrahedra are reachable first.
+2. **Curved primitives** — widen the edge type to carry arcs, then analytic
+   silhouettes for cylinder, cone and sphere.
+3. **Cross-sections** — plane ∩ solid, shaded in place and lifted out as a
+   true-shape figure.
+4. **Nets** — per-primitive unfolding templates with fold lines dashed.
+5. **Composites** — the four constrained arrangements.
+
+Each step is shippable alone, and step 1 by itself covers a large share of
+what a test figure asks for.
+
+#### Revised 2026-09-25 — two 3D engines, and the road to AIME
+
+Steps 1–3 above shipped as phase 5. Measured against competition problems,
+what they reach is AMC 10/12 early-to-mid: one solid, sitting at the origin,
+described by its dimensions. This section **supersedes steps 4 and 5 above
+and the four-arrangement rule for composites**, for the reasons below.
+
+##### There are two 3D engines, and they are not to be confused
+
+| | **space** | **solid figures** |
+|---|---|---|
+| Track | 3 | 2 (geometry) |
+| Page kind | `space` | `figure` |
+| Renderer | three.js + GLSL, orbitable | the SVG figure renderer, fixed named views |
+| Content | surfaces, fields, curves, Calc 3, Physics C | polyhedra, round solids, constructions in space |
+| Code | `scene/buildScene3d.ts`, `render/SceneRenderer3D.ts` | `figure/project3d.ts`, `solids.ts`, `silhouette.ts`, `crossSection.ts`, and what follows here |
+
+They **share no code**, and neither is "the 3D engine". Say *space* or *solid
+figures* in specs, plans, code comments and the tutor reference.
+
+They do share two things an author sees, and both are fixed here:
+
+**One author frame: z is up, in both.** Authors write coordinates and planes in
+a right-handed frame with **z vertical** — the calculus convention, and the one
+a competition solution uses when it sets up coordinates. The solid-figure
+engine keeps its internal y-up frame (every existing byte depends on it) and
+converts at the grammar boundary, in one module, by the cyclic map
+
+```
+author (X, Y, Z)  ->  internal (x, y, z) = (Y, Z, X)
+```
+
+A cyclic permutation is a proper rotation, and it fixes the (1, 1, 1)
+direction — so the isometric camera views from the author's (+, +, +) octant,
+which is the textbook drawing: X toward the viewer and left, Y to the right, Z
+up. A primitive's width therefore runs along Y, its depth along X and its
+height along Z. The shipped `cut: S by plane y = 1` becomes `plane z = 1`.
+
+**Keywords belong to one engine.** `solid:` is the solid-figure statement;
+track 3's double-integral statement is renamed `volume: under z = f over
+region`. A 3-coordinate point is a *space* point by default and a *figure*
+point in any spec that contains a solid or declares `@mode: figure` — the same
+coordinates mean the same place either way, because the frame is shared.
+
+**Keyword ownership, agreed 2026-09-26 between the two sides.** A line-start
+`word:` keyword belongs to exactly one engine:
+
+- **Space** (track 3, as built on `milestone-a/space`): `line:`, `plane:`,
+  `cross:`, `project:`, `cylindrical:`, `spherical:`, `implicit:`, `contour:`,
+  `frame:`, `osculating:`, `motion:`, `path:`, `trace:`, `tangent-plane:`,
+  `gradient:`, `directional:`, `critical:`, `lagrange:`, `region:`, `volume:`,
+  `riemann:`, `centroid:`. Space also claims these unkeyed forms: `NAME = region …`,
+  `NAME = volume …`, the vector constant `NAME = <a, b, c>`, and multi-parameter
+  and vector function definitions.
+- **Solid figures and 2D geometry** (track 2): `solid:`, `segment:`, `angle:`,
+  `right-angle:`, `tick:`, `cut:`, `section:`, and every existing geometry
+  statement. Reserved for later phases: `fill:`, `net:`, `shortest:`, `dihedral:`.
+- **The point-list rule.** No space keyword claims a statement whose operand is
+  only a hyphenated list of point names (`A-B`, `A-B-C`, …), optionally followed
+  by `dashed` / `plain`. Those stay with solid figures, so a drawn line, plane or
+  polyline between named points can arrive there without renaming anything.
+- **Plane operands stay geometry's:** `plane A-B-C`, named `p = plane …` and
+  `by plane …` are unaffected by space owning the `plane:` statement.
+- **Space never claims** `NAME = <solid-figure form>` (`solid`, point tuples,
+  `midpoint`, `divide`, `foot`, `intersect`, `centroid`, `center of`, `plane`,
+  `circumsphere`, `insphere`), nor an equation without `z`, so
+  `x^2 + y^2 = 25` stays the 2D implicit curve.
+- **Style clauses** (`opacity:`, `colormap:`, `mesh:`, `res:`, `width:`,
+  `dashed`) are stripped only inside lines space has already claimed, never in
+  the shared trailing-clause loop.
+
+##### The missing layer is constructions, not features
+
+Solids today are primitives with dimensions. There are no points in space, no
+segments between them, no planes through them and no derived objects — which
+is what phase 1 gave 2D. Competition 3D is almost entirely constructions on
+named points: *the plane through the midpoints of AE, BC and CD*, *the foot of
+the perpendicular from D to face ABC*, *the centres of the faces*. That is why
+oblique sections alone would not reach AIME: they need midpoints, which need
+3D points that can be addressed, which is also why a solid's named vertices
+can be drawn but not measured.
+
+Every construction needed is closed-form, so the **no-solver non-goal
+stands**: midpoints, division, centroids, feet to lines and planes, line ∩
+plane; a tetrahedron from six edges placed by a stated convention (the D5
+analogue) with a Cayley–Menger check that fails legibly when the edges cannot
+close; a circumsphere as a 3×3 linear solve; an insphere as the face-area
+weighted mean of the vertices.
+
+##### Composites: the glass rule replaces the four arrangements
+
+Competition composite figures — a sphere in a cube, a cube in a sphere, a
+sphere in a cone, the insphere of a tetrahedron — are drawn with the solids
+**transparent to each other**: each solid dashes only its own back, and the
+inner solid shows through the outer one. The four-arrangement occlusion model
+was aimed at opaque stacking, which is the rarer case and the wrong default.
+
+- **Solids are glass to each other.** Each is drawn with its own convex
+  visibility rule, exactly as today.
+- **Construction lines are occluded by solids.** A point of a segment is
+  hidden when the ray from it toward the viewer passes through the interior of
+  any solid. For a convex solid this set is one interval along the segment,
+  so a space diagonal draws dashed, a face diagonal on a front face draws
+  solid, and a segment passing through a solid draws solid–dashed–solid. An
+  author may force either style per segment.
+- **Opaque coaxial stacking** (a cone on a cylinder) is the one arrangement
+  needing occlusion between solids. It is deferred, and it is the easy case of
+  it: the shared axis gives the occlusion boundary.
+
+##### Placement by points
+
+The origin-centred, axis-vertical convention stays for a standalone
+primitive. A solid **defined by points** — a tetrahedron on ABCD, a sphere on
+a centre, a cone on an apex and a base centre — is placed by those points and
+inherits their determinism, as a solved triangle does.
+
+##### The default view is not isometric (decided 2026-09-26)
+
+Exact isometric looks along a cube's space diagonal. A cube's front and back
+corners then project to **the same point**, and a regular tetrahedron
+flattens to a rhombus whose altitude lies under an edge. Those are the two
+most common competition solids. Phase 6 found this by looking at the drawings.
+The rectangular-prism examples had hidden it, because 8×5×6 has unequal sides.
+
+**The default camera is a fixed, orthographic view in general position,
+named `standard`.** It looks from azimuth **30°** (measured from +X toward +Y)
+and elevation **25°**, both in the author frame, with author Z drawn vertical,
+at uniform scale 1. `isometric` stays as a named view with its exact
+bytes, and front, top and side are unchanged. Measured at this camera:
+- the closest two unit-cube vertices sit 0.49 apart on the page;
+- every face of a regular tetrahedron stays at least 21° from edge-on;
+- a tetrahedron's altitude projects at least 8.7° away from every edge.
+
+The placement conventions are fixed against **the default camera, not the
+active view**, so switching `@view:` never re-letters or re-orients a solid:
+- **Tetrahedron:** the first base vertex sits 15° round from the camera's
+  azimuth rather than exactly facing it. Facing the viewer exactly puts the
+  apex, the front vertex and the base centroid in one vertical plane with the
+  view, which is the overlap above.
+- **Prism and pyramid lettering, in textbook order:** ABCD run
+  counter-clockwise seen from above. A is the front-left bottom corner, so
+  the front face is ABFE and D is the hidden corner. E–H sit above A–D, with
+  E over A. A pyramid's apex is E.
+
+##### Revised build order (continues from phase 5)
+
+6. **Construction core** — the z-up author frame; points, segments and
+   derived points in space; solid vertices as real points; true-3D lengths;
+   segment visibility against solids.
+7. **Solids by points and general polyhedra** — tetrahedron on four points or
+   six edges, prisms and pyramids over any polygon, frustum, octahedron, the
+   convex hull of named points; round solids placed and oriented by points.
+8. **Oblique sections** — planes through three points; polygon sections of
+   any polyhedron; circles of a sphere; ellipses of a cylinder or cone
+   (parabolic and hyperbolic cone sections still refuse).
+9. **Inscribed and circumscribed solids** under the glass rule — insphere,
+   circumsphere, spheres in cones and cylinders, tangency.
+10. **Measures and marks in space** — angles between lines, line–plane and
+    dihedral angles with their marks, skew-line distance with the common
+    perpendicular, right-angle marks in space.
+11. **Nets** — per-primitive unfolding with fold lines dashed, and the
+    shortest-path-over-the-surface problems they exist for.
+
+Exact values (build-order step 3) matter more here than anywhere: a
+competition tetrahedron is given as √41, √80, √89.
+
+**Deliberately out:** tori, liquid-level problems, and assemblies of unit
+cubes. Each is its own machinery for a handful of problems.
+
 ### Build order within the track
 
-Lines as objects -> derived points and solved triangles -> circle vocabulary and
-incircle/circumcircle -> figure mode and label layout -> shading and boolean
-regions -> solid primitives -> cross-sections and nets -> composite solids.
+Lines as objects -> derived points and solved triangles **(phase 1, done)** ->
+**the SVG figure renderer** -> circle vocabulary and incircle/circumcircle ->
+measure labels -> the unit circle -> label layout -> shading and boolean regions
+-> solid primitives -> cross-sections and nets -> composite solids.
+
+**The figure renderer moves up, to directly after phase 1.** It was originally
+sequenced late, as "figure mode and label layout", on the assumption that figure
+mode was chrome-hiding on the existing renderer. Now that it is a separate SVG
+renderer it becomes the surface everything after it draws onto, and building
+circle vocabulary, measure labels or the unit circle against the three.js
+renderer first would mean building each of them twice.
+
+Phase 1's construction maths is unaffected by that revision: `intersect`,
+`centres`, `lines`, `solveTriangle`, `derive` and `objects` import nothing but
+`Vec2` and the angle-mode config, so they already serve either renderer. Only
+`sceneObjects.ts` and part of `buildConstructions.ts` are renderer-facing, and
+those gain an SVG sibling rather than being replaced — the three.js path stays,
+because constructions still render in graph mode.
+
+Measure labels and the unit circle both sit after the circle vocabulary and
+**both depend on exact values landing at step 3**. Neither can be built before
+that contract exists: a measure label that prints `0.524` for `π/6`, or a unit
+circle labelled in decimals, fails at the only job it has.
 
 ## Track 3 — 3D / multivariable
 
@@ -562,7 +1199,7 @@ opt-in: perspective converges parallel lines, which defeats reading values.
 | Vector fields | `field3d: (P, Q, R)` with density, glyph scaling, normalization |
 | Field lines | `streamline: field F from (x,y,z)` |
 | Space curve frames | `frame: TNB on r(t) at t = 1`, curvature, osculating circle |
-| Double integrals | `region:` (type I/II, shaded) and `solid: under z = f over region` |
+| Double integrals | `region:` (type I/II, shaded) and `volume: under z = f over region` (not `solid:`, which is the solid-figure statement) |
 | Riemann visualization | `riemann: under z = f over region, n = 12` |
 | Triple integrals | `cylindrical:` / `spherical:` coordinate boxes and surfaces |
 | **Implicit surfaces** | Marching cubes — one primitive retiring every quadric, level set and constraint surface |
@@ -597,6 +1234,599 @@ retrofit:
 Also reserved, cheap once data input exists: 2D distribution primitives
 (histogram, density, empirical CDF) and linear-transformation visualization
 (unit circle to ellipse under A, with eigenvectors marked).
+
+### Revised 2026-09-26 — space is a hand-made engine
+
+This section **supersedes the cross-cutting decision "3D keeps three.js"** for
+space, and turns the sketch above into a build. The vocabulary table above
+still states intent. Where this section and the table disagree, this section
+wins.
+
+#### Why the three.js decision is reversed
+
+The earlier decision reasoned that "custom made" meant owning the chart layer
+and the shading, not the rasterizer. On 2026-09-26 the user reversed it: space
+is to be hand-made, customisable without limit, and compatible with whatever
+the courses bring. The reason is the target. What is being built is an
+instrument meant to last, not a demo reached quickly.
+
+The technical case agrees. What space needs is the part three.js does not
+provide or provides badly:
+
+- lines with a real pixel width, and dashes;
+- contour and colormap shading, and clipping to the axis box;
+- order-independent transparency;
+- picking that reads the formula rather than a triangle;
+- text that can be typeset;
+- a draw list that is plain data.
+
+What three.js does provide (a scene graph, a material zoo, loaders) space does
+not use. Owning the pipeline also makes the draw list a backend-agnostic value.
+That is what lets a WebGPU backend, or the document-format session's export
+path, arrive later by replacing one directory.
+
+**Scope of the reversal.** It covers space only. The 2D plot renderer (tracks 1
+and 4) stays on three.js. Moving it onto space's backend is possible later and
+is not planned here. Solid figures are unaffected: they are SVG and share no
+code with space.
+
+#### Sub-projects
+
+Track 3 is four sub-projects. Each gets its own phase plans:
+
+| # | Sub-project | Phases | Coverage |
+|---|---|---|---|
+| 1 | **Core**: kernel, backend, camera, frame, encoding, interaction | S1–S3 | everything below builds on it |
+| 2 | **Multivariable calculus** | S4–S5 | OpenStax *Calculus Vol. 3* ch. 2–5 |
+| 3 | **Vector calculus + Physics C** | specced after S5 | ch. 6; fields, flux, Gauss/Ampère, trajectories |
+| 4 | **Quant / data** | specced after 3 | the "Reserved for quantitative work" list above |
+
+Sub-projects 1 and 2 are built first, together. The courses this serves are
+hand-made with their own syllabi, so **OpenStax Vol. 3 is a coverage checklist,
+not a corpus**. Every *kind* of figure in chapters 2–5 must be authorable. No
+figure is reproduced. The checklist is at the end of this section.
+
+#### SP1 — Architecture and boundaries
+
+```
+graph-engine/src/
+  math/               pure and engine-agnostic; track 4 reuses it for 2D calculus
+    compile.ts        Expr -> slot-indexed closures; built-ins; multi-parameter and vector functions
+    diff.ts           symbolic d/dv on the Expr tree
+    simplify.ts       deterministic folding and identities (never algebraic cleverness)
+    roots.ts          damped Newton in 1-3 dimensions, grid-seeded, deduplicated
+    quadrature.ts     adaptive Gauss-Kronrod (7-15), nested for iterated integrals
+    linalg.ts         2x2 / 3x3 dense: det, solve, symmetric eigenvalues
+  space/
+    grammar/          space statements, clauses and directives (pure; the server parses specs)
+    kernel/           statement -> typed-array geometry, one builder per form, via a registry
+    scene/            SpaceScene and Mark: the backend-agnostic draw list
+    frame/            bounds, aspect, ticks, walls, edge choice, label anchors (pure)
+    camera/           turntable, orthographic/perspective, serialisable view state (pure)
+    pick/             CPU ray casting, readouts re-evaluated from the formula (pure)
+    gl/               the WebGL2 backend: the only code that touches a GL context
+    ui/               DOM overlay: tick labels, readouts, colorbar, parameter panel, input
+    SpaceRenderer.ts  the class GraphViewer mounts, replacing SceneRenderer3D
+```
+
+**Flow.**
+1. Spec text goes through `parseSpec`, which yields statements, config and
+   bindings.
+2. The kernel builds one `SpaceScene`. When a binding changes, only the
+   statements that depend on it are rebuilt.
+3. The backend uploads the marks and draws them.
+4. The frame and the overlay are recomputed from the camera every frame.
+5. Picking reads the CPU geometry and re-evaluates the true function at the
+   hit.
+
+**Boundaries, enforced by a test** that walks the import graph:
+- `space/` and `math/` never import `three`, `figure/` or React. `ui/` and
+  `SpaceRenderer.ts` may touch the DOM.
+- `math/` never imports `space/`.
+- `space/grammar/` imports nothing outside `parser/` and `math/`, because the
+  server bundles the parser. It never imports `parseStatement.ts`, whose
+  hook imports it.
+- Only `space/gl/` touches WebGL.
+
+**Shared files are touched additively, at named hook points.** These are
+coordinated with the solid-figure side before editing:
+- `parser/parseStatement.ts`: two hooks, both returning `null` for any line
+  space does not own. Agreed with the solid-figure side on 2026-09-26.
+  - **`parseSpaceKeyword(line)` runs first** in `parseStatementCore`. It claims
+    only keyword-led space statements (`contour:`, `trace:`, `plane:`, …; SP9).
+    It returns `null` for `plane: A-B-C` and other point-list plane forms, so
+    solid figures' refusal of drawn plane patches still catches them.
+  - **`parseSpaceUnkeyed(line)` runs immediately before the earliest existing
+    branch that would misread an unkeyed space form.** Each claim needs an
+    unmistakable space signal (the S1 plan lists them). It never claims a line
+    whose left side is a bare name and whose right side is a solid-figure form
+    (`solid …`, a coordinate tuple, `midpoint`, `divide`, `foot`, `intersect`,
+    `centroid`, `center of`, `plane …`, `circumsphere`, `insphere`). An
+    equation without `z` (such as `x^2 + y^2 = 25`) stays the 2D implicit
+    curve.
+  - **Style clauses (SP8) are stripped only inside a line space has already
+    claimed**, never in the shared trailing-clause loop. `dashed` and `width`
+    are solid-figure words there too.
+- `parser/types.ts`: one union member `{ kind: 'space'; form: SpaceForm }`,
+  where `SpaceForm` is defined in `space/grammar/types.ts`. Style lives inside
+  the form.
+- `parser/config.ts` and `parseConfig.ts`: one `space: SpaceConfig` field and
+  one `bindings: Binding[]` field, and one delegation for space's directives
+  and `@param`.
+- `scene/mode.ts`: `isThreeD` and `PLOTTED` learn `space`. **The solid check
+  still runs first, and nothing is reordered.**
+- `examples.ts`: concatenates `space/examples.ts`.
+- `GraphViewer.tsx`: swaps the renderer class.
+
+**Existing syntax keeps its statement kinds.** Written without space clauses
+or domains, these all parse exactly as before:
+- `z = f(x, y)`
+- `(fx, fy, fz) for t in [a, b]`
+- `(fx, fy, fz) for u in [..], v in [..]`
+- 3-coordinate points, segments, rays and vectors
+
+The space grammar claims only new forms, and one of these lines once it
+carries a space clause or a domain: `z = x^2 opacity: 0.5` becomes a space
+form. The existing kinds are consumed by space's kernel. Before any merge into
+`milestone-a/main`, a byte-identity sweep compares two things between the
+merge base and the head: the parse output of every spec string in the
+examples and the existing test files, and the rendered output of every figure
+spec under every `@view`. Every difference must be one a plan names. The one sanctioned change to pre-existing output is that
+**every space spec renders through the new renderer**, which is the point of
+the track.
+
+`SceneRenderer3D.ts`, `buildScene3d.ts`, `types3d.ts` and their tests are
+deleted in S2, once every old form has been ported.
+
+#### SP2 — The math kernel
+
+**Expressions.** Space compiles the shared `Expr` tree with its own compiler,
+`math/compile.ts`, and leaves the 2D evaluator (`parser/evalExpr.ts`)
+untouched. The new compiler adds:
+
+- **Built-ins:** `asin acos atan atan2 sinh cosh tanh asinh acosh atanh sec
+  csc cot floor ceil round sign min max hypot mod`, on top of the existing
+  eight. `@angle: degrees` applies to every trig function and inverse.
+- **Multi-parameter functions:** `f(x, y) = x^2 - y^2` and
+  `g(x, y, z) = x y z`.
+- **Vector-valued functions:** `r(t) = <cos(t), sin(t), t>` and
+  `F(x, y, z) = <-y, x, 0>`. The Unicode brackets `⟨ ⟩` and a plain
+  `(a, b, c)` tuple are accepted too.
+- **Where vectors are recognised.** Vector literals are recognised by the space
+  grammar only where a vector is expected: a definition's right-hand side, and
+  a clause such as `direction <1, 2, 3>`. They never reach the shared
+  expression parser, so the inequality grammar is untouched.
+- **A tuple still means a point.** `u = (1, 2, 3)` stays a labelled point, as it
+  always has. A vector constant is written `u = <1, 2, 3>`.
+- **What stays with the old statement.** Single-parameter definitions
+  (`k(x) = …`) remain the existing `functionDef`. Space's function table reads
+  both kinds.
+- **Evaluation:** slot-indexed closures (`(args: Float64Array) => number`)
+  with no per-sample object allocation.
+- **No `new Function`.** Code generation stays out, for safety and
+  determinism. It can be added behind the same interface if a profile ever
+  demands it.
+
+**Symbolic differentiation (`diff.ts`)** covers every built-in, inlines user
+functions through the chain rule, and returns an `Expr`.
+- Gradients, Hessians, tangent planes, surface normals, curve frames and
+  curvature all evaluate derivative *expressions*. **Space never
+  finite-differences a formula it has.**
+- Non-smooth built-ins differentiate almost everywhere: `abs` gives `sign`, and
+  `floor`, `ceil`, `round` and `sign` give 0.
+- `simplify.ts` is deterministic: constant folding and the 0/1 identities, so
+  the output of `diff` stays small. It never factors or expands.
+
+**Numerics** (`roots`, `quadrature`, `linalg`) are for questions with no closed
+form:
+- critical points: ∇f = 0, seeded on a grid, then Newton, then deduplicated;
+- Lagrange systems;
+- integral values.
+
+Every numeric answer is shown as **approximate** (`≈`), with its digits bounded
+by the method's own error estimate. **An exact form is never inferred from a
+float** (the cross-cutting exactness rule).
+
+**Geometry is typed arrays.** The kernel emits `Float64Array` positions,
+normals, scalars and parameters, with `Uint32Array` indices. Float64 on the CPU
+keeps readouts and tests exact.
+- **Upload.** The backend converts to `Float32Array` **relative to the box
+  centre**, so a surface at x ≈ 4500 (an index level, say) keeps its precision.
+  This refines the reserved item "`Vec3[]` becomes `Float32Array`": typed end
+  to end, with Float32 reserved for the GPU.
+- **Holes.** A non-finite sample drops the triangles that touch it, which
+  leaves an honest hole. No zero is invented.
+- **Normals.** Surface normals are analytic: `(-f_x, -f_y, 1)` for `z = f`,
+  `r_u × r_v` for a parametric surface, and `∇F` for an implicit surface.
+
+**Domains.** An explicit surface takes a domain:
+
+```
+z = f(x, y)                                   # the box's x/y extent
+z = f(x, y) for x in [a, b], y in [c, d]      # a rectangle
+z = f(x, y) over x in [0, 1], y in [x^2, x]   # type I: inner bounds depend on the outer variable
+z = f(x, y) over y in [0, 2], x in [0, y/2]   # type II
+z = f(x, y) over r in [0, 2], theta in [0, pi] # polar (r's bounds may depend on theta and vice versa)
+z = f(x, y) over x^2 + y^2 <= 4               # an inequality
+z = f(x, y) over R                            # a named region (SP9)
+```
+
+- **Iterated domains** (rectangle, type I, type II, polar) are the image of the
+  unit square under an exact map. Their boundary edges lie exactly on the
+  bounding curves, and the grid follows the region.
+- **An inequality domain** is sampled on the box grid. Triangles are clipped
+  against the boundary, and each boundary crossing is refined by bisection on
+  the true inequality, so the edge lies on the curve to within tolerance.
+
+**Resolution.** Defaults: 96×96 for surfaces, 512 segments for curves, 64³ for
+implicit surfaces. `@resolution: <n>` sets the spec's default, and a `res: <n>`
+clause sets one statement's. Adaptive refinement is not in scope. A statement
+that would exceed 1M triangles is refused with a message naming the
+resolution.
+
+**Registry.** Each space form's builder registers in
+`kernel/registry.ts`. Sub-projects 3 and 4 add builders without editing a
+switch.
+
+#### SP3 — The scene: marks
+
+`SpaceScene` is the whole contract between the kernel and every backend:
+
+```ts
+interface SpaceScene {
+  marks: Mark[]                 // the backend orders them into passes
+  labels: LabelAnchor[]         // text anchored at author-space points, drawn by the DOM overlay
+  colorScales: ColorScale[]     // what the colorbar shows
+  extent: Box3 | null           // the data extent, for automatic bounds
+  errors: SceneError[]          // { line, message }: returned, never thrown
+}
+
+type Mark =
+  | MeshMark     // triangles: positions, normals, optional scalars and (u,v), indices, MeshStyle
+  | LineMark     // polylines: positions, polyline starts, LineStyle (width px, dash, hidden-part style)
+  | PointMark    // markers: positions, size px, shape
+  | ArrowMark    // tails + vectors, instanced shaft and head, ArrowStyle
+  | BoxMark      // instanced axis-aligned boxes (Riemann sums, S5)
+```
+
+- **Source.** Every mark carries `source: { line, statement, object }`, which
+  is the equivalent of the figure renderer's `data-statement` and
+  `data-object`. Track 7's tools address a mark by it.
+- **Pick.** Every pickable mark carries a `pick` descriptor: the compiled
+  function (or functions) and the parameter map. SP6 reads the true value
+  through it.
+- **Determinism.** The same spec, bindings and resolution always give the same
+  scene, typed arrays included, so tests can assert on the scene. Pixels are
+  GPU-dependent and never asserted.
+
+#### SP4 — The WebGL2 backend
+
+- **Requirements.** WebGL2 is required. Without it, the view shows a legible
+  message instead of a blank canvas. `EXT_color_buffer_float` enables
+  order-independent transparency. Without it, transparency falls back to
+  per-mark sorted alpha, and the fallback is tested.
+- **Frame loop.**
+  1. Opaque meshes.
+  2. Lines, points and arrows, with a small depth bias so a curve lying on a
+     surface does not z-fight.
+  3. Hidden parts of lines, drawn faint and dashed wherever the depth test
+     fails (the textbook convention for a curve passing behind a surface; per
+     mark, on by default for curves drawn on surfaces).
+  4. Transparent meshes, by weighted blended OIT.
+  5. Composite, with 4× MSAA through a multisampled framebuffer and a blit.
+  6. Frames render on demand, never in a standing 60 fps loop.
+- **Lines** are screen-space quads, instanced per segment, with round joins
+  and caps. The width is in CSS pixels, and dashes run on cumulative length.
+  WebGL's 1-pixel `LINES` are never used.
+- **Surfaces.**
+  - **Lighting:** a view-space key light and a fill light, Blinn–Phong with low
+    specular.
+  - **Two-sided:** back faces take a darker, hue-shifted tint of the front
+    colour, so a surface's orientation is visible. Sub-project 3's flux
+    depends on this.
+  - **Colormaps** are sampled from a 256×1 texture (SP5).
+  - **Mesh lines** are drawn in the fragment shader from the (u, v) or (x, y)
+    attributes, with `fwidth` antialiasing. For `z = f`, mesh lines fall on the
+    x and y tick values, so every mesh line is a readable trace at a nice
+    value.
+- **Clipping.** Every fragment outside the axis box is discarded in the shader.
+  A surface that runs to infinity (a pole) is cut cleanly at the box, as in
+  Mathematica, and never stretches the box.
+- **Depth cueing:** a subtle fade toward the background with view depth. On by
+  default; `@depthcue: off` turns it off.
+- **Pixels.** The canvas is sized by `devicePixelRatio`, capped at 2.
+- **Context loss.** Every GPU resource derives from the retained `SpaceScene`,
+  so on `webglcontextrestored` the backend re-uploads and redraws. Loss
+  mid-session is survivable, and a test covers it.
+- **Resource lifecycle is tested without a GPU.** A recording fake
+  `WebGL2RenderingContext` asserts that every `create*` has a matching
+  `delete*` after `dispose()`, and that a scene swap frees the previous
+  scene's buffers.
+
+#### SP5 — Camera and frame
+
+**Camera.**
+- **Turntable, z always up:** azimuth, elevation (clamped to ±89.5°), target,
+  and zoom.
+- **Projection:** orthographic by default, with `@projection: perspective`
+  opt-in. Perspective converges parallel lines, which defeats reading values
+  off a plot.
+- **Input:**
+  - drag to orbit;
+  - right-drag or shift-drag to pan;
+  - wheel or pinch to zoom about the cursor;
+  - double-click to return to the authored view;
+  - arrow keys and `+`/`-` orbit and zoom when the canvas has focus.
+- **Authored view:** `@camera: azimuth 40, elevation 25, zoom 1`, with every
+  key optional. Azimuth is the camera's horizontal direction measured from +x
+  toward +y. The default of 40° looks from the author's (+, +, +) octant, as
+  solid figures do: x comes toward the viewer and left, y runs right, z runs
+  up. That is the textbook drawing, kept just off the symmetric 45°. This is
+  space's own directive; `@view` belongs to solid figures.
+- **Saved view.** `getView()` and `setView()` expose exactly these fields plus
+  the target. That is the page `view` the document model saves (step 7). There
+  are **no snap views and no export in this track**: the document-format work
+  owns both.
+
+**The frame is a real chart.**
+- `@frame: box` (the default). Three back walls carry gridlines at the tick
+  values. As the camera orbits, the walls flip so they stay behind the data.
+  Tick marks and labels sit on three near edges:
+  - x and y on the two front-bottom edges;
+  - z on the vertical edge nearest the left of the screen.
+
+  Labels are pushed outward, perpendicular to their edge on screen. When
+  labels would collide, every other one is dropped.
+- `@frame: axes`. The textbook style: axes through the origin with arrowheads,
+  tick marks and the letters x, y, z. OpenStax and Stewart draw most of their
+  figures this way.
+- `@frame: none`.
+
+**Bounds.**
+- `@bounds3d: x [-3, 3], y [-3, 3], z [0, 10]`, with any axis optional.
+- **Unstated x and y** come from the data extent, or [-5, 5] when there is none.
+- **Unstated z** comes from the sampled range, made robust against poles. If
+  the span from the 1st to the 99th percentile is under a fifth of the full
+  span, that percentile span is used instead. The clip at the box does the
+  rest.
+- All automatic bounds are rounded out to nice steps.
+
+**Aspect.**
+- `@aspect: equal` gives true proportions, so a sphere is round.
+- `@aspect: auto` gives box ratios 1 : 1 : 0.7.
+- `@aspect: 1:1:0.5` sets explicit ratios.
+- **Default:** `equal` when the spec has no `z = f` surface and the three data
+  spans agree within a factor of 4; otherwise `auto`. The rule is deterministic
+  and documented where it is implemented.
+
+**Ticks.**
+- The 1-2-5 ladder.
+- `@ticks3d: x pi/2, z 0.5` fixes a step. A step authored as a rational
+  multiple of π labels its ticks as multiples of π (`π/2`, `π`, `3π/2`), exact
+  **by construction**, which the exactness rule permits. This moves into the
+  shared exact-value formatter when that lands (build step 3).
+- The tick module takes an axis `scale` enum (`linear` only for now), so log
+  axes (sub-project 4) slot in.
+
+**Axis titles.** `@titles: x "t (s)", y "x (m)", z "E (J)"`. Physics needs
+units on its axes.
+
+**Colorbar.** An overlay on the right, shown whenever a mark uses a colormap.
+It has ticks from the same module and is titled with the colour source.
+
+**Colormaps.**
+- Sequential: `viridis` (the default), `cividis`, `magma`, `plasma`, `gray`,
+  as embedded 256-entry tables.
+- Diverging: `balance`, blue–neutral–red, interpolated in Oklab so its halves
+  are perceptually symmetric about zero.
+
+#### SP6 — Interaction
+
+- **Probe.** Hovering picks the nearest object under the cursor.
+  - **Surfaces:** a CPU ray against the mesh (a uniform-grid walk for `z = f`,
+    a BVH otherwise), refined by Newton on the **true function** along the ray.
+  - **Curves, points and arrows:** screen-space distance.
+  - **Readout:**
+    - for `z = f`, `(x, y, z)`, `f` and the partials `f_x`, `f_y`, evaluated
+      from symbolic derivatives;
+    - for parametric surfaces, the point and (u, v);
+    - for curves, the point, `t` and speed `|r'(t)|`.
+  - **Drop lines** are dashed, from the probed point to the floor and the two
+    back walls, with the projections marked.
+- **Pins.** Clicking pins a readout, with its marker and drop lines. Clicking a
+  pin removes it, and Esc clears all pins. Pins are view state, not source.
+  They are emitted as events, and the document model can later hold them as
+  overlays.
+- **Parameters (the spec's bindings).**
+  - **Syntax:** `@param a = 1 range [0, 5] step 0.1` and
+    `@param n = 8 range [1, 30] integer`, written exactly as the document model
+    specifies, with no colon after `@param`.
+  - **What a parameter is:** a name usable in every expression in the spec.
+    The kernel records which statements read which parameters, and a change
+    rebuilds only those.
+  - **Panel:** a slider, a number box, and play/loop for each parameter.
+    Animation is a timeline over bindings (the document model's definition),
+    and play is its minimal form, needed by Physics C.
+  - **Name rules.** `x`, `y`, `z`, built-in names and defined names are
+    refused. A statement's own bound variable (`t` in `for t in`) shadows a
+    parameter inside that statement.
+  - **Scope today.** The 2D renderer ignores parameters until track 4 adopts
+    them.
+  - **Budget:** re-sampling and re-uploading a 128×128 surface takes 8 ms or
+    less on the review machine, so a drag stays smooth.
+- **Drag.** A point whose coordinates reference parameters directly
+  (`P = (a, b, f(a, b))`) is draggable.
+  - **What moves:** dragging solves for those one or two parameters, by damped
+    Newton in parameter space from their current values, minimising screen
+    distance to the cursor. With one parameter the point runs along a curve;
+    with two, across a surface.
+  - **What follows:** dragging writes the bindings, so everything that depends
+    on them follows. A tangent plane follows its point with no special case.
+- **Events.** `onEvent({ type: 'hover' | 'pin' | 'param', … })` reports
+  exposure. The engine never decides what an event means (cross-cutting rule).
+
+#### SP7 — Directives (space-owned)
+
+| Directive | Values | Default |
+|---|---|---|
+| `@bounds3d` | `x [a, b], y [c, d], z [e, f]`, any subset | data-derived |
+| `@aspect` | `equal`, `auto`, `a:b:c` | SP5 rule |
+| `@projection` | `orthographic`, `perspective` | `orthographic` |
+| `@camera` | `azimuth <deg>, elevation <deg>, zoom <k>` | `azimuth 40, elevation 25, zoom 1` |
+| `@frame` | `box`, `axes`, `none` | `box` |
+| `@ticks3d` | `x <step>, y <step>, z <step>`, any subset | 1-2-5 ladder |
+| `@titles` | `x "…", y "…", z "…"` | `x`, `y`, `z` |
+| `@colormap` | a map name | `viridis` |
+| `@resolution` | integer 8–400 | per SP2 |
+| `@depthcue` | `on`, `off` | `on` |
+| `@param` | SP6 syntax, once per parameter | none |
+
+`@theme`, `@hover`, `@angle` and `@hide`/`@show` keep their meanings in space.
+
+#### SP8 — Style clauses
+
+These are trailing clauses on a line the space grammar has claimed. They are
+never stripped in the shared loop. `color:` and `name:` keep their shared
+handling. The style clauses are:
+
+```
+opacity: 0.5
+colormap: height | none | <expr> [map <name>] [diverging]
+mesh: on | off
+res: 120
+width: 3            # line width, px
+dashed              # a bare flag
+```
+
+- **`colormap:` default.** It defaults to `height` for `z = f` and to `none`
+  when `color:` is given.
+- **When the map diverges.** A colormap by an expression diverges when its
+  sampled range straddles zero. `height` is always sequential unless the
+  statement says `diverging`.
+- **Refusals.** A clause on a statement it cannot apply to is refused by name.
+
+#### SP9 — Vocabulary
+
+Every statement below is a space form and routes the spec to space. Every one
+has an example.
+
+**Core (S2, S3).** The existing forms carry over, with domains (SP2) and style
+clauses (SP8). The new forms:
+
+```
+f(x, y) = x^2 - y^2                   # multi-parameter definitions (SP2)
+r(t) = <cos(t), sin(t), t/4>          # vector-valued definitions
+x^2 + y^2 - z^2 = 1                   # implicit surface: an equation whose free variables include z
+                                      #   (and is not z = f(x, y)); marching cubes, normals from the gradient
+z = f(x, y) over R                    # (SP2 domains)
+```
+
+The implicit surface is claimed here and built in S4. An equation that omits a
+variable is ambiguous. `x^2 + y^2 = 4` has always been a circle lifted onto
+the floor, and it stays one. `implicit: x^2 + y^2 = 4` forces the surface
+reading, which gives a cylinder.
+
+**Multivariable calculus: differential (S4).**
+
+| OpenStax | Concept | Statement |
+|---|---|---|
+| 2.2–2.4 | vectors, dot, cross | `vector: (0,0,0) -> (1,2,3)` (exists); `cross: u x v` (parallelogram, result, right-angle marks); `project: u onto v` (projection plus perpendicular part) |
+| 2.5 | lines, planes | `line: through (1,2,3) direction <1,-1,2>`, `line: through P and Q`; `plane: 2x + y - z = 3`, `plane: through P normal <1,1,1>`, `plane: through P, Q, R`. A plane is a patch clipped to the box. `p = plane …` and `plane: A-B-C` belong to solid figures and are not space forms |
+| 2.6 | quadric surfaces | implicit equations (above) |
+| 2.7 | cylindrical, spherical | `cylindrical: r = 2`, `cylindrical: z = r`, `spherical: rho = 2 sin(phi)`, `spherical: phi = pi/4`: one coordinate as a function of the other two, with default ranges and optional `for` clauses |
+| 3.1–3.4 | space curves, TNB, curvature, motion | `frame: r at t = 1` (T, N, B); `osculating: r at t = 1` (circle, κ in the readout); `motion: r at t = 1` (v, a, and optionally `components` for the tangential and normal parts of a) |
+| 4.1 | graphs, level curves, level surfaces | `contour: f levels 12` or `levels -4..4 step 1`; `floor` projects the curves onto the floor. `contour:` of a three-variable F draws **level surfaces** |
+| 4.2 | limits along paths | `path: on f along (t, t^2) for t in [-1, 1]`, a curve lifted onto a surface |
+| 4.3 | partial derivatives | `trace: f at x = 2` (the curve and its slicing plane); `trace: f at x = 2 tangent at y = 1` (the tangent line, slope `f_y(2, 1)`) |
+| 4.4 | tangent planes, linearization | `tangent-plane: f at (1, 2)`, optionally with `normal`; L(x, y) in the readout |
+| 4.6 | gradient, directional derivative | `gradient: f at (1, 2)` (on the floor with its level curve; `lifted` puts it on the surface); `gradient: F at (1, 1, 1)` (normal to the level surface); `directional: f at (1, 2) toward <3, 4>` (vertical plane, trace, tangent of slope D_u f) |
+| 4.7 | extrema | `critical: f`: every critical point in the domain, marked and labelled max, min, saddle or degenerate by the Hessian |
+| 4.8 | Lagrange multipliers | `lagrange: max f subject to g = c` (also `min`, and three variables): the constraint, f's level curves, extremal points with ∇f ∥ ∇g drawn |
+
+Throughout, `f` may be a defined name or an inline expression.
+
+**Multivariable calculus: integral (S5).**
+
+| OpenStax | Concept | Statement |
+|---|---|---|
+| 5.1 | double integrals over rectangles, Riemann | `riemann: under f over x in [0,2], y in [0,2], n = 4` (also `n = 4 by 3`, `sample: mid`, `lower-left`, `upper-right`, `random`). Readout: the sum next to the integral's value |
+| 5.2 | general regions | `region: x in [0, 1], y in [x^2, x]` (type I; type II by variable order), shaded on the floor with its boundary; `R = region …` names it |
+| 5.3 | polar | `region: r in [0, 2], theta in [0, pi/2]` |
+| 5.1–5.3 | volume under a surface | `volume: under f over R` and `volume: between g and f over R`: top, bottom and side walls, translucent, with ∬ in the readout |
+| 5.4–5.5 | triple integrals, cylindrical, spherical | `volume: x in [0,1], y in [0, 1-x], z in [0, 1-x-y]` (any order; bounds may depend on outer variables); `… cylindrical` / `… spherical` suffix. The region is the image of the unit cube, and its six faces are drawn exactly, with degenerate faces dropped. `integrand: <expr>` computes ∭ g dV |
+| 5.6 | centre of mass | `centroid: V` or `centroid: V density <expr>` marks the centre of a named region or volume, computed by quadrature |
+
+Change of variables (5.7) is a 2D mapping of regions and belongs to track 4.
+
+#### SP10 — Verification
+
+- **Node tests.** `math/`, `space/grammar`, `kernel`, `scene`, `frame`,
+  `camera` and `pick` are pure and tested in node. Expected values are computed
+  by hand: for `f = x² − y²` at (1, 2), ∇f = (2, −4), `L = −3 + 2(x−1) − 4(y−2)`,
+  and the origin is a saddle.
+- **Proof.** Proving a test means deleting the behaviour it covers.
+- **The GL layer** is covered by the recording fake context (SP4) for lifecycle
+  and state, and by **looking at it**.
+- **The review page.** `review/space.html` (entry `review/src/space.tsx`) is a
+  full-size space view with the parameter panel and every space example,
+  grouped by the checklist below. It is served by the same review server,
+  from this worktree, on port **5182**, and linked from `review/index.html`.
+  Screenshots only; no page scripts.
+- **Examples.** `examples.test.ts` asserts that every space example parses and
+  builds a scene with no errors.
+
+#### SP11 — Build order
+
+| Phase | Delivers |
+|---|---|
+| **S1** | `math/` (compile, diff, simplify, roots, quadrature, linalg); the space grammar hook with multi-parameter and vector definitions, domains, style clauses, directives and `@param`; the `SpaceScene` contract; kernel builders for the existing forms plus domains, emitting typed arrays; the boundary test. **No renderer change.** |
+| **S2** | `gl/` backend, `camera/`, `frame/` (box, axes, none), DOM overlay, ticks and titles, `@bounds3d` / `@aspect` / `@projection` / `@camera` / `@frame` / `@ticks3d` / `@titles`; `SpaceRenderer` replaces `SceneRenderer3D` in `GraphViewer`, and the old files are deleted; `review/space.html` |
+| **S3** | colormaps and colorbar, mesh lines, two-sided tint, box clipping, hidden-line dashes, OIT, depth cue; probe, pins and drop lines; `@param` panel, play and drag; events |
+| **S4** | the differential vocabulary above, and implicit surfaces |
+| **S5** | the integral vocabulary above |
+| **S6** | Visual polish (the user asked for it on 2026-09-26: "a nice to have"). It runs after S5, on the real examples rather than fixtures. It covers: lighting and material feel; the categorical colour series against both themes; frame and gridline weights; label typography and spacing; the readout, pin, colorbar and parameter-panel styling; camera easing (an animated return to the authored view, honouring `prefers-reduced-motion`); empty, error and no-WebGL2 states; and a light-and-dark pass over every example. Colours come from the host's theme tokens (`resolvePalette`), never hard-coded, so track 5's customization builds on it rather than redoing it. |
+
+S1 and S2 may run in parallel once S1's first task has committed the
+`SpaceScene` contract. S4 splits into S4a (surfaces in space, vectors,
+curve frames) and S4b (the calculus of a surface). S4a, S4b and S5 may run in
+parallel after S3. Each phase:
+one implementer, then an independent review, fix rounds until the review is
+clean, then a scoped re-review and a look in the browser.
+
+#### Coverage checklist — OpenStax *Calculus Volume 3*
+
+Ch. 1 (parametric and polar) is 2D and belongs to track 4. Ch. 6 is
+sub-project 3.
+
+| Section | Figure kinds that must be authorable | Phase |
+|---|---|---|
+| 2.1 Vectors in the plane | (2D) | — |
+| 2.2 Vectors in three dimensions | points, octants, vectors, spheres | S2, S4 |
+| 2.3 The dot product | projection, angle between vectors | S4 |
+| 2.4 The cross product | parallelogram, orthogonal result, torque (r × F) | S4 |
+| 2.5 Equations of lines and planes | lines, planes, intersections, distances | S4 |
+| 2.6 Quadric surfaces | the six quadrics, cylinders, traces | S4 |
+| 2.7 Cylindrical and spherical coordinates | coordinate surfaces, points in each system | S4 |
+| 3.1 Vector-valued functions and space curves | helices, curves on surfaces | S2 |
+| 3.2 Calculus of vector-valued functions | tangent vectors | S4 |
+| 3.3 Arc length and curvature | TNB, osculating circle | S4 |
+| 3.4 Motion in space | velocity and acceleration, components | S4 |
+| 4.1 Functions of several variables | graphs, level curves, level surfaces | S3, S4 |
+| 4.2 Limits and continuity | approach along paths | S4 |
+| 4.3 Partial derivatives | traces with tangent lines | S4 |
+| 4.4 Tangent planes and linear approximations | tangent plane, normal | S4 |
+| 4.5 The chain rule | (symbolic; figures reuse 4.3) | S4 |
+| 4.6 Directional derivatives and the gradient | gradient on level curves, directional slice | S4 |
+| 4.7 Maxima/minima problems | classified critical points | S4 |
+| 4.8 Lagrange multipliers | constraint with level curves | S4 |
+| 5.1 Double integrals over rectangular regions | Riemann boxes, volume under | S5 |
+| 5.2 Double integrals over general regions | type I/II regions | S5 |
+| 5.3 Double integrals in polar coordinates | polar regions and volumes | S5 |
+| 5.4 Triple integrals | iterated regions | S5 |
+| 5.5 Triple integrals in cylindrical and spherical coordinates | cylindrical and spherical regions | S5 |
+| 5.6 Calculating centers of mass | centroid | S5 |
+| 5.7 Change of variables | (2D, track 4) | — |
+
 
 ## Track 4 — Calc-proofing the 2D engine
 
@@ -764,11 +1994,29 @@ merely a construction input changing.
 session. Snapshotting a live state as a page in the learner's own document is
 what lets a tutoring session leave behind something durable.
 
+## Backlog — specced later
+
+**Number-line mode (`@mode: numberline`).** A one-dimensional presentation of
+an inequality's solution set: a horizontal axis with a **filled** endpoint dot
+for an inclusive bound, an **open** dot for a strict one, and shading along the
+ray or interval. This is how "graph the solution set" is actually asked, and it
+is a different renderer from 2D region shading rather than a tweak to it.
+
+State what already exists so it is not rebuilt by accident: in 2D a strict
+inequality already draws a **dashed** boundary and a non-strict one a **solid**
+boundary (`graph-engine/src/scene/buildScene.ts`'s region builder). That is the
+2D convention and it works today. The 1D convention does not exist at all.
+
+Needs its own spec before building: an axis renderer, endpoint markers,
+interval and ray shading, and compound forms (`x < -2 or x > 5`,
+`-2 <= x < 5`). It depends on chained-inequality parsing, which track 1's
+follow-up work adds.
+
 ## Non-goals
 
 - A general geometric constraint solver.
 - General boolean solid modeling (CSG) or general polyhedron unfolding.
-- Composite solids outside the four canonical arrangements.
+- Occlusion between solids beyond the glass rule and opaque coaxial stacking.
 - An IR-canonical document in which the DSL is merely one front-end; the source
   text stays canonical at the page level.
 - A hand-written WebGL rasterizer.

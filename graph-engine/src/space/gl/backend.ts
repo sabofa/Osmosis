@@ -1,0 +1,579 @@
+// GlBackend (plan G9, spec SP4): owns the WebGL2 context, the programs and
+// every mark's GPU resources, and draws a frame on request. It is the only
+// code that touches WebGL. Nothing in here throws out of a public method: a
+// missing WebGL2, a shader failure or an unexpected GL error is reported
+// through onError, and the backend then draws nothing.
+//
+// Every GPU resource derives from the retained scene and frame, so a lost
+// context is rebuilt on `webglcontextrestored` by re-uploading them.
+//
+// A frame is drawn by the frame loop (frameLoop.ts): into a multisampled
+// target, the frame, opaque meshes and boxes, the hidden-part pass, lines,
+// points and arrows, then translucent meshes and boxes by order-independent
+// transparency (or sorted together, farthest first, without float targets),
+// composited or blitted to the canvas. The targets (targets.ts) follow the
+// canvas's size and are rebuilt after a context restore.
+
+import type { CameraMatrices } from '../camera/projection'
+import type { WorldMap } from '../camera/world'
+import type { FrameLineRole, FrameModel } from '../frame/types'
+import type { ArrowMark, LineMark, Mark, SpaceScene } from '../scene/types'
+import { resolveSpaceColor, type Rgb, type SpaceColors } from '../theme'
+import { ARROWHEAD_PROGRAM, drawArrowHeads, uploadArrows, type ArrowGpu, type ArrowLook } from './arrowPipeline'
+import { BOX_PROGRAM, boxDepth, drawBoxesOit, drawOpaqueBoxes, drawTranslucentBoxes, isOpaqueBox, uploadBoxes, type BoxDraw, type BoxGpu } from './boxPipeline'
+import { syncByIdentity, type GpuResource } from './buffers'
+import { createContext, queryCapabilities, watchContext, type GlCapabilities } from './context'
+import {
+  cameraKey,
+  createSharedQuads,
+  drawLines,
+  frameDepthBias,
+  HIDDEN_DASH,
+  HIDDEN_OPACITY,
+  LINE_PROGRAM,
+  updateDashes,
+  uploadLines,
+  type DrawTarget,
+  type LineGpu,
+  type LineLook,
+  type SharedQuads,
+} from './linePipeline'
+import { COMPOSITE_PROGRAM, runFrameLoop, type FramePasses } from './frameLoop'
+import { frameLook, markLook } from './look'
+import { LutCache, lutKey } from './lut'
+import {
+  drawMeshes,
+  drawMeshesOit,
+  drawTranslucentMeshes,
+  isTranslucent,
+  mapsUsed,
+  meshDepth,
+  MESH_PROGRAM,
+  uploadMesh,
+  type MeshDraw,
+  type MeshGpu,
+} from './meshPipeline'
+import { drawPoints, POINT_PROGRAM, uploadPoints, type PointGpu } from './pointPipeline'
+import { ProgramCache, type ProgramInfo } from './program'
+import { attachOit, createTargets, type Targets } from './targets'
+
+export interface GlBackendOptions {
+  onError?: (message: string) => void
+  onContextLost?: () => void
+  onContextRestored?: () => void
+}
+
+type MarkGpu =
+  | { kind: 'mesh'; gpu: MeshGpu }
+  | { kind: 'lines'; gpu: LineGpu }
+  | { kind: 'points'; gpu: PointGpu }
+  | { kind: 'arrows'; gpu: ArrowGpu }
+  | { kind: 'boxes'; gpu: BoxGpu }
+
+type CachedMark = MarkGpu & GpuResource
+
+interface FrameGpu extends GpuResource {
+  style: FrameModel['style']
+  lines: LineGpu[]
+  arrows: ArrowGpu[]
+}
+
+const PROGRAMS = [MESH_PROGRAM, LINE_PROGRAM, POINT_PROGRAM, ARROWHEAD_PROGRAM, COMPOSITE_PROGRAM, BOX_PROGRAM]
+
+// The frame's look (plan G9 "Frame drawing"): 1 px grid, 1.5 px walls and
+// ticks; the axes frame's axes as 1.5 px arrows with 10 px heads.
+const FRAME_LINES: readonly { role: FrameLineRole; width: number; color: (c: SpaceColors) => Rgb }[] = [
+  { role: 'grid', width: 1, color: (c) => c.grid },
+  { role: 'wall', width: 1.5, color: (c) => c.gridStrong },
+  { role: 'tick', width: 1.5, color: (c) => c.axis },
+]
+export const FRAME_AXIS_SHAFT = 1.5
+export const FRAME_AXIS_HEAD = 10
+
+function lineLook(mark: LineMark): LineLook {
+  return {
+    width: mark.style.width,
+    dash: mark.style.dash,
+    opacity: 1,
+    headSize: 0,
+    color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+    hidden: mark.style.hidden === 'dashed',
+  }
+}
+
+function arrowLook(mark: ArrowMark): ArrowLook {
+  return {
+    shaftWidth: mark.style.shaftWidth,
+    headSize: mark.style.headSize,
+    opacity: 1,
+    color: (c) => resolveSpaceColor(mark.style.color, c.palette, c.theme),
+    hidden: mark.style.hidden === 'dashed',
+  }
+}
+
+function cached(entry: MarkGpu | null): CachedMark | null {
+  if (!entry) return null
+  return { ...entry, destroy: (g: WebGL2RenderingContext) => entry.gpu.destroy(g) } as CachedMark
+}
+
+export class GlBackend {
+  readonly available: boolean
+  // Queried when the context is made and again after every restore: a
+  // restored context has no extension enabled until it is asked for again.
+  private caps: GlCapabilities | null
+  private readonly canvas: HTMLCanvasElement
+  private readonly options: GlBackendOptions
+  private readonly gl: WebGL2RenderingContext | null
+  private readonly programs = new ProgramCache()
+  private readonly marks = new Map<Mark, CachedMark>()
+  // The interaction layer's transient marks (setOverlay), cached the same way.
+  private readonly overlay = new Map<Mark, CachedMark>()
+  private overlayMarks: readonly Mark[] = []
+  private readonly luts = new LutCache()
+  private depthcue = true
+  private readonly unwatch: (() => void) | null
+  private shared: SharedQuads | null = null
+  private scene: SpaceScene | null = null
+  private world: WorldMap | null = null
+  private worldKey = ''
+  private sceneGeneration = 0
+  private colors: SpaceColors | null = null
+  private frame: FrameModel | null = null
+  private frameGpu: FrameGpu | null = null
+  private frameKey = ''
+  // The frame loop's targets, for the backing-store size in `targetsKey`
+  // (null there means they could not be made at that size).
+  private targets: Targets | null = null
+  private targetsKey = ''
+  // The OIT target could not be made for these targets: translucent meshes
+  // draw sorted until the targets are remade.
+  private oitFailed = false
+  private failed = false
+  private lost = false
+  private disposed = false
+
+  constructor(canvas: HTMLCanvasElement, options: GlBackendOptions = {}) {
+    this.canvas = canvas
+    this.options = options
+    const context = createContext(canvas)
+    if ('error' in context) {
+      this.gl = null
+      this.available = false
+      this.caps = null
+      this.unwatch = null
+      this.report(context.error)
+      return
+    }
+    this.gl = context.gl
+    this.available = true
+    this.caps = context.capabilities
+    this.unwatch = watchContext(
+      canvas,
+      () => this.handleLost(),
+      () => this.handleRestored(),
+    )
+    this.prepare()
+  }
+
+  // Replace the scene. Marks kept by identity keep their buffers, unless the
+  // box centre or scale changed, which re-uploads everything. `depthcue` is
+  // the spec's @depthcue.
+  setScene(scene: SpaceScene, world: WorldMap, colors: SpaceColors, options: { depthcue?: boolean } = {}): void {
+    this.scene = scene
+    this.depthcue = options.depthcue ?? true
+    this.world = world
+    this.colors = colors
+    this.sceneGeneration++
+    // The retained frame belongs to the previous scene's box: drop it, so
+    // nothing draws until the caller sets this scene's frame.
+    this.dropFrame()
+    this.upload()
+    // A new box re-uploads the overlay too (its positions are relative to the centre).
+    this.uploadOverlay()
+  }
+
+  // The frame's lines, in author coordinates, drawn before the marks. They
+  // are re-uploaded only when their geometry can have changed: a new frame
+  // key (a new box, new ticks, or walls flipped) or a new scene.
+  setFrame(frame: FrameModel, colors: SpaceColors): void {
+    this.frame = frame
+    this.colors = colors
+    this.uploadFrame()
+  }
+
+  setColors(colors: SpaceColors): void {
+    this.colors = colors
+  }
+
+  // The interaction layer's marks (probe and pin markers, drop lines): never
+  // part of the scene, drawn last over everything, unclipped, uncued and
+  // outside the hidden pass. Kept by identity like the scene's marks.
+  setOverlay(marks: readonly Mark[]): void {
+    this.overlayMarks = marks
+    this.uploadOverlay()
+  }
+
+  // `pixelRatio` is the backing store's pixels per CSS pixel.
+  draw(camera: CameraMatrices, pixelRatio: number): void {
+    const gl = this.gl
+    if (!gl || this.failed || this.lost || this.disposed || gl.isContextLost()) return
+    const colors = this.colors
+    try {
+      const width = this.canvas.width
+      const height = this.canvas.height
+      const world = this.world
+      if (!colors || !world) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+        gl.viewport(0, 0, width, height)
+        const bg = colors?.background ?? [1, 1, 1]
+        gl.clearColor(bg[0], bg[1], bg[2], 1)
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+        return
+      }
+      const mesh = this.program(MESH_PROGRAM)
+      const line = this.program(LINE_PROGRAM)
+      const point = this.program(POINT_PROGRAM)
+      const head = this.program(ARROWHEAD_PROGRAM)
+      const composite = this.program(COMPOSITE_PROGRAM)
+      const box = this.program(BOX_PROGRAM)
+      if (!mesh || !line || !point || !head || !composite || !box) return
+      this.sizeTargets(gl, width, height)
+      const look = markLook(camera, world, colors, this.depthcue)
+      const target: DrawTarget = { camera, world, colors, width, height, pixelRatio, look }
+
+      const meshes: MeshGpu[] = []
+      const lines: LineGpu[] = []
+      const arrows: ArrowGpu[] = []
+      const points: PointGpu[] = []
+      const boxes: BoxGpu[] = []
+      for (const m of this.marks.values()) {
+        if (m.kind === 'mesh') meshes.push(m.gpu)
+        else if (m.kind === 'lines') lines.push(m.gpu)
+        else if (m.kind === 'arrows') arrows.push(m.gpu)
+        else if (m.kind === 'boxes') boxes.push(m.gpu)
+        else points.push(m.gpu)
+      }
+      for (const b of boxes) if (b.edges) lines.push(b.edges)
+      const key = cameraKey(camera)
+      for (const l of lines) updateDashes(gl, l, camera, key, world)
+
+      // One colormap texture per map in use under this theme; the rest go.
+      const scales = this.scene?.colorScales ?? []
+      const maps = mapsUsed(meshes, scales)
+      this.luts.retain(gl, new Set([...maps].map((m) => lutKey(m, colors))))
+      const meshDraw: MeshDraw = { camera, world, colors, look, pixelRatio, scales, lut: (map) => this.luts.get(gl, map, colors) }
+      const boxDraw: BoxDraw = { camera, world, colors, look }
+
+      // Lines, arrowheads and points in two passes: their opaque cores
+      // write depth, then their antialiased fringes blend without writing it.
+      const antialiased = (ls: readonly LineGpu[], heads: readonly ArrowGpu[], ps: readonly PointGpu[], at: DrawTarget) => {
+        for (const pass of [0, 1] as const) {
+          if (pass === 1) {
+            gl.enable(gl.BLEND)
+            gl.depthMask(false)
+          }
+          drawLines(gl, line, ls, at, pass)
+          drawArrowHeads(gl, head, heads, at, pass)
+          drawPoints(gl, point, ps, at, pass)
+        }
+        gl.depthMask(true)
+        gl.disable(gl.BLEND)
+      }
+      const frameGpu = this.frameGpu
+      const translucent = meshes.filter(isTranslucent)
+      const translucentBoxes = boxes.filter((b) => !isOpaqueBox(b))
+      const hasTranslucent = translucent.length > 0 || translucentBoxes.length > 0
+      // The OIT target, made only once a translucent mesh or box needs it.
+      const targets = this.targets
+      if (hasTranslucent && targets && !targets.oit && !this.oitFailed && this.caps?.colorBufferFloat) {
+        this.oitFailed = !attachOit(gl, targets)
+      }
+      const hiddenLines = lines.filter((l) => l.look.hidden)
+      const hiddenArrows = arrows.filter((a) => a.look.hidden)
+
+      const overlayLines: LineGpu[] = []
+      const overlayArrows: ArrowGpu[] = []
+      const overlayPoints: PointGpu[] = []
+      for (const m of this.overlay.values()) {
+        if (m.kind === 'lines') overlayLines.push(m.gpu)
+        else if (m.kind === 'arrows') overlayArrows.push(m.gpu)
+        else if (m.kind === 'points') overlayPoints.push(m.gpu)
+      }
+      for (const l of overlayLines) updateDashes(gl, l, camera, key, world)
+
+      const passes: FramePasses = {
+        hasTranslucent,
+        overlay: () => {
+          if (this.overlay.size === 0) return
+          const at = { ...target, depthBias: 0, look: frameLook(look) }
+          antialiased([...overlayLines, ...overlayArrows.map((a) => a.shaft)], overlayArrows, overlayPoints, at)
+        },
+        // The frame: a box frame biased behind data that meets its walls, the
+        // axes frame as content.
+        frame: () => {
+          if (!frameGpu) return
+          const at = { ...target, depthBias: frameDepthBias(frameGpu.style), look: frameLook(look) }
+          antialiased([...frameGpu.lines, ...frameGpu.arrows.map((a) => a.shaft)], frameGpu.arrows, [], at)
+        },
+        opaque: () => {
+          drawMeshes(gl, mesh, meshes.filter((m) => !isTranslucent(m)), meshDraw)
+          drawOpaqueBoxes(gl, box, boxes, boxDraw)
+        },
+        // Where a surface hides them: both antialiasing passes blend (the loop
+        // has turned depth writes off), dashed, faint.
+        hidden: () => {
+          const shafts = [...hiddenLines, ...hiddenArrows.map((a) => a.shaft)]
+          for (const pass of [0, 1] as const) {
+            drawLines(gl, line, shafts, target, pass, { dash: HIDDEN_DASH, opacity: HIDDEN_OPACITY })
+            drawArrowHeads(gl, head, hiddenArrows, target, pass, HIDDEN_OPACITY)
+          }
+        },
+        marks: () => antialiased([...lines, ...arrows.map((a) => a.shaft)], arrows, points, target),
+        translucent: (oit) => {
+          if (oit) {
+            drawMeshesOit(gl, mesh, translucent, meshDraw)
+            drawBoxesOit(gl, box, translucentBoxes, boxDraw)
+            return
+          }
+          // The sorted fallback: meshes and box marks in one order, farthest
+          // first (a stable sort keeps a mesh before a box at equal depth).
+          const layers = [
+            ...translucent.map((m) => ({ depth: meshDepth(m, camera), draw: () => drawTranslucentMeshes(gl, mesh, [m], meshDraw) })),
+            ...translucentBoxes.map((b) => ({ depth: boxDepth(b, camera), draw: () => drawTranslucentBoxes(gl, box, [b], boxDraw, key) })),
+          ].sort((a, b) => a.depth - b.depth)
+          for (const layer of layers) layer.draw()
+        },
+      }
+      runFrameLoop(gl, { targets: this.targets, composite, background: colors.background, width, height }, passes)
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.unwatch?.()
+    const gl = this.gl
+    if (!gl) return
+    if (!this.lost && !gl.isContextLost()) {
+      for (const m of this.marks.values()) m.destroy(gl)
+      for (const m of this.overlay.values()) m.destroy(gl)
+      this.frameGpu?.destroy(gl)
+      this.shared?.destroy(gl)
+      this.targets?.destroy(gl)
+      this.luts.deleteAll(gl)
+      this.programs.deleteAll(gl)
+    }
+    this.luts.forget()
+    this.marks.clear()
+    this.overlay.clear()
+    this.frameGpu = null
+    this.shared = null
+    this.targets = null
+    this.targetsKey = ''
+    this.programs.forget()
+    this.scene = null
+    this.frame = null
+    // Deleting resources does not release the context itself, and browsers
+    // cap live contexts (about 16 in Chrome): release it on purpose. The
+    // loss listeners are already detached, and the canvas can never be drawn
+    // on again (GraphViewer gives the next renderer a fresh canvas).
+    if (!this.lost && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext()
+  }
+
+  // The frame loop's targets at the backing store's size: made on first
+  // draw, remade (the old ones deleted) when the size changes, and after a
+  // context restore. A size at which they cannot be made is not retried.
+  private sizeTargets(gl: WebGL2RenderingContext, width: number, height: number): void {
+    const key = `${width}x${height}`
+    if (key === this.targetsKey) return
+    this.targets?.destroy(gl)
+    this.targets = createTargets(gl, width, height)
+    this.targetsKey = key
+    this.oitFailed = false
+  }
+
+  get capabilities(): GlCapabilities | null {
+    return this.caps
+  }
+
+  private program(spec: { name: string; vertex: string; fragment: string }): ProgramInfo | null {
+    if (!this.gl) return null
+    return this.programs.get(this.gl, spec.name, spec.vertex, spec.fragment)
+  }
+
+  // Programs and the shared quad corners: everything not tied to a mark.
+  private prepare(): void {
+    const gl = this.gl
+    if (!gl) return
+    try {
+      for (const spec of PROGRAMS) this.program(spec)
+      this.shared = createSharedQuads(gl)
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private upload(): void {
+    const gl = this.gl
+    const scene = this.scene
+    const world = this.world
+    const shared = this.shared
+    if (!gl || !scene || !world || !shared || this.failed || this.lost || this.disposed) return
+    try {
+      const key = `${world.centre.join(',')}|${world.scale.join(',')}`
+      if (key !== this.worldKey) {
+        for (const m of this.marks.values()) m.destroy(gl)
+        this.marks.clear()
+        for (const m of this.overlay.values()) m.destroy(gl)
+        this.overlay.clear()
+        this.worldKey = key
+      }
+      syncByIdentity(gl, this.marks, scene.marks, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private uploadOverlay(): void {
+    const gl = this.gl
+    const world = this.world
+    const shared = this.shared
+    if (!gl || !world || !shared || this.failed || this.lost || this.disposed) return
+    try {
+      syncByIdentity(gl, this.overlay, this.overlayMarks, (mark) => cached(this.uploadMark(gl, shared, mark, world)))
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private uploadMark(gl: WebGL2RenderingContext, shared: SharedQuads, mark: Mark, world: WorldMap): MarkGpu | null {
+    switch (mark.kind) {
+      case 'mesh': {
+        const gpu = uploadMesh(gl, mark, world)
+        return gpu && { kind: 'mesh', gpu }
+      }
+      case 'lines': {
+        const gpu = uploadLines(gl, shared, mark.positions, mark.starts, world, lineLook(mark))
+        return gpu && { kind: 'lines', gpu }
+      }
+      case 'points': {
+        const gpu = uploadPoints(gl, shared, mark, world)
+        return gpu && { kind: 'points', gpu }
+      }
+      case 'arrows': {
+        const gpu = uploadArrows(gl, shared, mark.tails, mark.vectors, world, arrowLook(mark))
+        return gpu && { kind: 'arrows', gpu }
+      }
+      case 'boxes': {
+        const gpu = uploadBoxes(gl, shared, mark, world)
+        return gpu && { kind: 'boxes', gpu }
+      }
+      default:
+        return null
+    }
+  }
+
+  private dropFrame(): void {
+    if (this.gl && this.frameGpu && !this.lost && !this.gl.isContextLost()) this.frameGpu.destroy(this.gl)
+    this.frameGpu = null
+    this.frame = null
+    this.frameKey = ''
+  }
+
+  private uploadFrame(): void {
+    const gl = this.gl
+    const frame = this.frame
+    const world = this.world
+    const shared = this.shared
+    if (!gl || !frame || !world || !shared || this.failed || this.lost || this.disposed) return
+    const key = `${frame.key}|${this.sceneGeneration}|${this.worldKey}`
+    if (key === this.frameKey && this.frameGpu) return
+    try {
+      this.frameGpu?.destroy(gl)
+      this.frameGpu = null
+      const lines: LineGpu[] = []
+      for (const spec of FRAME_LINES) {
+        const own = frame.lines.filter((l) => l.role === spec.role)
+        if (own.length === 0) continue
+        const positions = new Float64Array(own.length * 6)
+        const starts = new Uint32Array(own.length)
+        own.forEach((l, i) => {
+          positions.set([l.a[0], l.a[1], l.a[2], l.b[0], l.b[1], l.b[2]], i * 6)
+          starts[i] = i * 2
+        })
+        const gpu = uploadLines(gl, shared, positions, starts, world, { width: spec.width, dash: null, opacity: 1, headSize: 0, color: spec.color, hidden: false })
+        if (gpu) lines.push(gpu)
+      }
+      const arrows: ArrowGpu[] = []
+      const axes = frame.lines.filter((l) => l.role === 'axis')
+      if (axes.length > 0) {
+        const tails = new Float64Array(axes.length * 3)
+        const vectors = new Float64Array(axes.length * 3)
+        axes.forEach((l, i) => {
+          tails.set(l.a, i * 3)
+          vectors.set([l.b[0] - l.a[0], l.b[1] - l.a[1], l.b[2] - l.a[2]], i * 3)
+        })
+        const gpu = uploadArrows(gl, shared, tails, vectors, world, {
+          shaftWidth: FRAME_AXIS_SHAFT,
+          headSize: FRAME_AXIS_HEAD,
+          opacity: 1,
+          color: (c) => c.axis,
+          hidden: false,
+        })
+        if (gpu) arrows.push(gpu)
+      }
+      this.frameGpu = {
+        style: frame.style,
+        lines,
+        arrows,
+        destroy(g) {
+          for (const l of lines) l.destroy(g)
+          for (const a of arrows) a.destroy(g)
+        },
+      }
+      this.frameKey = key
+    } catch (error) {
+      this.fail(error)
+    }
+  }
+
+  private handleLost(): void {
+    this.lost = true
+    // The context took every resource with it: drop the handles undeleted.
+    this.marks.clear()
+    this.overlay.clear()
+    this.frameGpu = null
+    this.frameKey = ''
+    this.shared = null
+    this.targets = null
+    this.targetsKey = ''
+    this.luts.forget()
+    this.programs.forget()
+    this.worldKey = ''
+    this.options.onContextLost?.()
+  }
+
+  private handleRestored(): void {
+    if (this.disposed || !this.gl) return
+    this.lost = false
+    // Extensions are off on a restored context until asked for again.
+    this.caps = queryCapabilities(this.gl)
+    this.prepare()
+    this.upload()
+    this.uploadOverlay()
+    this.uploadFrame()
+    this.options.onContextRestored?.()
+  }
+
+  private fail(error: unknown): void {
+    this.failed = true
+    this.report(error instanceof Error ? error.message : String(error))
+  }
+
+  private report(message: string): void {
+    if (this.options.onError) this.options.onError(message)
+    else console.error(message)
+  }
+}

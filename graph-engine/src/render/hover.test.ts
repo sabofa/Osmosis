@@ -1,13 +1,20 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
-import { HoverResolver } from './hover'
+import { HoverResolver, hoverReadout } from './hover'
+import { scaleOf } from '../plot/frame/scale'
 import { Camera2D } from './camera2d'
-import type { Scene } from '../scene/types'
+import { chainOf } from '../scene/chains'
+import type { Scene, SceneObject, Vec2 } from '../scene/types'
 
 const HOVER_COLOR = 0xc65d22
 const BG_COLOR = 0xffffff
 const pixelToWorld = (px: number) => px * 0.01
 const CANVAS = 800
+
+// A one-chain curve through `points`, parametrised by position along them.
+function curveThrough(...points: Vec2[]): SceneObject {
+  return { kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [], chains: [chainOf(points, points.map((_, i) => i))] }
+}
 
 function resolveAt(resolver: HoverResolver, scene: Scene, camera: Camera2D, worldX: number, worldY: number) {
   const cursorScreen = camera.worldToScreen(worldX, worldY, CANVAS, CANVAS)
@@ -19,7 +26,7 @@ describe('HoverResolver', () => {
   it('draws a guide line down to the current bottom of the view', () => {
     const camera = new Camera2D(CANVAS, CANVAS) // default viewHeight=12, centered (0,0) -> bounds -6..6
     const scene: Scene = {
-      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 }] }],
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 })],
       errors: [],
       regression: null,
     }
@@ -44,7 +51,7 @@ describe('HoverResolver', () => {
   it('refreshGuideLine extends the line to new bounds without a full re-resolve', () => {
     const camera = new Camera2D(CANVAS, CANVAS)
     const scene: Scene = {
-      objects: [{ kind: 'curve', points: [{ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 }] }],
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 0, y: 2 }, { x: 5, y: 2 })],
       errors: [],
       regression: null,
     }
@@ -54,7 +61,7 @@ describe('HoverResolver', () => {
     // Zoom out around the exact screen center — the camera stays centered on
     // (0, 0), so this doubles viewHeight (12 -> 24) with no center shift,
     // giving an exactly predictable new bounds.yMin of -12.
-    camera.zoomAt(2, CANVAS / 2, CANVAS / 2, CANVAS, CANVAS)
+    camera.setView({ ...camera.getView(), zoom: camera.getView().zoom / 2 })
     resolver.refreshGuideLine(camera)
 
     const line = resolver.group.children[0] as THREE.Line
@@ -68,5 +75,209 @@ describe('HoverResolver', () => {
     const resolver = new HoverResolver()
     expect(() => resolver.refreshGuideLine(camera)).not.toThrow()
     expect(resolver.group.children.length).toBe(0)
+  })
+})
+
+describe('hover dot on an anisotropic view', () => {
+  it('sizes the dot and halo as an ellipse per axis', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [{ kind: 'point', label: null, position: { x: 0, y: 0 } }],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const s = camera.worldToScreen(0, 0, CANVAS, CANVAS)
+    resolver.resolve(scene, 'all', s, { x: 0, y: 0 }, camera, CANVAS, CANVAS, HOVER_COLOR, BG_COLOR, pixelToWorld, (px) => ({ x: px * 0.01, y: px * 0.02 }))
+    const [halo, dot] = (resolver.group.children[0] as THREE.Group).children as THREE.Mesh[]
+    expect(halo.scale.x).toBeCloseTo(0.07)
+    expect(halo.scale.y).toBeCloseTo(0.14)
+    expect(dot.scale.x).toBeCloseTo(0.06)
+    expect(dot.scale.y).toBeCloseTo(0.12)
+  })
+})
+
+describe('feature snapping', () => {
+  // The bug: hovering near a parabola's vertex reports the nearest *sampled*
+  // point, so you read 1.9993 instead of 2. A feature carries its exact
+  // position, and hover should prefer it.
+  it('snaps to a feature point instead of the nearest curve sample', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        curveThrough({ x: 0.9, y: 0.81 }, { x: 1.1, y: 1.21 }),
+        { kind: 'point', label: null, position: { x: 1, y: 1 }, feature: 'local-min', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 1.02, 1.02)
+    expect(info).not.toBeNull()
+    expect(info?.worldX).toBeCloseTo(1, 10)
+    expect(info?.worldY).toBeCloseTo(1, 10)
+    expect(info?.exact).toBe(true)
+    expect(info?.feature).toBe('local-min')
+  })
+
+  it('reports a plain curve reading as inexact', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [curveThrough({ x: -5, y: 2 }, { x: 5, y: 2 })],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 0, 2)
+    expect(info?.exact).toBe(false)
+  })
+
+  // Snapping must not teleport the readout across the screen: a feature far
+  // from the cursor loses to a curve directly under it.
+  //
+  // The distances here are deliberately chosen so this test only passes if
+  // the SNAP_SCREEN_DIST radius check is actually enforced, not merely
+  // because the feature falls outside HOVER_MAX_SCREEN_DIST altogether (a
+  // weaker version of this test using a far-off feature point would pass
+  // even with the radius check deleted, since HOVER_MAX_SCREEN_DIST alone
+  // would already reject the candidate — that would not be testing the snap
+  // radius at all). With CANVAS=800 and the default viewHeight=12, 1 world
+  // unit = 800/12 ~= 66.667 screen px. The curve sample sits 25px from the
+  // cursor; the feature sits 35px away — inside HOVER_MAX_SCREEN_DIST (70px)
+  // but outside SNAP_SCREEN_DIST (22px). Discounted by FEATURE_BIAS_PX
+  // (14px), the feature's biased distance would be 21px < the curve's 25px,
+  // so if the radius check were removed the feature would wrongly win.
+  it('does not snap to a feature outside the snap radius', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        curveThrough({ x: -5, y: -0.375 }, { x: 5, y: -0.375 }),
+        { kind: 'point', label: null, position: { x: 0, y: 0.525 }, feature: 'local-max', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 0, 0)
+    expect(info?.exact).toBe(false)
+    expect(info?.feature).toBeFalsy()
+    expect(info?.worldY).toBeCloseTo(-0.375, 6)
+  })
+})
+
+describe('chains and marks', () => {
+  // The end of one chain and the start of the next are separated by a break:
+  // nothing is drawn across it, so hovering the empty gap must not read a point
+  // on an invisible bridge.
+  it('does not scan across the gap between two chains', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        {
+          kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [{ at: 0, kind: 'pole' }],
+          chains: [chainOf([{ x: -5, y: 2 }, { x: -2, y: 2 }], [-5, -2]), chainOf([{ x: 2, y: 2 }, { x: 5, y: 2 }], [2, 5])],
+        },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    expect(resolveAt(resolver, scene, camera, 0, 2)).toBeNull()
+    const onChain = resolveAt(resolver, scene, camera, -3, 2)
+    expect(onChain?.worldX).toBeCloseTo(-3, 6)
+  })
+
+  it('scans the closing edge of a closed chain', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const square = chainOf([{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }], [0, 1, 2, 3], true)
+    const scene: Scene = {
+      objects: [{ kind: 'curve', id: { statement: 0, object: 'curve' }, breaks: [], chains: [square] }],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    // The left edge, from (0, 4) back to (0, 0), exists only because the chain is closed.
+    const info = resolveAt(resolver, scene, camera, 0, 2)
+    expect(info?.worldX).toBeCloseTo(0, 6)
+    expect(info?.worldY).toBeCloseTo(2, 6)
+  })
+
+  it('reads a mark like a point, exact when its position is analytic, with no guide line', () => {
+    const camera = new Camera2D(CANVAS, CANVAS)
+    const scene: Scene = {
+      objects: [
+        curveThrough({ x: -5, y: 2 }, { x: 5, y: 2 }),
+        { kind: 'mark', id: { statement: 0, object: 'hole.0' }, at: { x: 1, y: 2.3 }, role: 'hole', fill: 'open', exact: true },
+      ],
+      errors: [],
+      regression: null,
+    }
+    const resolver = new HoverResolver()
+    const info = resolveAt(resolver, scene, camera, 1, 2.3)
+    expect(info?.exact).toBe(true)
+    expect(info?.worldX).toBeCloseTo(1, 10)
+    expect(info?.worldY).toBeCloseTo(2.3, 10)
+    expect(info?.feature).toBeNull()
+    // No guide line: a mark is read in place, so nothing but the hover dot is drawn.
+    expect(resolver.group.children.some((c) => c instanceof THREE.Line)).toBe(false)
+  })
+})
+
+describe('hover readout on log axes', () => {
+  const bounds = { xMin: 0, xMax: 4, yMin: -1, yMax: 3 }
+  const log = { x: scaleOf('log'), y: scaleOf('linear') }
+  it('reports the world value (plane u=2 on a log x axis is x=100)', () => {
+    const r = hoverReadout({ x: 2, y: 1 }, bounds, log)
+    expect(r.worldX).toBeCloseTo(100)
+    expect(r.worldY).toBe(1)
+    // local extent: the smaller of x (10^4 - 10^0 = 9999) and y (4)
+    expect(r.span).toBe(4)
+  })
+  it('x wins the span when the log x extent is the smaller one', () => {
+    // u in [0, 0.2] at u=0.1: 10^0.2 - 10^0 is about 0.585, well under the y span of 4
+    const r = hoverReadout({ x: 0.1, y: 1 }, { xMin: 0, xMax: 0.2, yMin: -1, yMax: 3 }, log)
+    expect(r.span).toBeCloseTo(Math.pow(10, 0.2) - 1, 9)
+    expect(r.span).toBeLessThan(4)
+  })
+  it('a huge window never gives NaN', () => {
+    const r = hoverReadout({ x: 0, y: 1 }, { xMin: -400, xMax: 400, yMin: -1, yMax: 3 }, log)
+    expect(Number.isNaN(r.span)).toBe(false)
+    expect(Number.isFinite(r.span) || r.span === Infinity).toBe(true)
+  })
+  it('linear is unchanged', () => {
+    const r = hoverReadout({ x: 2, y: 1 }, bounds)
+    expect(r).toEqual({ worldX: 2, worldY: 1, span: 4 })
+  })
+  it('resolve reports it end to end', () => {
+    const camera = new Camera2D(CANVAS, CANVAS, { xMin: 0, xMax: 4, yMin: -1, yMax: 3 })
+    const scene: Scene = { objects: [curveThrough({ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 })], errors: [], regression: null }
+    const cursorScreen = camera.worldToScreen(2, 1, CANVAS, CANVAS)
+    const info = new HoverResolver().resolve(scene, 'all', cursorScreen, camera.screenToWorld(cursorScreen.x, cursorScreen.y, CANVAS, CANVAS), camera, CANVAS, CANVAS, HOVER_COLOR, BG_COLOR, pixelToWorld, undefined, log)
+    expect(info!.worldX).toBeCloseTo(100)
+  })
+})
+
+describe('hover guide line is origin-relative', () => {
+  it('keeps float32-distinct vertices in a 2e-8 window at x=1000, at creation and on refresh', () => {
+    const camera = new Camera2D(CANVAS, CANVAS, { xMin: 1000 - 1e-8, xMax: 1000 + 1e-8, yMin: -1e-8, yMax: 1e-8 })
+    camera.setOrigin(1000, 0)
+    const scene: Scene = { objects: [curveThrough({ x: 1000 - 5e-9, y: 0 }, { x: 1000, y: 0 }, { x: 1000 + 5e-9, y: 0 })], errors: [], regression: null }
+    const resolver = new HoverResolver()
+    resolveAt(resolver, scene, camera, 1000 + 3e-9, 0)
+    const line = resolver.group.children[0] as THREE.Line
+    expect(line.position.x).toBe(1000)
+    const pos = line.geometry.getAttribute('position')
+    expect(Math.abs(pos.getX(0))).toBeLessThan(1e-8) // relative: small, so float32 keeps it exact to ~1e-15
+    expect(pos.getX(0)).toBeCloseTo(3e-9, 12)
+    resolver.refreshGuideLine(camera)
+    expect(line.geometry.getAttribute('position').getX(1)).toBeCloseTo(3e-9, 12)
+    expect(line.geometry.getAttribute('position').getY(0)).toBeCloseTo(-1e-8, 12)
+    const markers = resolver.group.children[1] as THREE.Group
+    expect(markers.position.x).toBe(1000)
+    for (const m of markers.children) {
+      expect(Math.abs(m.position.x)).toBeLessThan(1e-8)
+      expect(m.position.x).toBeCloseTo(3e-9, 12)
+    }
+    expect(markers.children.length).toBe(2)
   })
 })
