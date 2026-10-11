@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import type { GraphConfig } from '../parser/config'
 import { Camera2D } from './camera2d'
 import { ViewController } from './viewController'
-import { authoredBounds } from '../plot/view/authored'
+import { authoredBounds, resolvePlotAspect } from '../plot/view/authored'
 import { frameChanged } from '../plot/view/frameChanged'
 import { keyReachesView, pointerKindOf } from '../view2d/dom/domInput'
 import type { Intent, PointerSample } from '../view2d'
@@ -255,7 +255,7 @@ export class SceneRenderer {
     const rect = canvas.getBoundingClientRect()
     const width = Math.max(rect.width, 1)
     const height = Math.max(rect.height, 1)
-    this.camera2d = new Camera2D(width, height, authoredBounds(options.config, width / height), options.config.space.aspect)
+    this.camera2d = new Camera2D(width, height, authoredBounds(options.config, width / height), resolvePlotAspect(options.config))
     this.controller = new ViewController(this.camera2d, { locked: options.config.lock })
     this.renderer.setSize(width, height, false)
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -352,7 +352,7 @@ export class SceneRenderer {
     // The caller rebuilds the scene right after, which picks up the new camera bounds.
     if (frameChanged(this.options.config, config)) {
       const { width, height } = this.camera2d.screenSize()
-      this.camera2d.setFrame(authoredBounds(config, width / height), config.space.aspect)
+      this.camera2d.setFrame(authoredBounds(config, width / height), resolvePlotAspect(config))
       this.controller.resized()
       this.resizedSinceBuild = true
     }
