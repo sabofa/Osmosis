@@ -639,6 +639,55 @@ feature coordinates print enough digits for the current zoom.
 | a 10⁻⁸-wide window around x = 1000 | distinct labels, a smooth curve, no jitter |
 | panned so the y-axis is off-screen | y labels pinned at the left edge |
 
+### As built (P4, 2026-10-10)
+
+What shipped, against the spec above. Pure code in `plot/frame/` and `plot/view/`;
+the rendering in `render/`. Nothing in `view2d/` changed.
+
+- **Camera.** A "frame space" over view2d: the plot hands view2d the numbers
+  `X = a*u`, `Y = -b*v` (a, b = px per unit in x and y at zoom 1; only a:b
+  matters). `PlotView {cu, cv, zoom, a, b}` is the plot's own state and the view2d
+  camera is derived from it. One-axis zoom (Alt / Alt+Shift + wheel) is not a camera
+  operation: it changes the ratio a:b and re-derives zoom and centre. `Camera2D`
+  is a facade over `PlotView`.
+- **Log axes by expression rewrite**, not by a sampler transform: every
+  expression is rewritten to run on the (u, v) plane (`throughScales`,
+  `substituteVar`, `logOf`), and scene coordinates are (u, v). The sampler and
+  quadtree are untouched. Ticks come from `frameTicks` (linear, pi, log) and
+  `gridPlan`; `labelAnchors` pins labels to the nearest edge.
+- **Titles and ticks.** `@titles` drawn only when authored; `@xstep: pi/2` marks
+  `space.ticks`; `@xstep: 2pi` now means 2 pi (it parsed as 2 before).
+- **Live frame, `@lock`.** `@bounds`, `@aspect`, `@xscale`/`@yscale` re-apply only
+  when `frameChanged`; a `@lock` plot keeps the authored view and the page scrolls.
+- **Readouts.** `formatForSpan` prints digits for the current zoom (hover,
+  feature labels; regression and vector labels still use `formatCoord`).
+- **Deep zoom.** `PLOT_ZOOM = 1e-11..2e10` times the fitted window (about 1e-9 to
+  1e12 view height for a 12-unit window); float32 geometry and grid lines are
+  origin-relative.
+
+Deviations:
+
+- `@bounds` syntax is `xMin,xMax,yMin,yMax`, not `[a, b] x [c, d]`; the
+  acceptance row means `@bounds: 0,6.2832,-1.2,1.2`.
+- Auto aspect resolves in `resolvePlotAspect`: an authored `@aspect` wins; none plus all
+  four `@bounds` numbers gives `auto`; otherwise equal. A log axis with no
+  `@bounds` shows 0.1..10.
+- Log-axis limits: straight world segments, polygons and vectors stay straight
+  between mapped endpoints; tangents, circles and polar curves are refused;
+  angle/tick/rightAngle marks and constructions stay in world coordinates.
+- The carried minors from the T1-T4 review (huge pi spans fall back to the nice
+  step, tuning constants in `plot/frame/tuning.ts`, dead `View.xScale?` and
+  `pxMapper` removed) landed in `ffb6a44` and `5ab96d6`.
+
+Known leftovers:
+
+- Angle-label distance is still computed from the x scale only.
+- The ribbon weight taper along a curve is intentional; Ben's taste knob is
+  `CURVE_WEIGHT_INTENSITY`.
+- Tick-label collision uses a 7 px per character estimate, not measured text.
+- Under `auto` aspect, an Alt+wheel one-axis zoom resets when the plot resizes.
+- 8.4 (layer alphas from theme-core) is not built; see the P4 handoff.
+
 ## Features, hover and parameters (P5)
 
 ### Feature points on the kernel

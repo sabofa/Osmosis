@@ -861,9 +861,12 @@ different keys; for a repeated key, the last one wins.
 
 | Directive | Values | Default | Notes |
 |---|---|---|---|
-| `@bounds` | `xMin,xMax,yMin,yMax` | auto | axis window; `xMin < xMax` and `yMin < yMax` required |
+| `@bounds` | `xMin,xMax,yMin,yMax` | auto | axis window, four plain numbers separated by commas (not `[a, b] x [c, d]`); `xMin < xMax` and `yMin < yMax` required. Live: editing it re-applies the frame, while pan and zoom survive edits to anything else. On a log axis its range must be positive |
+| `@aspect` | `equal`\|`auto`\|`a:b` | see notes | 2D: `equal` draws a unit the same length on both axes (circles stay round); `auto` stretches the window to fill the plot; `a:b` draws a unit of x `a` long for every `b` of y. With no `@aspect`, a `@bounds` that gives all four numbers resolves to `auto` (both ranges honoured exactly), otherwise `equal`. 3D takes `a:b:c` and refuses `a:b` |
+| `@xscale`, `@yscale` | `linear`\|`log` | `linear` | log axes (base 10): decade labels with 2-9 minor ticks. `log` needs a positive `@bounds` range on that axis; with no `@bounds` the axis shows 0.1..10. See "The frame" below |
+| `@titles` | `x "text", y "text"` | none | axis titles, each quoted, in any order, each axis at most once: `@titles: x "time (s)", y "height (m)"`. A title is drawn only when authored |
 | `@lock` | bare, or `true`\|`false` | `false` | static plot: keeps the authored view (`@bounds`, aspect, scales) and ignores pan, zoom, keys and reset; hover readouts still work, and the page scrolls over it. 2D only |
-| `@xstep`, `@ystep` | positive number | auto | gridline spacing |
+| `@xstep`, `@ystep` | positive number, or a rational multiple of pi | auto | gridline spacing. A multiple of pi (`pi/2`, `2pi`, `3*pi/4`) labels the axis in pi: `@xstep: pi/2` gives pi/2, pi, 3pi/2, 2pi. **Meaning change:** `@xstep: 2pi` used to read as 2; it now means 2 pi |
 | `@grid` | `on`\|`off` | `on` | |
 | `@axes` | `on`\|`off` | `on` | |
 | `@angle` | `degrees`\|`radians` | `radians` | affects `sin`/`cos`/`tan` argument interpretation |
@@ -886,6 +889,38 @@ different keys; for a repeated key, the last one wins.
 | `@focus` | `(x, y)`, `(x, y, z)` or `view (u, v)`, optionally followed by `zoom <k>` | fitted view | where a **figure** opens, in the figure's own coordinates — see "`@focus`: where a figure opens" below. Figures only; a plot or a table ignores it |
 
 `@lock` makes a graph static, for a figure that should not wander: the window is the one `@bounds` (or the auto-fit) already gives, and the plot keeps it. Dragging, the wheel, pinch, Alt+wheel, the arrow/zoom keys and reset do nothing, the page scrolls over the plot and the canvas takes no keyboard focus. Hover readouts still work, and editing `@bounds` live still moves the window. Write it bare (`@lock`) or as `@lock: true`; `@lock: false` is the default. 3D specs ignore it.
+
+### The frame: aspect, log axes, controls, deep zoom
+
+`@aspect` shapes the 2D window. A drawn unit is the same on both axes under
+`equal`; under `auto` the `@bounds` window fills the plot exactly; under
+`a:b` the unit ratio is fixed. Set `@bounds` with all four numbers and you get
+`auto` unless you write `@aspect` yourself.
+
+**Controls.** Plain wheel zooms both axes. When the aspect is not `equal`,
+Alt + wheel zooms the x axis only and Alt + Shift + wheel the y axis only,
+about the cursor (this changes the unit ratio; reset restores the authored one).
+Under `auto`, a one-axis zoom is dropped when the plot is resized.
+
+**Log axes.** `@xscale: log` / `@yscale: log` plot the log of that coordinate;
+every expression is rewritten to work on the log plane, so curves, implicit
+curves, regions, fields and feature points follow. A value at or below 0 is a
+domain edge (the curve stops there), not an error. `@yscale: log` with
+`y = e^(-x)` is a straight line; both axes log with `y = x^3` is a line of slope 3.
+
+Known limits on log axes:
+
+- Straight world segments, polygons and vectors are drawn straight between
+  their mapped endpoints, not as the curve the world line would trace.
+- Tangent lines and circles are refused on a log axis.
+- Polar curves are refused on a log axis; write them parametrically.
+- `angle`, `tick` and `rightAngle` marks and geometry constructions stay in world
+  coordinates.
+
+**Deep zoom.** The view height may range from about 1e-9 to 1e12 world units
+(scene coordinates are float64; geometry and grid lines are float32 relative to
+an origin near the view). Tick labels print the digits the zoom needs and thin to
+every k-th tick so their boxes never overlap.
 
 ### `@focus`: where a figure opens
 
