@@ -82,30 +82,11 @@ export const normalizeEol = (text: string): string => (text.includes('\r') ? tex
 /** Editor text -> host text with the host's line ending. */
 export const toHostEol = (text: string, eol: Eol): string => (eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text)
 
-/**
- * ChangeSet -> UTF-16 changes in OLD document coordinates (what mapOffset expects).
- * With `crlf` the changes are re-expressed in the HOST text, where every editor
- * line break is two units; `oldText` is the editor's (LF) pre-change text.
- */
-export function changesToTextChanges(changes: ChangeSet, crlf?: { oldText: string }): TextChange[] {
+/** ChangeSet -> UTF-16 changes in OLD document coordinates (what mapOffset expects). */
+export function changesToTextChanges(changes: ChangeSet): TextChange[] {
   const out: TextChange[] = []
-  let scanned = 0 // oldText scanned up to here
-  let breaks = 0 // line breaks before `scanned`
-  const breaksBefore = (pos: number): number => {
-    const text = crlf!.oldText
-    while (scanned < pos) {
-      const i = text.indexOf('\n', scanned)
-      if (i < 0 || i >= pos) { scanned = pos; break }
-      breaks++
-      scanned = i + 1
-    }
-    return breaks
-  }
   changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    if (!crlf) { out.push({ from: fromA, to: toA, insertLen: inserted.length }); return }
-    const from = fromA + breaksBefore(fromA)
-    const to = toA + breaksBefore(toA)
-    out.push({ from, to, insertLen: inserted.length + (inserted.lines - 1) })
+    out.push({ from: fromA, to: toA, insertLen: inserted.length })
   })
   return out
 }
@@ -120,71 +101,27 @@ function sameHighlights(a: readonly DocumentHighlight[], b: readonly DocumentHig
 }
 
 /**
- * Offset conversion between a host text (any mix of LF, CRLF, lone CR) and the
- * editor's LF-only text, built from the exact host string.
- */
-export function hostEditorMapper(host: string) {
-  const edIdx: number[] = [] // editor index of each line break
-  const hostPos: number[] = [] // host index where that break starts
-  const lens: number[] = []
-  const prefix: number[] = [0] // extra host units contributed by the first k breaks
-  for (let i = 0; i < host.length; i++) {
-    const c = host.charCodeAt(i)
-    if (c !== 10 && c !== 13) continue
-    const len = c === 13 && host.charCodeAt(i + 1) === 10 ? 2 : 1
-    edIdx.push(i - prefix[prefix.length - 1])
-    hostPos.push(i)
-    lens.push(len)
-    prefix.push(prefix[prefix.length - 1] + len - 1)
-    i += len - 1
-  }
-  const lowerBound = (arr: number[], v: number) => {
-    let lo = 0
-    let hi = arr.length
-    while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m + 1; else hi = m }
-    return lo
-  }
-  return {
-    toHost: (e: number) => e + prefix[lowerBound(edIdx, e)],
-    toEditor: (h: number) => {
-      const k = lowerBound(hostPos, h) // breaks starting before h
-      // inside a CRLF: land after the break
-      if (k > 0 && lens[k - 1] === 2 && h === hostPos[k - 1] + 1) return edIdx[k - 1] + 1
-      return h - prefix[k]
-    },
-  }
-}
-
-/**
  * Carry codepoint-offset highlights through an edit. Conversion to UTF-16 uses
  * the OLD text, remap runs in UTF-16, conversion back uses the NEW text.
- * `oldText`/`newText` are the EDITOR's (LF-only) texts; highlights are in the
- * HOST text. The remap itself runs in editor coordinates; the host texts are
- * `hosts` when known exactly (any line-ending mix), else rebuilt from `eol`.
- * Returns null when nothing changed (caller skips onHighlightsChange).
+ * Offset convention: highlights are codepoint offsets into the LF-NORMALISED
+ * text (every CRLF and lone CR counts as one "\n"), i.e. the editor's own
+ * document, whatever line ending the host text uses. `oldText`/`newText` are
+ * the editor's texts. Returns null when nothing changed (caller skips
+ * onHighlightsChange).
  */
 export function remapHighlightsThroughChanges(
   oldText: string,
   newText: string,
   highlights: readonly DocumentHighlight[],
   changes: ChangeSet,
-  eol: Eol = '\n',
-  hosts?: { oldHost: string; newHost: string },
 ): DocumentHighlight[] | null {
   if (highlights.length === 0) return null
-  const oldHost = hosts?.oldHost ?? toHostEol(oldText, eol)
-  const newHost = hosts?.newHost ?? toHostEol(newText, eol)
-  const oldMap = hostEditorMapper(oldHost)
-  const newMap = hostEditorMapper(newHost)
   const textChanges = changesToTextChanges(changes)
-  const internal = highlights.map((h) => {
-    const r = toInternalRange(oldHost, h)
-    return { ...r, start: oldMap.toEditor(r.start), end: oldMap.toEditor(r.end) }
-  })
+  const internal = highlights.map((h) => toInternalRange(oldText, h))
   const { kept } = remapHighlights(internal, textChanges)
-  const back = kept.map((h) => fromInternalRange(newHost, { ...h, start: newMap.toHost(h.start), end: newMap.toHost(h.end) }))
+  const back = kept.map((h) => fromInternalRange(newText, h))
   // Every survivor gets its quote re-read from the NEW text so re-anchoring stays accurate.
-  const next = attachQuotes(newHost, back, new Set<string>())
+  const next = attachQuotes(newText, back, new Set<string>())
   return sameHighlights(highlights, next) ? null : next
 }
 
@@ -193,13 +130,11 @@ export function remapHighlightsThroughChanges(
 // The React component's flush / retry / echo logic as a pure reducer. Timer
 // scheduling comes back as data (`timer`); the component just executes it.
 //
-// Line endings: the editor works on LF-only text. `lastHost` is the exact last
-// known host text (the prop value, or the text we last emitted) and converts
-// offsets for highlight remaps, so mixed endings are never rebuilt from one
-// uniform EOL. The first onChange of a mixed-EOL file normalises it to the
-// majority EOL (a lone CR counts as a line break); highlights survive because
-// the remap goes through editor coordinates, and their quotes are re-read from
-// the normalised text afterwards (re-attached by quote).
+// Line endings: the editor works on LF-only text and highlight offsets are
+// against that text (see remapHighlightsThroughChanges), so line endings never
+// touch them. `eol` is only the ending re-added to the TEXT we emit: the first
+// onChange of a mixed-EOL file normalises it to the majority EOL (a lone CR
+// counts as a line break).
 // Review items 7, 9 and 10 are deliberately skipped in this last round.
 
 export const RETRY_MS = 25
@@ -210,18 +145,17 @@ export type TimerCmd = { kind: 'arm'; ms: number; tries: number } | { kind: 'cle
 export interface GlueState {
   emitted: string[]
   queued: string | null
-  lastHost: string
   eol: Eol
 }
 
-export interface GlueApply { internal: string; oldHost: string; newHost: string }
+export interface GlueApply { internal: string }
 export interface GlueStep { state: GlueState; apply: GlueApply | null; timer: TimerCmd }
 
-export const initGlue = (value: string): GlueState => ({ emitted: [], queued: null, lastHost: value, eol: detectEol(value) })
+export const initGlue = (value: string): GlueState => ({ emitted: [], queued: null, eol: detectEol(value) })
 
 const applyStep = (s: GlueState, host: string): GlueStep => ({
-  state: { emitted: [], queued: null, lastHost: host, eol: detectEol(host, s.eol) },
-  apply: { internal: normalizeEol(host), oldHost: s.lastHost, newHost: host },
+  state: { emitted: [], queued: null, eol: detectEol(host, s.eol) },
+  apply: { internal: normalizeEol(host) },
   timer: { kind: 'clear' },
 })
 
@@ -238,7 +172,7 @@ export function glueOnProp(s: GlueState, value: string, docText: string, composi
     const timer: TimerCmd = queued !== null && !composingRef && viewComposing ? { kind: 'arm', ms: RETRY_MS, tries: 0 } : null
     return { state: { ...s, queued, emitted }, apply: null, timer }
   }
-  if (d === 'noop') return { state: { ...s, queued: null, lastHost: value, eol: detectEol(value, s.eol) }, apply: null, timer: { kind: 'clear' } }
+  if (d === 'noop') return { state: { ...s, queued: null, eol: detectEol(value, s.eol) }, apply: null, timer: { kind: 'clear' } }
   return applyStep(s, value)
 }
 
@@ -246,7 +180,7 @@ export function glueOnProp(s: GlueState, value: string, docText: string, composi
 export function glueOnEmit(s: GlueState, out: string): GlueState {
   const emitted = s.emitted.slice()
   rememberEmitted(emitted, out)
-  return { ...s, emitted, lastHost: out }
+  return { ...s, emitted }
 }
 
 /** The deferred flush of a queued value fired; `tries` retries have happened. */

@@ -51,6 +51,8 @@ export interface DocumentAnchor {
 // highlights are created interactively by selecting text in the viewer
 // itself, so there can be any number of them, and the host app owns
 // persisting them (see DocumentViewerProps.onHighlightsChange).
+// For text assets the editor speaks offsets against LF-NORMALISED text (every
+// CRLF / lone CR counts as one "\n"), regardless of the host text's EOL.
 export interface DocumentHighlight {
   id: string
   start: number // codepoint index, inclusive

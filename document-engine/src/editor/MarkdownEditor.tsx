@@ -16,6 +16,9 @@ export interface MarkdownEditorProps {
   value: string
   onChange(text: string): void
   onReady?(view: EditorView): void
+  // Highlight offsets (in and out) are codepoints into the LF-NORMALISED text:
+  // every "\r\n" and lone "\r" counts as one "\n", whatever EOL `value` has.
+  // `onChange` still gets the text back with its original line ending.
   highlights?: DocumentHighlight[]
   onHighlightsChange?(h: DocumentHighlight[]): void
   onCompositionChange?(composing: boolean): void
@@ -51,8 +54,6 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
   const glueRef = useRef<GlueState | null>(null)
   if (glueRef.current === null) glueRef.current = initGlue(props.value)
   const runFlushRef = useRef<((step: GlueStep) => void) | null>(null)
-  // Exact host texts around an external dispatch, for the highlight remap.
-  const pendingHostsRef = useRef<{ oldHost: string; newHost: string } | null>(null)
   const readOnlyRef = useRef<Compartment | null>(null)
   if (readOnlyRef.current === null) readOnlyRef.current = new Compartment()
   const appliedReadOnlyRef = useRef(!!props.readOnly)
@@ -74,10 +75,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     const run = (step: GlueStep) => {
       glueRef.current = step.state
       const v = viewRef.current
-      if (step.apply && v) {
-        pendingHostsRef.current = { oldHost: step.apply.oldHost, newHost: step.apply.newHost }
-        try { applyValue(v, step.apply.internal) } finally { pendingHostsRef.current = null }
-      }
+      if (step.apply && v) applyValue(v, step.apply.internal)
       runTimer(step.timer)
     }
     // Apply the queued value once the composition has fully settled.
@@ -116,26 +114,20 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             const p = propsRef.current
             if (u.docChanged || u.selectionSet) p.onViewUpdate?.(u.view)
             if (!u.docChanged) return
-            let newText: string | null = null
-            const current = () => (newText ??= u.state.doc.toString())
             const external = u.transactions.some((tr) => tr.annotation(externalSync))
             const g = glueRef.current!
-            const oldText = u.startState.doc.toString()
-            // Exact host texts: the external prop value, or the text we emit.
-            const newHost = external ? pendingHostsRef.current?.newHost ?? toHostEol(current(), g.eol) : toHostEol(current(), g.eol)
-            let oldHost = external ? pendingHostsRef.current?.oldHost ?? g.lastHost : g.lastHost
-            if (normalizeEol(oldHost) !== oldText) oldHost = toHostEol(oldText, g.eol)
             const hs = highlightsRef.current
             if (hs.length && p.onHighlightsChange) {
-              const next = remapHighlightsThroughChanges(oldText, current(), hs, u.changes, g.eol, { oldHost, newHost })
+              const next = remapHighlightsThroughChanges(u.startState.doc.toString(), u.state.doc.toString(), hs, u.changes)
               if (next) {
                 highlightsRef.current = next
                 p.onHighlightsChange(next)
               }
             }
             if (!external) {
-              glueRef.current = glueOnEmit(g, newHost)
-              p.onChange(newHost)
+              const out = toHostEol(u.state.doc.toString(), g.eol)
+              glueRef.current = glueOnEmit(g, out)
+              p.onChange(out)
             }
           }),
         ],
@@ -146,6 +138,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     if (propsRef.current.autoFocus) view.focus()
     return () => {
       clearTimer()
+      composingRef.current = false
       glueRef.current = glueOnUnmount(glueRef.current!).state
       view.destroy()
       viewRef.current = null
