@@ -621,7 +621,7 @@ export class SceneRenderer {
     this.gridRenderer.draw(this.camera2d.getBounds(), this.options.config, (px) => this.pixelToWorld(px), {
       widthPx: Math.max(rect.width, 1),
       heightPx: Math.max(rect.height, 1),
-    }, (px) => this.pixelToWorldXY(px))
+    }, (px) => this.pixelToWorldXY(px), this.camera2d.origin())
     this.needsRender = true
   }
 
@@ -637,8 +637,12 @@ export class SceneRenderer {
     const view = this.camera2d.getBounds()
     this.builtBounds = view
     this.resizedSinceBuild = false
+    // Renderer-relative float32: build the geometry relative to the view's centre (kept until the next rebuild), so a
+    // 1e-8 window around x = 1000 does not quantise. The grid draws against the same origin.
+    this.camera2d.setOrigin((view.xMin + view.xMax) / 2, (view.yMin + view.yMax) / 2)
     const { geometry, misc } = toRenderItems(scene.objects, overscanBox(view))
-    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px))
+    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px), this.camera2d.origin())
+    this.drawGrid()
     this.updateMiscGroup(misc)
     this.needsRender = true
   }

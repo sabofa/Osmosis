@@ -469,4 +469,56 @@ describe('GeometryGroupManager', () => {
     const after = mgr.group.children[0]
     expect(after).not.toBe(before)
   })
+
+  describe('renderer-relative float32', () => {
+    // A 1e-8 window around x = 1000, 800 px across: one pixel is 1.25e-11 world units, float32 spacing at 1000 is 6e-5.
+    const x0 = 1000
+    const span = 1e-8
+    const origin = { x: x0 + span / 2, y: 0 }
+    const f = (x: number) => 3 * (x - x0) / span
+    const points: Vec2[] = Array.from({ length: 81 }, (_, i) => {
+      const x = x0 + (span * i) / 80
+      return { x, y: f(x) }
+    })
+
+    it('records the origin and sits the group on it', () => {
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points, color: null }], palette, () => 1e-12, origin)
+      expect(mgr.origin).toEqual(origin)
+      expect(mgr.group.position.x).toBe(origin.x)
+    })
+
+    it('curve x positions stay distinct float32 values within 0.1 px of the exact curve', () => {
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points, color: null }], palette, () => 1e-12, origin)
+      const pos = (mgr.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array as Float32Array
+      const pxPerUnit = 800 / span
+      let maxErr = 0
+      const xs = new Set<number>()
+      for (let i = 0; i < points.length; i++) {
+        // left/right ribbon vertices are offset by the (tiny) half width along the normal; compare their midpoint.
+        const mid = (pos[i * 6] + pos[i * 6 + 3]) / 2
+        xs.add(mid)
+        maxErr = Math.max(maxErr, Math.abs(mid + origin.x - points[i].x) * pxPerUnit)
+      }
+      expect(xs.size).toBe(points.length)
+      expect(maxErr).toBeLessThan(0.1)
+    })
+
+    it('without an origin the same window quantises (the problem the origin solves)', () => {
+      const mgr = new GeometryGroupManager()
+      mgr.update([{ kind: 'curve', points, color: null }], palette, () => 1e-12)
+      const pos = (mgr.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array as Float32Array
+      expect(new Set(points.map((_, i) => pos[i * 6])).size).toBeLessThan(points.length)
+    })
+
+    it('segments and regions are relative too', () => {
+      const mgr = new GeometryGroupManager()
+      const tri = [{ x: x0, y: 5 }, { x: x0 + span, y: 5 }, { x: x0, y: 5 + span }]
+      mgr.update([{ kind: 'region', triangles: tri, color: null }], palette, () => 1e-12, { x: x0, y: 5 })
+      const pos = (mgr.group.children[0] as THREE.Mesh).geometry.getAttribute('position').array as Float32Array
+      expect(pos[3]).toBeCloseTo(span, 13)
+      expect(pos[0]).toBe(0)
+    })
+  })
 })

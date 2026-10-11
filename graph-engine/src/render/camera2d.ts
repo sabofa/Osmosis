@@ -27,6 +27,9 @@ export class Camera2D {
   private view: PlotView
   private screen: Size
   private aspectOf: PlotAspect | null
+  // Renderer-relative float32: scene content is drawn relative to this plot-space point (the group positions and the
+  // camera sit on it, so three's float64 matrices cancel it) and the camera bounds below are relative to it too.
+  private originPoint = { x: 0, y: 0 }
 
   constructor(width: number, height: number, initialBounds?: Bounds, aspect: PlotAspect | null = null) {
     this.screen = { width, height }
@@ -55,11 +58,24 @@ export class Camera2D {
 
   private updateProjection() {
     const b = boundsOf(this.view, this.win, this.screen)
-    this.camera.left = b.uMin
-    this.camera.right = b.uMax
-    this.camera.top = b.vMax
-    this.camera.bottom = b.vMin
+    const o = this.originPoint
+    this.camera.position.set(o.x, o.y, 0)
+    this.camera.left = b.uMin - o.x
+    this.camera.right = b.uMax - o.x
+    this.camera.top = b.vMax - o.y
+    this.camera.bottom = b.vMin - o.y
     this.camera.updateProjectionMatrix()
+  }
+
+  /** The plot-space point scene content is built relative to; chosen at each scene rebuild. */
+  origin(): { x: number; y: number } {
+    return this.originPoint
+  }
+
+  /** Re-centre the render origin (the camera bounds follow); the caller rebuilds content relative to it. */
+  setOrigin(x: number, y: number) {
+    this.originPoint = { x, y }
+    this.updateProjection()
   }
 
   // The view state, for the input controller (render/viewController.ts), which moves it by view2d's motion.

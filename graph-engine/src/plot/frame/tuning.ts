@@ -50,8 +50,12 @@ export const MAX_DIVISIONS = 14
 /** Hard cap on ticks per axis. */
 export const MAX_TICKS = 10000
 
-/** How far a plot view may zoom, relative to the fitted @bounds window (zoom 1). Wide on purpose. */
-export const PLOT_ZOOM = { min: 1e-4, max: 1e6 } as const
+/**
+ * How far a plot view may zoom, relative to the fitted @bounds window (zoom 1). The spec wants the view height to
+ * span 1e-9 .. 1e12 world units; the default window is 12 units tall, so max = 12 / 1e-9 (rounded up) and
+ * min = 12 / 1e12 (rounded down) reach heights of 6e-10 .. 1.2e12.
+ */
+export const PLOT_ZOOM = { min: 1e-11, max: 2e10 } as const
 
 /** The window a log axis shows when @bounds gives it no range (world values, before log10). */
 export const DEFAULT_LOG_WINDOW = { min: 0.1, max: 10 } as const

@@ -296,7 +296,11 @@ export class GridRenderer {
     sizePx?: { widthPx: number; heightPx: number },
     // Per-axis world size of a px length (x and y px-per-unit differ under an authored aspect or one-axis zoom).
     pixelToWorldXY: (px: number) => { x: number; y: number } = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) }),
+    // Renderer-relative float32: line vertices are written minus this origin and the line objects sit on it.
+    origin: { x: number; y: number } = { x: 0, y: 0 },
   ) {
+    const { x: ox, y: oy } = origin
+    for (const lines of [this.gridLines, this.gridLinesMajor, this.axisLines]) lines.position.set(ox, oy, 0)
     if (config.grid) {
       const perPx = pixelToWorld(1)
       const size = sizePx ?? {
@@ -312,14 +316,14 @@ export class GridRenderer {
       )
 
       const positions: number[] = []
-      for (const x of plan.faintX) positions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      for (const y of plan.faintY) positions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
+      for (const x of plan.faintX) positions.push(x - ox, bounds.yMin - oy, 0, x - ox, bounds.yMax - oy, 0)
+      for (const y of plan.faintY) positions.push(bounds.xMin - ox, y - oy, 0, bounds.xMax - ox, y - oy, 0)
       updateGeometryPositions(this.gridLines.geometry, positions)
       this.gridLines.visible = positions.length > 0
 
       const majorPositions: number[] = []
-      for (const x of plan.strongX) majorPositions.push(x, bounds.yMin, 0, x, bounds.yMax, 0)
-      for (const y of plan.strongY) majorPositions.push(bounds.xMin, y, 0, bounds.xMax, y, 0)
+      for (const x of plan.strongX) majorPositions.push(x - ox, bounds.yMin - oy, 0, x - ox, bounds.yMax - oy, 0)
+      for (const y of plan.strongY) majorPositions.push(bounds.xMin - ox, y - oy, 0, bounds.xMax - ox, y - oy, 0)
       updateGeometryPositions(this.gridLinesMajor.geometry, majorPositions)
       this.gridLinesMajor.visible = majorPositions.length > 0
 
@@ -357,7 +361,7 @@ export class GridRenderer {
 
     if (config.axes) {
       // Axes sit at plane 0 (value 1 on a log axis), spanning the view; off-view they are simply not seen.
-      const axisPositions = [bounds.xMin, 0, 0, bounds.xMax, 0, 0, 0, bounds.yMin, 0, 0, bounds.yMax, 0]
+      const axisPositions = [bounds.xMin - ox, -oy, 0, bounds.xMax - ox, -oy, 0, -ox, bounds.yMin - oy, 0, -ox, bounds.yMax - oy, 0]
       updateGeometryPositions(this.axisLines.geometry, axisPositions)
       this.axisLines.visible = true
     } else {

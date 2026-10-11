@@ -37,8 +37,8 @@ describe('Camera2D facade', () => {
   })
   it('clamps zoom to PLOT_LIMITS, and resize keeps height in units', () => {
     const c = new Camera2D(800, 800)
-    c.zoomAt(1e-9, 400, 400, 800, 800)
-    expect(c.getBounds().yMax - c.getBounds().yMin).toBeCloseTo(12 / 1e6, 9) // PLOT_LIMITS zoomMax 1e6 (old floor was viewHeight 1e-3)
+    c.zoomAt(1e-12, 400, 400, 800, 800)
+    expect(c.getBounds().yMax - c.getBounds().yMin).toBeCloseTo(12 / 2e10, 15) // PLOT_ZOOM.max: view height 6e-10, under the spec's 1e-9
     const d = new Camera2D(800, 800)
     d.resize(1600, 800)
     expect(d.getBounds().yMax - d.getBounds().yMin).toBeCloseTo(12)
@@ -92,5 +92,22 @@ describe('Camera2D.setFrame', () => {
     const b = c.getBounds()
     expect(b.xMin).toBeCloseTo(-4)
     expect(b.xMax).toBeCloseTo(4)
+  })
+  it('zoom range covers a 1e-9 .. 1e12 view height at the default window', () => {
+    const height = (c: Camera2D) => c.getBounds().yMax - c.getBounds().yMin
+    const lo = new Camera2D(800, 800)
+    lo.zoomAt(1e-30, 400, 400, 800, 800)
+    expect(height(lo)).toBeLessThanOrEqual(1e-9)
+    const hi = new Camera2D(800, 800)
+    hi.zoomAt(1e30, 400, 400, 800, 800)
+    expect(height(hi)).toBeGreaterThanOrEqual(1e12)
+  })
+  it('origin: the three camera sits on it and its bounds are relative to it; getBounds stays absolute', () => {
+    const c = new Camera2D(800, 800, { xMin: 999, xMax: 1001, yMin: -1, yMax: 1 })
+    c.setOrigin(1000, 0)
+    expect(c.camera.position.x).toBe(1000)
+    expect(c.camera.left).toBeCloseTo(-1)
+    expect(c.camera.right).toBeCloseTo(1)
+    expect(c.getBounds().xMin).toBeCloseTo(999)
   })
 })
