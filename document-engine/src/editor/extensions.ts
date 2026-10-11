@@ -14,6 +14,8 @@ import { indentOnInput, syntaxHighlighting, HighlightStyle, syntaxTree } from '@
 import { search, searchKeymap } from '@codemirror/search'
 import { tags as t } from '@lezer/highlight'
 import { livePreview } from './livePreview'
+import { liveOptions, type LiveOptions } from './liveWidgets'
+import { highlightExtensions } from './highlightDecos'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
@@ -23,6 +25,8 @@ export interface EditorExtensionOptions {
   extraKeymap?: KeyBinding[]
   // Render markdown in place, revealing raw marks at the caret (default true).
   livePreview?: boolean
+  // Widget hooks for live preview (graph renderer and its error sink).
+  live?: LiveOptions
 }
 
 const LIST_NODES = new Set(['ListItem', 'BulletList', 'OrderedList'])
@@ -165,7 +169,9 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     EditorView.clickAddsSelectionRange.of((e) => e.altKey || e.ctrlKey || e.metaKey),
     search({ top: true }),
     EditorView.lineWrapping,
+    liveOptions.of(opts.live ?? {}),
     lpCompartment.of(livePreviewBundle(opts.livePreview !== false)),
+    highlightExtensions,
     editorTheme,
     // Earlier keymaps win: list Tab, line ops, search, brackets, then defaults.
     keymap.of([

@@ -38,7 +38,7 @@ export default defineConfig({
       // rely on instanceof checks, so a second bundled copy in a host would
       // break extensions. They are regular dependencies, hoisted once.
       external: [
-        'react', 'react-dom', 'react/jsx-runtime', 'pdfjs-dist', /^pdfjs-dist\//,
+        'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'pdfjs-dist', /^pdfjs-dist\//,
         /^@codemirror\//, /^@lezer\//,
       ],
     },

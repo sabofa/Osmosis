@@ -10,6 +10,8 @@ import {
 } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
+import { inlineMathInLine, insideBlock, touchesSel } from './liveScan'
+import { MathWidget, blocksOf, liveWidgetExtensions, rebuildLiveWidgets } from './liveWidgets'
 
 export interface LiveSpan { from: number; to: number }
 
@@ -87,10 +89,9 @@ const HIDE = Decoration.replace({})
 
 const HEADING = /^ATXHeading([1-6])$/
 const SETEXT = /^SetextHeading([12])$/
-const SKIP_FENCE = new Set(['math', 'graph', 'latex'])
+const SKIP_FENCE = new Set(['math', 'latex'])
 
-const touches = (sel: readonly LiveSpan[], from: number, to: number): boolean =>
-  sel.some((r) => r.from <= to && r.to >= from)
+const touches = touchesSel
 
 function childrenOf(n: SyntaxNode, name: string): SyntaxNode[] {
   const out: SyntaxNode[] = []
@@ -287,7 +288,30 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
       }))
     }
   }
-  return out
+
+  // Math: inline `$…$` becomes a widget off-caret; nothing else decorates inside
+  // a math span or a `$$` block (its source is raw TeX).
+  const blocks = blocksOf(state)
+  const inlineMath: { from: number; to: number }[] = []
+  for (const vp of ctx.viewport) {
+    const vf = Math.max(0, vp.from), vt = Math.min(doc.length, vp.to)
+    for (let n = doc.lineAt(vf).number, last = doc.lineAt(vt).number; n <= last; n++) {
+      const line = doc.line(n)
+      if (insideBlock(blocks, line.from, line.to)) continue
+      for (const m of inlineMathInLine(line.text, line.from)) {
+        inlineMath.push(m)
+        if (touches(sel, m.from, m.to)) push(m.from, m.to, markDeco('cm-lp-mathsrc-inline'))
+        else push(m.from, m.to, Decoration.replace({ widget: new MathWidget(m.tex, false) }), true)
+      }
+    }
+  }
+  const mathBlocks = blocks.filter((b) => b.kind === 'math')
+  if (inlineMath.length === 0 && mathBlocks.length === 0) return out
+  return out.filter((d) => {
+    if (d.deco.spec.widget instanceof MathWidget || d.deco.spec.class === 'cm-lp-mathsrc-inline') return true
+    if (mathBlocks.some((b) => d.from >= b.from && d.to <= b.to)) return false
+    return d.to === d.from || !inlineMath.some((m) => d.from >= m.from && d.to <= m.to)
+  })
 }
 
 /** Flat specs to a sorted DecorationSet. */
@@ -371,35 +395,43 @@ const livePlugin = ViewPlugin.fromClass(LivePlugin, {
         const pl = view.plugin(livePlugin)
         if (!pl || view.composing) return
         pl.forced = true
-        view.dispatch({})
+        view.dispatch({ effects: rebuildLiveWidgets.of(null) })
       }, 0)
       return false
     },
   },
 })
 
+// Code and quote chrome is the text colour thinned over whatever the page is,
+// so it keeps its contrast in light and dark (the code-bg token sits too close
+// to the page in dark themes).
+const INK_PILL = 'color-mix(in srgb, var(--de-text) 12%, transparent)'
+const INK_BLOCK = 'color-mix(in srgb, var(--de-text) 8%, transparent)'
+const INK_RULE = 'color-mix(in srgb, var(--de-text) 32%, transparent)'
+
 // Heading sizes come from line decorations here, so the highlight style used
 // with live preview carries none (see extensions.ts).
 export const livePreviewTheme = EditorView.theme({
   '.cm-lp-h': { fontFamily: 'var(--de-font-display)', fontWeight: '700', lineHeight: '1.25' },
-  '.cm-lp-h1': { fontSize: 'calc(1em * var(--de-scale-ratio) * var(--de-scale-ratio) * var(--de-scale-ratio))' },
-  '.cm-lp-h2': { fontSize: 'calc(1em * var(--de-scale-ratio) * var(--de-scale-ratio))' },
-  '.cm-lp-h3': { fontSize: 'calc(1em * var(--de-scale-ratio))' },
-  '.cm-lp-h4, .cm-lp-h5, .cm-lp-h6': { fontSize: '1em' },
-  '.cm-lp-h5, .cm-lp-h6': { color: 'var(--de-text-muted)' },
+  // Word-like steps from the body size.
+  '.cm-lp-h1': { fontSize: '1.9em' },
+  '.cm-lp-h2': { fontSize: '1.55em' },
+  '.cm-lp-h3': { fontSize: '1.3em' },
+  '.cm-lp-h4': { fontSize: '1.15em' },
+  '.cm-lp-h5, .cm-lp-h6': { fontSize: '1em', color: 'var(--de-text-muted)' },
   '.cm-lp-strong': { fontWeight: '700' },
   '.cm-lp-em': { fontStyle: 'italic' },
   '.cm-lp-strike': { textDecoration: 'line-through' },
   '.cm-lp-icode': {
     fontFamily: 'var(--de-font-stack-code)', color: 'var(--de-code-text)',
-    backgroundColor: 'var(--de-surface)', borderRadius: 'var(--de-radius-sm)', padding: '0 0.2em',
+    backgroundColor: INK_PILL, borderRadius: 'var(--de-radius-sm)', padding: '0.08em 0.3em',
   },
   '.cm-lp-link': { color: 'var(--de-link)', textDecoration: 'underline' },
   '.cm-lp-link-src': { textDecoration: 'none' },
   '.cm-lp-dim': { color: 'var(--de-text-muted)' },
   '.cm-lp-quote': {
     color: 'var(--de-text-muted)',
-    borderInlineStart: '0.25em solid var(--de-rule)',
+    borderInlineStart: `0.25em solid ${INK_RULE}`,
     paddingInlineStart: '0.75em',
   },
   '.cm-lp-indent': { display: 'inline-block', overflow: 'hidden', verticalAlign: 'bottom', whiteSpace: 'pre' },
@@ -416,15 +448,49 @@ export const livePreviewTheme = EditorView.theme({
   '.cm-lp-hr': { borderBlockEnd: '1px solid var(--de-rule)', lineHeight: '1' },
   '.cm-lp-code': {
     fontFamily: 'var(--de-font-stack-code)', color: 'var(--de-code-text)',
-    backgroundColor: 'var(--de-surface)', paddingInline: '0.75em',
+    backgroundColor: INK_BLOCK, paddingInline: '0.75em',
   },
   '.cm-lp-code-first': { borderStartStartRadius: 'var(--de-radius-sm)', borderStartEndRadius: 'var(--de-radius-sm)', paddingBlockStart: '0.25em' },
   '.cm-lp-code-last': { borderEndStartRadius: 'var(--de-radius-sm)', borderEndEndRadius: 'var(--de-radius-sm)', paddingBlockEnd: '0.25em' },
   '.cm-lp-fence': { color: 'var(--de-text-muted)' },
   '.cm-lp-lang': { color: 'var(--de-text-muted)' },
+  '.cm-lp-math': { display: 'inline-block', verticalAlign: 'baseline', cursor: 'text', fontFamily: 'var(--de-font-stack-math)' },
+  '.cm-lp-math-block': { display: 'block', textAlign: 'center', margin: '0.4em 0', overflowX: 'auto', overflowY: 'hidden' },
+  '.cm-lp-math-err': { color: 'var(--de-text-muted)', fontFamily: 'var(--de-font-stack-code)', fontStyle: 'italic', textDecoration: 'underline wavy', textDecorationColor: 'var(--de-text-muted)' },
+  '.cm-lp-mathsrc, .cm-lp-mathsrc-inline': { fontFamily: 'var(--de-font-stack-code)', color: 'var(--de-code-text)' },
+  '.cm-lp-graph': { margin: '0.5em 0', display: 'block' },
+  '.cm-lp-graph-frame': {
+    position: 'relative', maxWidth: '100%', padding: '0.4em', boxSizing: 'border-box',
+    backgroundColor: INK_BLOCK, borderRadius: 'var(--de-radius-sm)',
+  },
+  '.cm-lp-graph-host': { minWidth: '0' },
+  '.cm-lp-graph-plot': { aspectRatio: '16 / 10', maxWidth: '100%', display: 'flex' },
+  '.cm-lp-graph[data-fixed] .cm-lp-graph-plot': { aspectRatio: 'auto', height: 'var(--graph-height)' },
+  '.cm-lp-graph-plot > *': { flex: '1', minWidth: '0' },
+  '.cm-lp-graph-error': { marginTop: '0.3em', fontSize: '0.85em', color: 'var(--de-text-muted)' },
+  '.cm-lp-graph-bar': {
+    position: 'absolute', top: '0.5em', right: '0.5em', zIndex: '2', display: 'flex', gap: '0.25em',
+    opacity: '0', transition: 'opacity 0.12s',
+  },
+  '.cm-lp-graph:hover .cm-lp-graph-bar, .cm-lp-graph:focus-within .cm-lp-graph-bar': { opacity: '1' },
+  '.cm-lp-graph-btn': {
+    font: 'inherit', fontSize: '0.75em', lineHeight: '1.4', padding: '0.1em 0.55em', cursor: 'pointer',
+    color: 'var(--de-text)', backgroundColor: 'var(--de-page)', border: '1px solid var(--de-rule)',
+    borderRadius: 'var(--de-radius-sm)',
+  },
+  '.cm-lp-graph[data-size="s"] .cm-lp-graph-btn[data-size="s"], .cm-lp-graph[data-size="m"] .cm-lp-graph-btn[data-size="m"], .cm-lp-graph[data-size="l"] .cm-lp-graph-btn[data-size="l"], .cm-lp-graph[data-size="full"] .cm-lp-graph-btn[data-size="full"]': {
+    borderColor: 'var(--de-accent)', color: 'var(--de-accent)',
+  },
+  '.cm-lp-graph-grip': {
+    position: 'absolute', right: '0.15em', bottom: '0.15em', cursor: 'ns-resize',
+    zIndex: '2', touchAction: 'none', opacity: '0', transition: 'opacity 0.12s',
+    borderRight: '2px solid var(--de-text-muted)', borderBottom: '2px solid var(--de-text-muted)',
+    boxSizing: 'border-box', width: '0.7em', height: '0.7em',
+  },
+  '.cm-lp-graph:hover .cm-lp-graph-grip': { opacity: '0.8' },
 })
 
 /** The live-preview extension (plugin plus its theme). */
 export function livePreview(): Extension {
-  return [livePlugin, livePreviewTheme]
+  return [livePlugin, livePreviewTheme, liveWidgetExtensions()]
 }

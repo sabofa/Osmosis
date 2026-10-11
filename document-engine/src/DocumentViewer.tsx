@@ -107,6 +107,8 @@ export interface DocumentViewerProps {
   onTextChange?: (text: string) => void
   // Keep the editor from changing the text (commands go disabled).
   editorReadOnly?: boolean
+  // Render markdown in place while editing, revealing raw marks at the caret (default true).
+  livePreview?: boolean
   // Text/markdown assets: the heading outline, called once on mount and again
   // (debounced) whenever the list of headings actually changes.
   onOutline?: (headings: OutlineHeading[]) => void
@@ -543,6 +545,9 @@ export default function DocumentViewer(props: DocumentViewerProps) {
             compositionActiveRef.current = c
           }}
           readOnly={props.editorReadOnly}
+          livePreview={props.livePreview}
+          renderGraph={renderGraph}
+          graphCtx={{ onErrors: onGraphErrors }}
         />
       </div>
     )

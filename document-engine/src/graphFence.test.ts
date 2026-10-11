@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { parseBlocks } from './markdown'
 import {
   isGraphFence,
+  setGraphOption,
   graphFenceModel,
   graphBlocks,
   graphErrorSummary,
@@ -196,5 +197,29 @@ describe('graphErrorSummary', () => {
   })
   it('joins distinct messages', () => {
     expect(graphErrorSummary(['a', 'b', 'a'])).toBe('Graph error: a; b')
+  })
+})
+
+describe('setGraphOption', () => {
+  it('appends a missing size and keeps the other tokens in order', () => {
+    expect(setGraphOption('graph lock', { size: 'm' })).toBe('graph lock size=m')
+  })
+  it('replaces size in place and removes height when a preset is chosen', () => {
+    expect(setGraphOption('graph size=s height=300 lock', { size: 'l' })).toBe('graph size=l lock')
+    expect(setGraphOption('graph height=300 size=s', { size: 'full' })).toBe('graph size=full')
+  })
+  it('replaces or appends height, keeping size, clamped and rounded', () => {
+    expect(setGraphOption('graph size=m height=200', { height: 321.6 })).toBe('graph size=m height=322')
+    expect(setGraphOption('graph size=m', { height: 5000 })).toBe('graph size=m height=2000')
+    expect(setGraphOption('graph', { height: 10 })).toBe('graph height=80')
+    expect(setGraphOption('graph size=m height=200', { height: null })).toBe('graph size=m')
+  })
+  it('keeps a view=... token with its comma continuation', () => {
+    expect(setGraphOption('graph view=x:0..1, y:0..1 size=s', { size: 'm' })).toBe('graph view=x:0..1, y:0..1 size=m')
+    expect(parseGraphInfo(setGraphOption('graph view=x:0..1, y:0..1', { height: 200 }))).toMatchObject({ height: 200, bounds: '0,1,0,1' })
+  })
+  it('collapses duplicates and ignores non-graph info', () => {
+    expect(setGraphOption('graph size=s size=l', { size: 'm' })).toBe('graph size=m')
+    expect(setGraphOption('js', { size: 'm' })).toBe('js')
   })
 })

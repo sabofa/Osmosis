@@ -21,7 +21,7 @@ import type { DocumentAnchor, DocumentHighlight, RenderGraph } from './types'
 const LOCK_BLOCK = ['pointerdown', 'dblclick'] as const
 const LOCK_SWALLOW = ['wheel', 'touchstart', 'touchmove', 'keydown'] as const
 
-function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
+export function useGraphLock(ref: { current: HTMLElement | null }, locked: boolean) {
   useEffect(() => {
     const el = ref.current
     if (!locked || !el) return

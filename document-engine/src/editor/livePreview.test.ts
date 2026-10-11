@@ -128,7 +128,8 @@ describe('block constructs', () => {
     expect(lineClasses(specs, 18)).toContain('cm-lp-fence')
     const on = mk(d, 8)
     expect(lineClasses(build(on), 0)).not.toContain('cm-lp-fence')
-    for (const lang of ['math', 'graph']) {
+    // graph fences are code when no renderer is given (or when revealed): see liveWidgets.test.
+    for (const lang of ['math']) {
       const m = mk('```' + lang + '\nx\n```', 0)
       expect(build(m).filter((x) => String(x.deco.spec.attributes?.class ?? '').includes('cm-lp-code'))).toEqual([])
     }

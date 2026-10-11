@@ -3,7 +3,9 @@
 import { useEffect, useRef } from 'react'
 import { Annotation, Compartment, EditorState, Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import type { DocumentHighlight } from '../types'
+import { syntaxTree } from '@codemirror/language'
+import type { DocumentHighlight, RenderGraph } from '../types'
+import { highlightKey, highlightSpans, setHighlightSpans } from './highlightDecos'
 import { editorExtensions, readOnlyExtension, setLivePreview } from './extensions'
 import { editorKeymap } from './editorCommands'
 import {
@@ -28,6 +30,10 @@ export interface MarkdownEditorProps {
   autoFocus?: boolean
   // Render markdown in place, revealing raw marks at the caret (default true).
   livePreview?: boolean
+  // Renders ```graph fences in place off-caret (the host's graph engine).
+  renderGraph?: RenderGraph
+  // Extra hooks for those graphs (their error sink).
+  graphCtx?: { onErrors?(messages: string[]): void }
 }
 
 const externalSync = Annotation.define<boolean>()
@@ -61,6 +67,19 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
   const appliedReadOnlyRef = useRef(!!props.readOnly)
   const highlightsRef = useRef<DocumentHighlight[]>(props.highlights ?? [])
   highlightsRef.current = props.highlights ?? highlightsRef.current
+
+  // Paint the highlights as decorations; never while composing (they only map).
+  const paintedKeyRef = useRef<string | null>(null)
+  const paintRef = useRef<() => void>(() => {})
+  paintRef.current = () => {
+    const view = viewRef.current
+    if (!view || composingRef.current || view.composing) return
+    const hs = propsRef.current.highlights ?? []
+    const key = highlightKey(hs)
+    if (key === paintedKeyRef.current) return
+    paintedKeyRef.current = key
+    view.dispatch({ effects: setHighlightSpans.of(highlightSpans(view.state.doc.toString(), hs)) })
+  }
 
   useEffect(() => {
     const host = hostRef.current
@@ -97,6 +116,10 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             readOnly: propsRef.current.readOnly,
             readOnlyCompartment: readOnlyRef.current!,
             livePreview: propsRef.current.livePreview !== false,
+            live: {
+              renderGraph: () => propsRef.current.renderGraph,
+              onGraphErrors: (m) => propsRef.current.graphCtx?.onErrors?.(m),
+            },
             extraKeymap: editorKeymap(),
           }),
           EditorView.domEventHandlers({
@@ -107,6 +130,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             },
             compositionend: () => {
               composingRef.current = false
+              setTimeout(() => paintRef.current(), 0)
               propsRef.current.onCompositionChange?.(false)
               // After CodeMirror's own compositionend handling has settled.
               runTimer(glueOnCompositionEnd())
@@ -115,7 +139,8 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
           }),
           EditorView.updateListener.of((u) => {
             const p = propsRef.current
-            if (u.docChanged || u.selectionSet) p.onViewUpdate?.(u.view)
+            // A late parse changes the syntax tree without a doc or selection change.
+            if (u.docChanged || u.selectionSet || syntaxTree(u.state) !== syntaxTree(u.startState)) p.onViewUpdate?.(u.view)
             if (!u.docChanged) return
             const external = u.transactions.some((tr) => tr.annotation(externalSync))
             const g = glueRef.current!
@@ -138,6 +163,8 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     })
     viewRef.current = view
     propsRef.current.onReady?.(view)
+    paintedKeyRef.current = null
+    paintRef.current()
     if (propsRef.current.autoFocus) view.focus()
     return () => {
       clearTimer()
@@ -147,6 +174,8 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
       viewRef.current = null
     }
   }, [])
+
+  useEffect(() => { paintRef.current() }, [props.highlights])
 
   useEffect(() => {
     const view = viewRef.current

@@ -136,3 +136,42 @@ export function graphErrorSummary(messages: string[]): string | null {
   const distinct = [...new Set(messages.map((m) => m.trim()).filter((m) => m.length > 0))]
   return distinct.length > 0 ? `Graph error: ${distinct.join('; ')}` : null
 }
+
+export interface GraphOptionEdit {
+  // A size preset: replaces `size=` and drops `height=` (the preset wins).
+  size?: GraphSize
+  // A pixel height: replaces `height=` and keeps `size=`. null removes it.
+  height?: number | null
+}
+
+// Rewrites the fence info string (e.g. `graph size=m lock`) with one option
+// changed. Every other token is kept verbatim and in its original order; a
+// replaced token keeps its slot, a new one is appended. Pure; never throws.
+export function setGraphOption(info: string, edit: GraphOptionEdit): string {
+  const tokens = info.trim().split(/\s+/).filter((t) => t.length > 0)
+  if (tokens.length === 0 || tokens[0] !== 'graph') return info
+  const keyOf = (t: string): string => {
+    const eq = t.indexOf('=')
+    return eq < 0 ? '' : t.slice(0, eq).toLowerCase()
+  }
+  const replace = (key: string, next: string | null) => {
+    let done = false
+    for (let i = tokens.length - 1; i >= 1; i--) {
+      if (keyOf(tokens[i]) !== key) continue
+      if (done || next === null) tokens.splice(i, 1)
+      else {
+        tokens[i] = next
+        done = true
+      }
+    }
+    if (!done && next !== null) tokens.push(next)
+  }
+  if (edit.size !== undefined) {
+    replace('size', `size=${edit.size}`)
+    replace('height', null)
+  } else if (edit.height !== undefined) {
+    if (edit.height === null) replace('height', null)
+    else replace('height', `height=${Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(edit.height)))}`)
+  }
+  return tokens.join(' ')
+}
