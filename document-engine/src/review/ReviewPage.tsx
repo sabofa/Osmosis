@@ -3,6 +3,7 @@ import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-
 import type { DocumentTokens } from 'theme-core'
 import { EditorView } from '@codemirror/view'
 import { setLivePreview } from '../editor/extensions'
+import { graphCounters } from '../editor/liveWidgets'
 import DocumentViewer from '../DocumentViewer'
 import Ribbon from '../ribbon/Ribbon'
 import { buildRibbon, DEFAULT_RICH_STATE, type RichState, type RibbonValueId, type RibbonValue } from '../ribbon/ribbonModel'
@@ -192,6 +193,20 @@ type EditorGlobals = {
   __comp: string[]
   __keys: string[]
   __capKeys: string[]
+  '',
+  '## Math and graphs',
+  '',
+  String.raw`Inline $x^2 + y^2 = z^2$ then a broken $\frac{1$ and a price $5.`,
+  '',
+  '$$',
+  String.raw`\int_0^1 x^2\,dx = \tfrac{1}{3}`,
+  '$$',
+  '',
+  '```graph size=m',
+  'y = x^2',
+  '```',
+  '',
+  'Marked text after the graph.',
   // Set true to make the parent ignore onTextChange (state stays at the last
   // __setDoc value) so a queued external value can be seen applying.
   __hold: boolean
@@ -209,6 +224,7 @@ if (typeof window !== 'undefined') {
 }
 
 function edRange(needle: string, text: string): { start: number; end: number; quote: string } {
+  ;(w as unknown as { __lpGraph: typeof graphCounters }).__lpGraph = graphCounters
   const i = text.indexOf(needle)
   if (i < 0) throw new Error('needle missing: ' + needle)
   const start = cp(text.slice(0, i))
@@ -230,6 +246,8 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
   useEffect(() => {
     if (!lpOff) return
     let raf = 0
+    { id: 'tail', color: 'pink', ...edRange('Marked text after', EDITOR_MD) },
+    { id: 'emoji', color: 'blue', ...edRange('a 😀 b', EDITOR_MD) },
     const tryOff = () => { const v = eg().__view(); if (v) setLivePreview(v, false); else raf = requestAnimationFrame(tryOff) }
     tryOff()
     return () => cancelAnimationFrame(raf)
@@ -254,7 +272,7 @@ function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHo
         highlights={hl}
         onHighlightsChange={setHl}
         onTextChange={(t) => { eg().__doc.changes++; eg().__doc.text = t; if (!eg().__hold) setText(t) }}
-        renderGraph={stubGraph}
+        renderGraph={instrumentedGraph}
       />
     </div>
   )
