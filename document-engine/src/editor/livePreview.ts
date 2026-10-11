@@ -207,6 +207,12 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
             }
             return
           }
+          case 'Escape': {
+            // A backslash escape: the backslash hides off-caret and shows (dimmed) when the caret touches it.
+            if (!touches(sel, nodeRef.from, nodeRef.to)) hide(nodeRef.from, nodeRef.from + 1)
+            else push(nodeRef.from, nodeRef.from + 1, markDeco('cm-lp-dim'))
+            return false
+          }
           case 'Link': {
             const marks = childrenOf(node, 'LinkMark')
             const open = marks[0]

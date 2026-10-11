@@ -4,8 +4,11 @@
 // styled spans), Google Docs' quirks (the `font-weight:normal` bold wrapper,
 // weight-700 spans) and generic web pages (chrome such as nav / footer /
 // scripts is dropped). No DOM is used, so it runs anywhere.
+import { isSafeImgSrc } from './urlSafe'
 
-const MAX_INLINE_DATA_URL = 2048
+/** HTML larger than this is not converted (the paste stays plain). */
+export const MAX_PASTE_HTML = 1024 * 1024
+
 
 // Elements removed together with everything inside them.
 const DROP_ELEMENTS = [
@@ -25,37 +28,61 @@ function findClose(html: string, tag: string, from: number): number {
   return -1
 }
 
-/** Remove every `<tag ...>...</tag>` (nesting respected); an unclosed opener is removed alone. */
+const RAW_TEXT = new Set(['script', 'style'])
+
+/**
+ * Remove every `<tag ...>...</tag>` (nesting respected) in ONE pass over the tag
+ * tokens. An unclosed `<script>` / `<style>` drops to the end of the input (its
+ * body is source code, never text); any other unclosed opener is removed alone.
+ */
 function dropElements(html: string, tag: string): string {
-  const open = new RegExp(`<${tag}(?=[\\s>/])[^>]*>`, 'i')
-  let out = html
-  for (let guard = 0; guard < 5000; guard++) {
-    const m = open.exec(out)
-    if (!m) break
-    const end = m[0].endsWith('/>') ? m.index + m[0].length : findClose(out, tag, m.index + m[0].length)
-    out = out.slice(0, m.index) + (end < 0 ? out.slice(m.index + m[0].length) : out.slice(end))
+  const re = new RegExp(`<(/?)${tag}(?=[\\s>/])[^>]*>`, 'gi')
+  const raw =RAW_TEXT.has(tag)
+  const out: string[] = []
+  let pos = 0 // start of the next kept stretch
+  let depth = 0
+  let openerEnd = 0 // end of the outermost open tag, for the keep-the-content fallback
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const closing = m[1] === '/'
+    const self = !closing && m[0].endsWith('/>')
+    const end = m.index + m[0].length
+    if (depth === 0) {
+      out.push(html.slice(pos, m.index))
+      pos = end
+      if (!closing && !self) { depth = 1; openerEnd = end }
+    } else if (closing) {
+      if (--depth === 0) pos = end
+    } else if (!self && !raw) depth++
   }
-  return out
+  if (depth > 0) {
+    if (!raw) out.push(html.slice(openerEnd))
+    return out.join('')
+  }
+  out.push(html.slice(pos))
+  return out.join('')
 }
 
-/** Replace the first matching opener `re` and its closing tag by nothing, keeping the content. */
+/** Remove the opener (matching `openerTest`) and its closing tag of every `<tag>`, keeping the content; one pass. */
 function unwrapAll(html: string, tag: string, openerTest: RegExp): string {
-  const open = new RegExp(`<${tag}(?=[\\s>/])[^>]*>`, 'gi')
-  let out = html
-  let from = 0
-  for (let guard = 0; guard < 5000; guard++) {
-    open.lastIndex = from
-    const m = open.exec(out)
-    if (!m) break
-    if (!openerTest.test(m[0])) { from = m.index + m[0].length; continue }
-    const contentStart = m.index + m[0].length
-    const end = findClose(out, tag, contentStart)
-    if (end < 0) { out = out.slice(0, m.index) + out.slice(contentStart); from = m.index; continue }
-    const closeStart = out.lastIndexOf('</', end - 1)
-    out = out.slice(0, m.index) + out.slice(contentStart, closeStart) + out.slice(end)
-    from = m.index
+  const re = new RegExp(`<(/?)${tag}(?=[\\s>/])[^>]*>`, 'gi')
+  const out: string[] = []
+  const stack: boolean[] = []
+  let pos = 0
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    const closing = m[1] === '/'
+    if (!closing && m[0].endsWith('/>')) continue
+    const end = m.index + m[0].length
+    if (!closing) {
+      const unwrap = openerTest.test(m[0])
+      stack.push(unwrap)
+      if (unwrap) { out.push(html.slice(pos, m.index)); pos = end }
+    } else if (stack.length > 0 && stack.pop()) {
+      out.push(html.slice(pos, m.index))
+      pos = end
+    }
   }
-  return out
+  out.push(html.slice(pos))
+  return out.join('')
 }
 
 function attr(tag: string, name: string): string | null {
@@ -235,8 +262,7 @@ function convertImages(html: string): string {
     let src = attr(tag, 'src') ?? ''
     const lazy = attr(tag, 'data-src') ?? attr(tag, 'data-original') ?? ''
     if (/^https?:\/\//i.test(lazy) && (!src || src.startsWith('data:'))) src = lazy
-    const dead = !src || /^(?:file|cid|blob|webkit-fake-url):/i.test(src) || (/^data:/i.test(src) && src.length > MAX_INLINE_DATA_URL)
-    if (dead) return alt.trim()
+    if (!isSafeImgSrc(src)) return alt.trim()
     return `<img src="${src.replace(/"/g, '&quot;')}"${alt ? ` alt="${alt.replace(/"/g, '&quot;')}"` : ''}>`
   })
 }
@@ -249,6 +275,15 @@ function convertImages(html: string): string {
  * emphasis, tables with a header row, and no dead images.
  */
 export function cleanClipboardHtml(input: string): string {
+  // Text after the last '>' cannot hold a complete tag: set it aside, escaped, so the
+  // tag scanners never rescan an unterminated tail.
+  const lastGt = input.lastIndexOf('>')
+  const tail = lastGt < 0 ? input : input.slice(lastGt + 1)
+  const head = lastGt < 0 ? '' : input.slice(0, lastGt + 1)
+  return cleanHead(head + tail.replace(/</g, '&lt;'))
+}
+
+function cleanHead(input: string): string {
   let html = takeFragment(input)
   html = stripNoise(html)
   // Google Docs wraps everything in <b style="font-weight:normal" id="docs-internal-guid-...">.

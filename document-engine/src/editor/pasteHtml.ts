@@ -8,7 +8,8 @@ import { gfm } from 'turndown-plugin-gfm'
 import { EditorSelection, Prec, type EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
-import { cleanClipboardHtml } from './wordClean'
+import { cleanClipboardHtml, MAX_PASTE_HTML } from './wordClean'
+import { isSafeHref, isSafeImgSrc } from './urlSafe'
 import { composingNow } from './compositionGuard'
 import { inlineMathInLine, insideBlock, scanLiveBlocks } from './liveScan'
 
@@ -16,12 +17,18 @@ import { inlineMathInLine, insideBlock, scanLiveBlocks } from './liveScan'
 
 const countOf = (s: string, ch: string) => s.split(ch).length - 1
 
-/** Escape only what would change meaning; the viewer has no general backslash escapes, so less is more. */
+/**
+ * Escape only what would change meaning, with CommonMark backslash escapes (the
+ * reader and live preview both understand a backslash before ASCII punctuation).
+ */
 export function escapeMarkdown(s: string): string {
-  let out = s
+  // A literal backslash before punctuation would otherwise read as an escape.
+  let out = s.replace(/\\(?=[!-/:-@[-`{-~])/g, '\\\\')
   if (countOf(out, '`') >= 2) out = out.replace(/`/g, '\\`')
   if (countOf(out, '$') >= 2) out = out.replace(/\$/g, '\\$')
+  if (/\][ \t]*[(\[]/.test(out)) out = out.replace(/[[\]]/g, '\\$&') // would form a link or reference
   out = out
+    .replace(/<(?=[A-Za-z/!?])/g, '\\<')
     .replace(/\*(?=\S)|(?<=\S)\*/g, '\\*')
     .replace(/(?<![\p{L}\p{N}])_(?=\S)|(?<=\S)_(?![\p{L}\p{N}])/gu, '\\_')
     .replace(/~~/g, '\\~\\~')
@@ -47,6 +54,15 @@ function makeService(): TurndownService {
   })
   td.escape = escapeMarkdown
   td.use(gfm)
+  // Link / image targets are allow-listed: anything else keeps its text only.
+  td.addRule('unsafeLink', {
+    filter: (node) => node.nodeName === 'A' && (node as HTMLElement).hasAttribute('href') && !isSafeHref((node as HTMLElement).getAttribute('href')),
+    replacement: (content) => content,
+  })
+  td.addRule('unsafeImage', {
+    filter: (node) => node.nodeName === 'IMG' && !isSafeImgSrc((node as HTMLElement).getAttribute('src')),
+    replacement: (_c, node) => ((node as HTMLElement).getAttribute('alt') ?? '').trim(),
+  })
   td.addRule('strikethrough', {
     filter: ['del', 's', 'strike'] as unknown as Array<keyof HTMLElementTagNameMap>,
     replacement: (content) => `~~${content}~~`,
@@ -93,6 +109,7 @@ function collapseBlankLines(md: string): string {
 
 /** Clipboard HTML -> markdown ('' when there is nothing to convert). */
 export function htmlToMarkdown(html: string): string {
+  if (html.length > MAX_PASTE_HTML) return ''
   const clean = cleanClipboardHtml(html)
   if (!clean.trim()) return ''
   service ??= makeService()
@@ -110,7 +127,7 @@ export interface PasteClipboard { html: string; text: string }
 /** True when the HTML carries real structure (or Word / Docs markers) worth converting. */
 export function shouldConvertPaste(clip: PasteClipboard): boolean {
   const html = clip.html
-  if (!html || !html.trim()) return false
+  if (!html || !html.trim() || html.length > MAX_PASTE_HTML) return false
   const body = html.replace(/<!--[\s\S]*?-->/g, '').replace(/<(style|script|head|title)\b[\s\S]*?<\/\1>/gi, '')
   if (WORD_MARKERS.test(html)) return STRUCTURE.test(body) || body.replace(/<[^>]*>/g, '').trim().length > 0
   return STRUCTURE.test(body)

@@ -295,6 +295,11 @@ function findMathClose(text: string, open: number): number {
   return -1
 }
 
+/** CommonMark backslash escapes: a backslash before any ASCII punctuation character. */
+export function isEscapable(ch: string | undefined): boolean {
+  return ch !== undefined && ch.length === 1 && /[!-/:-@[-`{-~]/.test(ch)
+}
+
 interface Protected {
   start: number // index of the opening delimiter
   bodyStart: number
@@ -310,7 +315,7 @@ function protectedSpans(text: string): Protected[] {
   let i = 0
   while (i < text.length) {
     const ch = text[i]
-    if (ch === '\\' && text[i + 1] === '$') {
+    if (ch === '\\' && isEscapable(text[i + 1])) {
       i += 2
       continue
     }
@@ -347,13 +352,22 @@ function protectedSpans(text: string): Protected[] {
 
 // Scans one block's text left-to-right for `code`, $math$, **bold**, and
 // *italic*/_italic_ spans. Bold/italic bodies are parsed recursively, so math,
-// code and nested emphasis work inside them. No escaping beyond `\$`.
+// code and nested emphasis work inside them. A backslash before ASCII punctuation
+// escapes it (CommonMark): the backslash is omitted from the runs like any other
+// syntax character, and the escaped character never starts emphasis, code, math.
 export function parseInline(text: string, offset: number): InlineRun[] {
   const spans = protectedSpans(text)
   const spanAt = new Map(spans.map((s) => [s.start, s]))
   const mask = new Uint8Array(text.length + 1)
   for (const s of spans) mask.fill(1, s.start, Math.min(s.end, text.length))
-  const inSpan = (idx: number) => mask[idx] === 1
+  // Escapes outside code/math spans: esc = 2 marks the backslash, 1 the escaped char.
+  const esc = new Uint8Array(text.length + 1)
+  for (let k = 0; k < text.length; k++) {
+    const sp = spanAt.get(k)
+    if (sp) { k = sp.end - 1; continue }
+    if (text[k] === '\\' && isEscapable(text[k + 1])) { esc[k] = 2; esc[k + 1] = 1; k++ }
+  }
+  const inSpan = (idx: number) => mask[idx] === 1 || esc[idx] !== 0
   const runs: InlineRun[] = []
 
   // First occurrence of `needle` in [from, to) that is not inside a code/math span.
@@ -384,6 +398,12 @@ export function parseInline(text: string, offset: number): InlineRun[] {
         )
         i = sp.end
         plainStart = i
+        continue
+      }
+      if (esc[i] === 2 && i + 1 < to) {
+        flushPlain(i)
+        i += 2
+        plainStart = i - 1 // the escaped character is plain text; the backslash is omitted
         continue
       }
       if (text[i] === '*' && text[i + 1] === '*') {
