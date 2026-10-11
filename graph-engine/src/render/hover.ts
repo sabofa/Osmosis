@@ -4,6 +4,7 @@ import type { Camera2D } from './camera2d'
 import { vertexCount } from '../scene/chains'
 import { clearAndDispose } from './disposeObject3D'
 import type { Scene as GraphScene, Vec2 } from '../scene/types'
+import { scaleOf, type Scale } from '../plot/frame/scale'
 
 export interface HoverInfo {
   worldX: number
@@ -20,6 +21,33 @@ export interface HoverInfo {
   feature?: FeatureKind | null
 }
 
+export interface HoverScales {
+  x: Scale
+  y: Scale
+}
+const LINEAR_SCALES: HoverScales = { x: scaleOf(undefined), y: scaleOf(undefined) }
+
+// The readout's world values and digit span for a plane point (u, v). On a log axis the plane holds log10
+// values: the reported value is inverse(u). The span is the local world extent of the window about the
+// point, per axis inverse(u + w/2) - inverse(u - w/2) (w = the plane window's width on that axis), smaller of
+// the two; on a linear axis that is exactly the window's width, so linear readouts are unchanged.
+export function hoverReadout(
+  point: Vec2,
+  bounds: { xMin: number; xMax: number; yMin: number; yMax: number },
+  scales: HoverScales = LINEAR_SCALES
+): { worldX: number; worldY: number; span: number } {
+  const local = (s: Scale, p: number, lo: number, hi: number) => {
+    const w = hi - lo
+    return s.kind === 'linear' ? w : Math.abs(s.inverse(p + w / 2) - s.inverse(p - w / 2))
+  }
+  return {
+    worldX: scales.x.inverse(point.x),
+    worldY: scales.y.inverse(point.y),
+    span: Math.min(local(scales.x, point.x, bounds.xMin, bounds.xMax), local(scales.y, point.y, bounds.yMin, bounds.yMax)),
+  }
+}
+
+// Hover marker geometry is built relative to the camera's origin (float32 holds only ~7 digits).
 const HOVER_MAX_SCREEN_DIST = 70
 // How close the cursor must be, in screen pixels, for a feature to capture the
 // readout. Deliberately smaller than HOVER_MAX_SCREEN_DIST: snapping should
@@ -64,7 +92,8 @@ export class HoverResolver {
     backgroundColor: number,
     pixelToWorld: (px: number) => number,
     // Per-axis world size of a px length; without it the view is taken as isotropic.
-    pixelToWorldXY: (px: number) => Vec2 = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) })
+    pixelToWorldXY: (px: number) => Vec2 = (px) => ({ x: pixelToWorld(px), y: pixelToWorld(px) }),
+    scales: HoverScales = LINEAR_SCALES
   ): HoverInfo | null {
     let best: {
       point: Vec2
@@ -149,11 +178,13 @@ export class HoverResolver {
 
     if (target.showGuide) {
       const bounds = camera2d.getBounds()
+      const o = camera2d.origin()
       const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(target.point.x, bounds.yMin, 0.1),
-        new THREE.Vector3(target.point.x, target.point.y, 0.1),
+        new THREE.Vector3(target.point.x - o.x, bounds.yMin - o.y, 0.1),
+        new THREE.Vector3(target.point.x - o.x, target.point.y - o.y, 0.1),
       ])
       this.guideLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: hoverColor }))
+      this.guideLine.position.set(o.x, o.y, 0)
       this.group.add(this.guideLine)
     }
     // Background-colored halo behind the dot, matching the point markers'
@@ -172,13 +203,14 @@ export class HoverResolver {
     this.group.add(dot)
 
     const screen = camera2d.worldToScreen(target.point.x, target.point.y, rectWidth, rectHeight)
+    const readout = hoverReadout(target.point, camera2d.getBounds(), scales)
     return {
-      worldX: target.point.x,
-      worldY: target.point.y,
+      worldX: readout.worldX,
+      worldY: readout.worldY,
       screenX: screen.x,
       screenY: screen.y,
       label: target.label,
-      span: Math.min(camera2d.getBounds().xMax - camera2d.getBounds().xMin, camera2d.getBounds().yMax - camera2d.getBounds().yMin),
+      span: readout.span,
       exact: target.exact,
       feature: target.feature,
     }
@@ -199,8 +231,10 @@ export class HoverResolver {
     if (!this.guideLine || !this.currentTarget) return
     const bounds = camera2d.getBounds()
     const position = this.guideLine.geometry.getAttribute('position') as THREE.BufferAttribute
-    position.setXYZ(0, this.currentTarget.x, bounds.yMin, 0.1)
-    position.setXYZ(1, this.currentTarget.x, this.currentTarget.y, 0.1)
+    const o = camera2d.origin()
+    this.guideLine.position.set(o.x, o.y, 0)
+    position.setXYZ(0, this.currentTarget.x - o.x, bounds.yMin - o.y, 0.1)
+    position.setXYZ(1, this.currentTarget.x - o.x, this.currentTarget.y - o.y, 0.1)
     position.needsUpdate = true
     this.guideLine.geometry.computeBoundingSphere()
   }

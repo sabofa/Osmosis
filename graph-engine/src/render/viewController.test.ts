@@ -147,3 +147,23 @@ describe('ViewController locked', () => {
   })
 })
 
+
+describe('ViewController.cancel', () => {
+  it('a drag then lock leaves nothing coasting or dragging', () => {
+    const { cam, vc } = setup()
+    vc.pointerDown(ptr(50, 50, 0))
+    vc.pointerMove(ptr(60, 50, 10))
+    vc.pointerMove(ptr(80, 50, 20))
+    vc.step(20)
+    vc.cancel()
+    vc.locked = true
+    const before = cam.getBounds()
+    expect(vc.moving).toBe(false)
+    expect(vc.step(5000)).toBe(false)
+    expect(cam.getBounds()).toEqual(before)
+    // unlocked again: a fresh pointer-up does not resume the old drag
+    vc.locked = false
+    expect(vc.pointerUp(ptr(80, 50, 6000)).some((i) => i.kind === 'dragEnd')).toBe(false)
+    expect(vc.moving).toBe(false)
+  })
+})

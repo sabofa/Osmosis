@@ -29,7 +29,7 @@ export interface WheelInput {
 }
 
 export class ViewController {
-  private readonly recognizer: GestureRecognizer
+  private recognizer: GestureRecognizer
   private motion: ViewMotion
   // Whether one-axis zoom may change the unit ratio: only when the authored aspect is not equal.
   // An exact change was written straight to the camera: the next step must report it.
@@ -45,13 +45,24 @@ export class ViewController {
     this.cam = cam
     this.locked = options?.locked ?? false
     this.axisZoomAllowed = options?.axisZoomAllowed ?? (() => axisZoomAllowedFor(cam.aspect()))
-    this.recognizer = new GestureRecognizer({ screen: () => cam.screenSize() })
-    this.motion = new ViewMotion({
-      frame: cam.frame(),
-      screen: cam.screenSize(),
-      start: plotCameraOf(cam.getView()),
-      limits: PLOT_LIMITS,
-    })
+    this.recognizer = this.newRecognizer()
+    this.motion = this.newMotion()
+  }
+
+  private newRecognizer(): GestureRecognizer {
+    return new GestureRecognizer({ screen: () => this.cam.screenSize() })
+  }
+
+  private newMotion(): ViewMotion {
+    const cam = this.cam
+    return new ViewMotion({ frame: cam.frame(), screen: cam.screenSize(), start: plotCameraOf(cam.getView()), limits: PLOT_LIMITS })
+  }
+
+  /** End any drag, coast or ease where the camera is now: nothing carries on after this (used when the view gets locked mid-gesture). */
+  cancel(): void {
+    this.recognizer = this.newRecognizer()
+    this.motion = this.newMotion()
+    this.pending = false
   }
 
   get moving(): boolean {

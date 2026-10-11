@@ -1,14 +1,12 @@
 import * as THREE from 'three'
 import type { Bounds } from './marchingSquares'
-import { anchoredCamera, basePxPerUnit, panByScreen } from '../view2d'
+import { basePxPerUnit } from '../view2d'
 import type { Size } from '../view2d'
 import {
   boundsOf,
   frameAxes,
   frameRect,
-  plotCameraOf,
   plotToScreen,
-  PLOT_LIMITS,
   pxPerUnitXY,
   screenToPlot,
   startView,
@@ -131,27 +129,6 @@ export class Camera2D {
     this.updateProjection()
   }
 
-  // Pan by a delta in screen pixels.
-  panByPixels(dxPx: number, dyPx: number, canvasHeightPx: number) {
-    const screen = { width: this.screen.width, height: canvasHeightPx }
-    const frame = frameRect(this.win, this.view.a, this.view.b)
-    const cam = panByScreen(plotCameraOf(this.view), dxPx, dyPx, frame, screen)
-    this.view = { ...this.view, cu: cam.cx / this.view.a, cv: -cam.cy / this.view.b }
-    this.updateProjection()
-  }
-
-  // Zoom around a screen-space anchor point (keeps the point under the cursor fixed).
-  zoomAt(factor: number, anchorXPx: number, anchorYPx: number, canvasWidthPx: number, canvasHeightPx: number) {
-    const screen = { width: canvasWidthPx, height: canvasHeightPx }
-    const at = { x: anchorXPx, y: anchorYPx }
-    const anchor = screenToPlot(this.view, this.win, screen, at)
-    const zoom = Math.min(PLOT_LIMITS.zoomMax, Math.max(PLOT_LIMITS.zoomMin, this.view.zoom / factor))
-    const frame = frameRect(this.win, this.view.a, this.view.b)
-    const cam = anchoredCamera({ x: this.view.a * anchor.x, y: -this.view.b * anchor.y }, at, zoom, frame, screen)
-    this.view = { ...this.view, cu: cam.cx / this.view.a, cv: -cam.cy / this.view.b, zoom }
-    this.updateProjection()
-  }
-
   screenToWorld(xPx: number, yPx: number, widthPx: number, heightPx: number): { x: number; y: number } {
     return screenToPlot(this.view, this.win, { width: widthPx, height: heightPx }, { x: xPx, y: yPx })
   }
@@ -160,13 +137,6 @@ export class Camera2D {
   // a world-space point.
   worldToScreen(x: number, y: number, widthPx: number, heightPx: number): { x: number; y: number } {
     return plotToScreen(this.view, this.win, { width: widthPx, height: heightPx }, { x, y })
-  }
-
-  // World units per screen pixel — for converting a pixel hit-radius into a
-  // world-space distance for hover hit-testing.
-  // Only for a consumer that genuinely needs one number (density); sizes use worldPerPixelXY.
-  worldPerPixel(canvasHeightPx: number): number {
-    return this.worldPerPixelXY(canvasHeightPx).x
   }
 
   // World units per screen pixel along each axis; they differ when the plot's x and y px-per-unit do.

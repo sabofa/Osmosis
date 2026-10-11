@@ -20,6 +20,9 @@ interface LabelEntry {
 // of allocating fresh GPU textures every frame is the same "fixed per-buffer
 // cost, not a math cost" reasoning SceneRenderer already applies to point
 // reuse (see its class comment), just for a different object kind here.
+// An axis title's canvas is clipped here (a texture must stay a sane size however long the title is).
+const MAX_FIT_CANVAS_W = 1024
+
 export class AxisLabelPool {
   readonly group = new THREE.Group()
   private entries: LabelEntry[] = []
@@ -61,7 +64,7 @@ export class AxisLabelPool {
     // narrower than CANVAS_W (their sprite scale is defined against it) nor wider than MAX_LABEL_CHARS of text.
     ctx.font = font
     const measured = Math.ceil(ctx.measureText(this.fit ? text : text.slice(0, MAX_LABEL_CHARS)).width) + 4
-    const wantW = this.fit ? Math.max(CANVAS_H, measured) : Math.max(CANVAS_W, measured)
+    const wantW = this.fit ? Math.min(MAX_FIT_CANVAS_W, Math.max(CANVAS_H, measured)) : Math.max(CANVAS_W, measured)
     if (this.fit || wantW !== canvas.width) {
       canvas.width = wantW // resets the context state
       const material = entry.sprite.material as THREE.SpriteMaterial

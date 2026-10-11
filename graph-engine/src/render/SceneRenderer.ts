@@ -11,6 +11,7 @@ import { GeometryGroupManager } from './geometryGroup'
 import { angleArcPoints, angleBisectorPoint, rightAngleSquarePoints, tickMarkSegments } from './geometryMarks'
 import { GridRenderer } from './grid'
 import { markerShape, type MarkerShape } from './featureMarker'
+import { scaleOf } from '../plot/frame/scale'
 import { HoverResolver, type HoverInfo } from './hover'
 import { createInteraction, overscanBox, viewChangeAction } from './interaction'
 import { clampedLabelPlacementXY } from './labelLayout'
@@ -341,6 +342,11 @@ export class SceneRenderer {
 
   // A locked plot is not an input surface: the page scrolls over it and it takes no keyboard focus.
   private applyLock(locked: boolean) {
+    if (locked && !this.controller.locked) {
+      this.controller.cancel() // a gesture in flight must not strand
+      this.activePointers.clear()
+      this.interaction.pointerUp()
+    }
     this.controller.locked = locked
     this.canvas.tabIndex = locked ? -1 : 0
     this.canvas.style.touchAction = locked ? 'auto' : 'none'
@@ -399,7 +405,12 @@ export class SceneRenderer {
     }
   }
 
+  // Pointers that went down on the canvas: the window-level move/up handlers read the layout only for these.
+  private readonly activePointers = new Set<number>()
+
   private handlePointerDown = (e: PointerEvent) => {
+    if (this.controller.locked) return
+    this.activePointers.add(e.pointerId)
     this.canvas.focus({ preventScroll: true })
     try {
       this.canvas.setPointerCapture(e.pointerId)
@@ -518,14 +529,17 @@ export class SceneRenderer {
   }
 
   private handlePointerMove = (e: PointerEvent) => {
+    if (!this.activePointers.has(e.pointerId)) return
     this.onIntents(this.controller.pointerMove(this.sample(e)))
   }
 
   private handlePointerUp = (e: PointerEvent) => {
+    if (!this.activePointers.delete(e.pointerId)) return
     this.onIntents(this.controller.pointerUp(this.sample(e)))
   }
 
   private handlePointerCancel = (e: PointerEvent) => {
+    this.activePointers.delete(e.pointerId)
     this.onIntents(this.controller.pointerCancel(this.sample(e)))
   }
 
@@ -610,7 +624,8 @@ export class SceneRenderer {
       this.palette.hover,
       this.palette.background,
       (px) => this.pixelToWorld(px),
-      (px) => this.pixelToWorldXY(px)
+      (px) => this.pixelToWorldXY(px),
+      { x: scaleOf(this.options.config.scales?.x), y: scaleOf(this.options.config.scales?.y) }
     )
     this.needsRender = true
     this.options.onHover?.(info)
@@ -1027,8 +1042,10 @@ export class SceneRenderer {
       const group = new THREE.Group()
       group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })))
       if (obj.label) {
-        const labelDistance = Math.min(this.pixelToWorld(ANGLE_LABEL_DISTANCE_PX), legLength * ANGLE_LABEL_MAX_FRACTION)
-        const labelPos = angleBisectorPoint(obj.vertex, obj.from, obj.to, labelDistance)
+        // Placed in px space like the arc, so the distance is the same on screen on unequal axes.
+        const labelDistancePx = Math.min(ANGLE_LABEL_DISTANCE_PX, pxLeg * ANGLE_LABEL_MAX_FRACTION)
+        const labelPx = angleBisectorPoint(pxVertex, toPx(obj.from), toPx(obj.to), labelDistancePx)
+        const labelPos = { x: labelPx.x * per.x, y: labelPx.y * per.y }
         // labelDistance above only clamps *where* the label sits (along the
         // bisector) — without also capping its own text size the same way
         // maxLabelOffset does for a polygon vertex, a small triangle's angle

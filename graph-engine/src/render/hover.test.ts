@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
-import { HoverResolver } from './hover'
+import { HoverResolver, hoverReadout } from './hover'
+import { scaleOf } from '../plot/frame/scale'
 import { Camera2D } from './camera2d'
 import { chainOf } from '../scene/chains'
 import type { Scene, SceneObject, Vec2 } from '../scene/types'
@@ -60,7 +61,7 @@ describe('HoverResolver', () => {
     // Zoom out around the exact screen center — the camera stays centered on
     // (0, 0), so this doubles viewHeight (12 -> 24) with no center shift,
     // giving an exactly predictable new bounds.yMin of -12.
-    camera.zoomAt(2, CANVAS / 2, CANVAS / 2, CANVAS, CANVAS)
+    camera.setView({ ...camera.getView(), zoom: camera.getView().zoom / 2 })
     resolver.refreshGuideLine(camera)
 
     const line = resolver.group.children[0] as THREE.Line
@@ -219,5 +220,46 @@ describe('chains and marks', () => {
     expect(info?.feature).toBeNull()
     // No guide line: a mark is read in place, so nothing but the hover dot is drawn.
     expect(resolver.group.children.some((c) => c instanceof THREE.Line)).toBe(false)
+  })
+})
+
+describe('hover readout on log axes', () => {
+  const bounds = { xMin: 0, xMax: 4, yMin: -1, yMax: 3 }
+  const log = { x: scaleOf('log'), y: scaleOf('linear') }
+  it('reports the world value (plane u=2 on a log x axis is x=100)', () => {
+    const r = hoverReadout({ x: 2, y: 1 }, bounds, log)
+    expect(r.worldX).toBeCloseTo(100)
+    expect(r.worldY).toBe(1)
+    // local extent: the smaller of x (10^4 - 10^0 about 100 -> huge) and y (4)
+    expect(r.span).toBe(4)
+  })
+  it('linear is unchanged', () => {
+    const r = hoverReadout({ x: 2, y: 1 }, bounds)
+    expect(r).toEqual({ worldX: 2, worldY: 1, span: 4 })
+  })
+  it('resolve reports it end to end', () => {
+    const camera = new Camera2D(CANVAS, CANVAS, { xMin: 0, xMax: 4, yMin: -1, yMax: 3 })
+    const scene: Scene = { objects: [curveThrough({ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 })], errors: [], regression: null }
+    const cursorScreen = camera.worldToScreen(2, 1, CANVAS, CANVAS)
+    const info = new HoverResolver().resolve(scene, 'all', cursorScreen, camera.screenToWorld(cursorScreen.x, cursorScreen.y, CANVAS, CANVAS), camera, CANVAS, CANVAS, HOVER_COLOR, BG_COLOR, pixelToWorld, undefined, log)
+    expect(info!.worldX).toBeCloseTo(100)
+  })
+})
+
+describe('hover guide line is origin-relative', () => {
+  it('keeps float32-distinct vertices in a 2e-8 window at x=1000, at creation and on refresh', () => {
+    const camera = new Camera2D(CANVAS, CANVAS, { xMin: 1000 - 1e-8, xMax: 1000 + 1e-8, yMin: -1e-8, yMax: 1e-8 })
+    camera.setOrigin(1000, 0)
+    const scene: Scene = { objects: [curveThrough({ x: 1000 - 5e-9, y: 0 }, { x: 1000, y: 0 }, { x: 1000 + 5e-9, y: 0 })], errors: [], regression: null }
+    const resolver = new HoverResolver()
+    resolveAt(resolver, scene, camera, 1000 + 3e-9, 0)
+    const line = resolver.group.children[0] as THREE.Line
+    expect(line.position.x).toBe(1000)
+    const pos = line.geometry.getAttribute('position')
+    expect(Math.abs(pos.getX(0))).toBeLessThan(1e-8) // relative: small, so float32 keeps it exact to ~1e-15
+    expect(pos.getX(0)).toBeCloseTo(3e-9, 12)
+    resolver.refreshGuideLine(camera)
+    expect(line.geometry.getAttribute('position').getX(1)).toBeCloseTo(3e-9, 12)
+    expect(line.geometry.getAttribute('position').getY(0)).toBeCloseTo(-1e-8, 12)
   })
 })
