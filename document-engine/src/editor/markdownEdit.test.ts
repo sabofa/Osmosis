@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { cycleHeading, fencedLineStarts, makeLink, toggleLinePrefix, toggleWrap, type EditResult, type MarkdownEdit } from './markdownEdit'
+import {
+  cycleHeading, fencedLineStarts, makeLink, toggleLinePrefix, toggleWrap, setBlockStyle, clearFormatting, insertHr,
+  insertMathBlock, insertGraphFence, indentLines, selectionIsAllList, GRAPH_STARTER, type EditResult, type MarkdownEdit,
+} from './markdownEdit'
 
 // Apply a result to a doc the way an editor would (simultaneous changes).
 function apply(doc: string, r: EditResult | null): { doc: string; sel: string } {
@@ -280,3 +283,146 @@ describe('fenced code is left alone', () => {
     expect(out).toBe('> para\n```\ncode line\n- not a list\n```\n> after')
   })
 })
+
+describe('setBlockStyle', () => {
+  it('sets headings, replacing an existing level, quote or heading', () => {
+    expect(run(setBlockStyle('h1'), 'hel|lo').doc).toBe('# hello')
+    expect(run(setBlockStyle('h3'), '# hel|lo').doc).toBe('### hello')
+    expect(run(setBlockStyle('h2'), '> hel|lo').doc).toBe('## hello')
+    expect(run(setBlockStyle('h4'), '###### x|').doc).toBe('#### x')
+  })
+  it('toggles a heading level off to normal', () => {
+    expect(run(setBlockStyle('h2'), '## hel|lo').doc).toBe('hello')
+    expect(run(setBlockStyle('h1'), '# hello|').doc).toBe('hello')
+  })
+  it('normal strips heading and quote prefixes but keeps list markers', () => {
+    expect(run(setBlockStyle('normal'), '### he|llo').doc).toBe('hello')
+    expect(run(setBlockStyle('normal'), '> he|llo').doc).toBe('hello')
+    expect(run(setBlockStyle('normal'), '- it|em').doc).toBe('- item')
+    expect(run(setBlockStyle('normal'), 'pla|in').doc).toBe('plain')
+  })
+  it('a heading replaces a list marker', () => {
+    expect(run(setBlockStyle('h2'), '- it|em').doc).toBe('## item')
+  })
+  it('quote toggles and replaces a heading', () => {
+    expect(run(setBlockStyle('quote'), 'he|llo').doc).toBe('> hello')
+    expect(run(setBlockStyle('quote'), '> he|llo').doc).toBe('hello')
+    expect(run(setBlockStyle('quote'), '## he|llo').doc).toBe('> hello')
+  })
+  it('applies to every selected line, skipping blank lines', () => {
+    expect(run(setBlockStyle('h2'), '[one\n\ntwo]').doc).toBe('## one\n\n## two')
+    expect(run(setBlockStyle('quote'), '[a\nb\nc]').doc).toBe('> a\n> b\n> c')
+    // mixed selection: not all the same, so the style is applied to all, not toggled off
+    expect(run(setBlockStyle('h1'), '[# a\nb]').doc).toBe('# a\n# b')
+    // all the same: toggled off
+    expect(run(setBlockStyle('h1'), '[# a\n# b]').doc).toBe('a\nb')
+  })
+  it('a selection ending after a newline does not take the next line', () => {
+    const r = setBlockStyle('h1')('a\nb', { from: 0, to: 2 })
+    expect(apply('a\nb', r).doc).toBe('# a\nb')
+  })
+  it('an empty line gets the prefix so the user can type after it', () => {
+    expect(run(setBlockStyle('h2'), '|').doc).toBe('## ')
+  })
+  it('keeps the caret on its text', () => {
+    expect(run(setBlockStyle('h1'), 'hel|lo').sel).toBe('# hel|lo')
+    expect(run(setBlockStyle('h1'), '## hel|lo').sel).toBe('# hel|lo')
+  })
+  it('code wraps the selected lines in a fence and keeps the selection', () => {
+    expect(run(setBlockStyle('code'), '[a\nb]').doc).toBe('```\na\nb\n```')
+    expect(run(setBlockStyle('code'), '[a\nb]').sel).toBe('```\n|a\nb|\n```')
+    expect(run(setBlockStyle('code'), 'x\nhe|llo\ny').doc).toBe('x\n```\nhello\n```\ny')
+  })
+  it('code on an empty line puts the caret inside the fence', () => {
+    const r = run(setBlockStyle('code'), '|')
+    expect(r.doc).toBe('```\n\n```')
+    expect(r.sel).toBe('```\n|\n```')
+  })
+  it('leaves fenced lines alone', () => {
+    const doc = '```\ncode\n```'
+    expect(setBlockStyle('h1')(doc, { from: 6, to: 6 })).toBeNull()
+    expect(setBlockStyle('code')(doc, { from: 6, to: 6 })).toBeNull()
+  })
+  it('skips fenced lines inside a mixed selection', () => {
+    expect(run(setBlockStyle('h1'), '[a\n```\ncode\n```\nb]').doc).toBe('# a\n```\ncode\n```\n# b')
+  })
+})
+
+describe('clearFormatting', () => {
+  it('strips inline markers around the selection', () => {
+    expect(run(clearFormatting(), '[a **bold** and *it* ~~gone~~ `code`]').doc).toBe('a bold and it gone code')
+    expect(run(clearFormatting(), '**ni|ce**').doc).toBe('nice')
+    expect(run(clearFormatting(), 'x __b__ y _i_ z|').doc).toBe('x b y i z')
+  })
+  it('strips heading, quote and list prefixes', () => {
+    expect(run(clearFormatting(), '## ti|tle').doc).toBe('title')
+    expect(run(clearFormatting(), '> qu|ote').doc).toBe('quote')
+    expect(run(clearFormatting(), '- [ ] ta|sk').doc).toBe('task')
+    expect(run(clearFormatting(), '1. nu|m').doc).toBe('num')
+    expect(run(clearFormatting(), '> ## **hi|**').doc).toBe('hi')
+  })
+  it('handles every selected line', () => {
+    expect(run(clearFormatting(), '[# **a**\n- b\n> *c*]').doc).toBe('a\nb\nc')
+  })
+  it('leaves stray stars, snake_case and math alone; code spans keep their content', () => {
+    expect(clearFormatting()('a * b * c', { from: 9, to: 9 })).toBeNull()
+    expect(clearFormatting()('snake_case_name 2*3*4', { from: 0, to: 0 })).toBeNull()
+    expect(run(clearFormatting(), 'a `x*y*` b|').doc).toBe('a x*y* b')
+  })
+  it('returns null when nothing would change, and skips fenced lines', () => {
+    expect(clearFormatting()('plain', { from: 0, to: 0 })).toBeNull()
+    expect(clearFormatting()('```\n**x**\n```', { from: 5, to: 5 })).toBeNull()
+  })
+})
+
+describe('block inserts', () => {
+  it('hr sits on its own with blank lines around it', () => {
+    expect(run(insertHr(), 'one|').doc).toBe('one\n\n---')
+    expect(run(insertHr(), 'one|\ntwo').doc).toBe('one\n\n---\n\ntwo')
+    expect(run(insertHr(), 'one\n\n|\ntwo').doc).toBe('one\n\n---\n\ntwo')
+    expect(run(insertHr(), '|').doc).toBe('---')
+    expect(run(insertHr(), 'a|\n\nb').doc).toBe('a\n\n---\n\nb')
+  })
+  it('hr lands the caret after the rule', () => {
+    expect(run(insertHr(), 'one|').sel).toBe('one\n\n---|')
+  })
+  it('math wraps the selected lines or opens an empty pair', () => {
+    expect(run(insertMathBlock(), '[x^2 + 1]').doc).toBe('$$\nx^2 + 1\n$$')
+    expect(run(insertMathBlock(), '[x^2 + 1]').sel).toBe('$$\n|x^2 + 1|\n$$')
+    expect(run(insertMathBlock(), 'te|xt').doc).toBe('$$\ntext\n$$')
+    const e = run(insertMathBlock(), 'text\n\n|')
+    expect(e.doc).toBe('text\n\n$$\n\n$$')
+    expect(e.sel).toBe('text\n\n$$\n|\n$$')
+    expect(run(insertMathBlock(), '|').sel).toBe('$$\n|\n$$')
+  })
+  it('graph inserts a ```graph fence with the starter plot', () => {
+    const r = run(insertGraphFence(), 'intro|\nafter')
+    expect(r.doc).toBe('intro\n\n```graph\n' + GRAPH_STARTER + '\n```\n\nafter')
+    expect(GRAPH_STARTER.split('\n')[0]).toBe('y = sin(x)')
+    expect(r.sel.indexOf('|')).toBe(('intro\n\n```graph\n' + GRAPH_STARTER).length)
+  })
+  it('refuses to insert inside a fenced block', () => {
+    const doc = '```\ncode\n```'
+    for (const mk of [insertHr, insertGraphFence, insertMathBlock]) expect(mk()(doc, { from: 6, to: 6 })).toBeNull()
+  })
+})
+
+describe('indentLines', () => {
+  it('indent adds two spaces to non-blank lines', () => {
+    expect(run(indentLines(1), '[a\n\nb]').doc).toBe('  a\n\n  b')
+    expect(run(indentLines(1), '- it|em').doc).toBe('  - item')
+  })
+  it('outdent removes up to two spaces or a tab', () => {
+    expect(run(outdentOf(), '[    a\n b\n\tc\nd]').doc).toBe('  a\nb\nc\nd')
+  })
+  it('outdent with nothing to remove is null; fenced lines are skipped', () => {
+    expect(indentLines(-1)('a', { from: 0, to: 0 })).toBeNull()
+    expect(indentLines(1)('```\nx\n```', { from: 5, to: 5 })).toBeNull()
+  })
+  it('selectionIsAllList', () => {
+    expect(selectionIsAllList('- a\n  1. b', { from: 0, to: 10 })).toBe(true)
+    expect(selectionIsAllList('- a\nplain', { from: 0, to: 9 })).toBe(false)
+    expect(selectionIsAllList('', { from: 0, to: 0 })).toBe(false)
+  })
+})
+function outdentOf(): MarkdownEdit { return indentLines(-1) }

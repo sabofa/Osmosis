@@ -18,6 +18,11 @@ describe('resolveIcon', () => {
     }
     expect(new Set(ICON_NAMES).size).toBe(ICON_NAMES.length)
   })
+  it('includes the ribbon icons', () => {
+    for (const n of ['paste', 'cut', 'copy', 'select-all', 'replace', 'indent', 'outdent', 'clear-format', 'hr', 'code-block', 'math', 'graph', 'image', 'table']) {
+      expect(ICON_NAMES as readonly string[]).toContain(`doc-${n}`)
+    }
+  })
   it('every editor spec icon is a known icon name', () => {
     for (const s of editorCommandSpecs()) expect(ICON_NAMES as readonly string[]).toContain(s.icon)
   })

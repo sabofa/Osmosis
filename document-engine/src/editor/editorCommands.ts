@@ -4,16 +4,24 @@
 // inside the editor so the keyboard works without any toolbar.
 import { EditorSelection, type EditorState } from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
-import { undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
+import { undo, redo, undoDepth, redoDepth, selectAll, indentMore, indentLess } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import type { ToolbarCommand } from 'engine-host'
-import { toggleWrap, toggleLinePrefix, cycleHeading, makeLink, type MarkdownEdit } from './markdownEdit'
+import {
+  toggleWrap, toggleLinePrefix, cycleHeading, makeLink, setBlockStyle, clearFormatting, insertHr, insertMathBlock,
+  insertGraphFence, indentLines, selectionIsAllList, type MarkdownEdit, type BlockStyle, type SettableBlockStyle,
+} from './markdownEdit'
+
+export type { BlockStyle, SettableBlockStyle }
 
 export type EditorCommandId =
   | 'bold' | 'italic' | 'strike' | 'code' | 'link' | 'heading-cycle'
   | 'bullet-list' | 'numbered-list' | 'task-list' | 'quote'
   | 'undo' | 'redo' | 'find'
+  // ribbon commands (not in editorCommandSpecs(): the ribbon owns their labels)
+  | 'paste' | 'cut' | 'copy' | 'select-all' | 'replace' | 'indent' | 'outdent' | 'clear-format'
+  | 'hr' | 'code-block' | 'math-block' | 'graph-block'
 
 export type EditorCommandGroup = 'text' | 'block' | 'history' | 'find'
 
@@ -114,6 +122,19 @@ export function activeMarks(state: EditorState, pos: number = state.selection.ma
   }
 }
 
+/** The block style of the line at `pos`: code, heading level, quote, list or normal. */
+export function currentBlockStyle(state: EditorState, pos: number = state.selection.main.head): BlockStyle {
+  const p = Math.max(0, Math.min(pos, state.doc.length))
+  ensureSyntaxTree(state, Math.min(state.doc.length, p + 1), 25)
+  if (inCodeBlock(state, p)) return 'code'
+  const line = state.doc.lineAt(p).text
+  const h = /^ {0,3}(#{1,6})(?:\s|$)/.exec(line)
+  if (h) return `h${h[1].length}` as BlockStyle
+  if (/^\s*>/.test(line)) return 'quote'
+  if (/^\s*(?:[-*+]|\d+[.)])\s/.test(line)) return 'list'
+  return 'normal'
+}
+
 // -------------------------------------------------------------- running
 
 const EDITS: Partial<Record<EditorCommandId, () => MarkdownEdit>> = {
@@ -127,10 +148,110 @@ const EDITS: Partial<Record<EditorCommandId, () => MarkdownEdit>> = {
   'numbered-list': () => toggleLinePrefix('1. '),
   'task-list': () => toggleLinePrefix('- [ ] '),
   quote: () => toggleLinePrefix('> '),
+  'clear-format': () => clearFormatting(),
+  hr: () => insertHr(),
+  'code-block': () => setBlockStyle('code'),
+  'math-block': () => insertMathBlock(),
+  'graph-block': () => insertGraphFence(),
 }
 
 export interface EditorCommandContext {
   readOnly?: boolean
+  /** Told when a command cannot finish (e.g. the browser denied clipboard access). */
+  notify?: (message: string) => void
+}
+
+function applyEdit(view: EditorView, make: () => MarkdownEdit): boolean {
+  const sel = view.state.selection.main
+  const res = make()(view.state.doc.toString(), { from: sel.from, to: sel.to, reversed: sel.anchor > sel.head })
+  if (!res) return false
+  view.dispatch({
+    changes: res.changes,
+    selection: EditorSelection.single(res.selection.anchor, res.selection.head),
+    userEvent: 'input',
+    scrollIntoView: true,
+  })
+  view.focus()
+  return true
+}
+
+/** Apply a block style (Normal, Heading n, Quote, Code block) to the cursor line / selected lines. */
+export function runBlockStyle(view: EditorView, style: SettableBlockStyle, ctx: EditorCommandContext = {}): boolean {
+  if (ctx.readOnly || view.state.readOnly || view.composing) return false
+  return applyEdit(view, () => setBlockStyle(style))
+}
+
+type ClipboardLike = { readText?: () => Promise<string>; writeText?: (t: string) => Promise<void> }
+const clipboard = (): ClipboardLike | undefined =>
+  typeof navigator !== 'undefined' ? (navigator as { clipboard?: ClipboardLike }).clipboard : undefined
+
+function legacyCommand(name: 'cut' | 'copy'): boolean {
+  try {
+    return typeof document !== 'undefined' && typeof document.execCommand === 'function' && document.execCommand(name)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Paste the clipboard text at the selection as an input transaction. Async:
+ * resolves to what happened. A denied or missing clipboard is a no-op that
+ * tells `ctx.notify` to use the keyboard paste instead.
+ */
+export async function pasteFromClipboard(view: EditorView, ctx: EditorCommandContext = {}): Promise<'pasted' | 'empty' | 'denied' | 'blocked'> {
+  if (ctx.readOnly || view.state.readOnly || view.composing) return 'blocked'
+  let text = ''
+  try {
+    const cb = clipboard()
+    if (!cb?.readText) throw new Error('no clipboard')
+    text = await cb.readText()
+  } catch {
+    ctx.notify?.('Paste was blocked by the browser. Press Ctrl+V instead.')
+    return 'denied'
+  }
+  if (!text) return 'empty'
+  // the world may have changed while a permission prompt was open
+  if (ctx.readOnly || view.state.readOnly || view.composing) return 'blocked'
+  view.dispatch({ ...view.state.replaceSelection(text), userEvent: 'input.paste', scrollIntoView: true })
+  view.focus()
+  return 'pasted'
+}
+
+function copySelection(view: EditorView, cut: boolean): boolean {
+  const sel = view.state.selection.main
+  if (sel.empty) return false
+  const text = view.state.sliceDoc(sel.from, sel.to)
+  const cb = clipboard()
+  const removeIfSame = () => {
+    // only delete what we copied, and only if the user has not moved on
+    if (view.state.readOnly || view.state.sliceDoc(sel.from, sel.to) !== text) return
+    view.dispatch({ changes: { from: sel.from, to: sel.to }, selection: { anchor: sel.from }, userEvent: 'delete.cut' })
+    view.focus()
+  }
+  if (cb?.writeText) {
+    cb.writeText(text).then(
+      () => { if (cut) removeIfSame() },
+      () => { legacyCommand(cut ? 'cut' : 'copy') },
+    )
+    return true
+  }
+  return legacyCommand(cut ? 'cut' : 'copy')
+}
+
+function runReplace(view: EditorView): boolean {
+  openSearchPanel(view)
+  const dom = (view as { dom?: HTMLElement }).dom
+  const field = dom?.querySelector?.('input[name=replace]') as HTMLInputElement | null | undefined
+  field?.focus()
+  return true
+}
+
+function runIndent(view: EditorView, dir: 1 | -1): boolean {
+  const sel = view.state.selection.main
+  if (selectionIsAllList(view.state.doc.toString(), { from: sel.from, to: sel.to })) {
+    return dir === 1 ? indentMore(view) : indentLess(view)
+  }
+  return applyEdit(view, () => indentLines(dir))
 }
 
 /** Run one command against the view. Returns whether it did anything. */
@@ -139,23 +260,22 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
     openSearchPanel(view)
     return true
   }
+  // reading commands work on a read-only document too
+  if (id === 'copy') return copySelection(view, false)
+  if (id === 'select-all') return selectAll(view)
   if (ctx.readOnly || view.state.readOnly) return false
   // An IME composition owns the text right now; a toolbar edit would corrupt it.
   if (view.composing) return false
-  const make = EDITS[id]
-  if (make) {
-    const sel = view.state.selection.main
-    const res = make()(view.state.doc.toString(), { from: sel.from, to: sel.to, reversed: sel.anchor > sel.head })
-    if (!res) return false
-    view.dispatch({
-      changes: res.changes,
-      selection: EditorSelection.single(res.selection.anchor, res.selection.head),
-      userEvent: 'input',
-      scrollIntoView: true,
-    })
-    view.focus()
+  if (id === 'paste') {
+    void pasteFromClipboard(view, ctx)
     return true
   }
+  if (id === 'cut') return copySelection(view, true)
+  if (id === 'replace') return runReplace(view)
+  if (id === 'indent') return runIndent(view, 1)
+  if (id === 'outdent') return runIndent(view, -1)
+  const make = EDITS[id]
+  if (make) return applyEdit(view, make)
   if (id === 'undo') return undo(view)
   if (id === 'redo') return redo(view)
   return false

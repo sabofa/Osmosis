@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -6,6 +6,7 @@ import { history } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
 import {
   editorCommandSpecs, activeMarks, commandFlags, buildEditorCommands, runEditorCommand, editorKeymap,
+  currentBlockStyle, pasteFromClipboard, runBlockStyle,
 } from './editorCommands'
 
 function mkView(doc: string, anchor = doc.length, head = anchor, readOnly = false): EditorView {
@@ -217,5 +218,168 @@ describe('buildEditorCommands with a view', () => {
     const cmds = buildEditorCommands(null)
     expect(byId(cmds, 'bold').shortcut).toBe('Mod-b')
     expect(byId(cmds, 'quote').shortcut).toBeUndefined()
+  })
+})
+
+describe('currentBlockStyle', () => {
+  const at = (doc: string, pos: number) => currentBlockStyle(stateOf(doc), pos)
+  it('reads headings, quote, list, code and normal', () => {
+    for (let n = 1; n <= 6; n++) expect(at('#'.repeat(n) + ' title', 3)).toBe('h' + n)
+    expect(at('> quoted', 3)).toBe('quote')
+    expect(at('- item', 3)).toBe('list')
+    expect(at('2. item', 4)).toBe('list')
+    expect(at('- [ ] task', 6)).toBe('list')
+    expect(at('plain text', 3)).toBe('normal')
+    expect(at('#hashtag', 3)).toBe('normal')
+    expect(at('', 0)).toBe('normal')
+  })
+  it('code covers fence lines and the body; text after the fence is normal', () => {
+    const doc = 'a\n```js\nlet x\n```\nb'
+    expect(at(doc, doc.indexOf('let') + 2)).toBe('code')
+    expect(at(doc, doc.indexOf('```js') + 1)).toBe('code')
+    expect(at(doc, doc.length)).toBe('normal')
+    expect(at(doc, 0)).toBe('normal')
+  })
+  it('a heading-looking line inside a fence is code', () => {
+    expect(at('```\n# not a heading\n```', 8)).toBe('code')
+  })
+  it('defaults to the selection head', () => {
+    const st = EditorState.create({ doc: 'x\n## y', selection: { anchor: 5 }, extensions: [markdown({ base: markdownLanguage })] })
+    expect(currentBlockStyle(st)).toBe('h2')
+  })
+})
+
+describe('ribbon commands on a view', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+  const doc = (v: EditorView) => v.state.doc.toString()
+  const clip = (over: Record<string, unknown>) => vi.stubGlobal('navigator', { clipboard: over })
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  it('select-all selects the document, even read-only', () => {
+    const v = mkView('abc\ndef', 0, 0, true)
+    expect(runEditorCommand(v, 'select-all')).toBe(true)
+    expect(v.state.selection.main.from).toBe(0)
+    expect(v.state.selection.main.to).toBe(7)
+  })
+  it('block insert commands', () => {
+    let v = mkView('one', 3)
+    expect(runEditorCommand(v, 'hr')).toBe(true)
+    expect(doc(v)).toBe('one\n\n---')
+    v = mkView('one', 3)
+    runEditorCommand(v, 'graph-block')
+    expect(doc(v)).toBe('one\n\n```graph\ny = sin(x)\nx in [-6.28, 6.28]\n```')
+    v = mkView('x^2', 0, 3)
+    runEditorCommand(v, 'math-block')
+    expect(doc(v)).toBe('$$\nx^2\n$$')
+    v = mkView('code', 0, 4)
+    runEditorCommand(v, 'code-block')
+    expect(doc(v)).toBe('```\ncode\n```')
+  })
+  it('clear-format strips marks and prefixes', () => {
+    const v = mkView('## **bold** and *it*', 3)
+    expect(runEditorCommand(v, 'clear-format')).toBe(true)
+    expect(doc(v)).toBe('bold and it')
+  })
+  it('runBlockStyle sets and toggles, and is blocked read-only', () => {
+    const v = mkView('title', 2)
+    expect(runBlockStyle(v, 'h2')).toBe(true)
+    expect(doc(v)).toBe('## title')
+    expect(runBlockStyle(v, 'h2')).toBe(true)
+    expect(doc(v)).toBe('title')
+    expect(runBlockStyle(mkView('x', 0, 0, true), 'h1')).toBe(false)
+    expect(runBlockStyle(v, 'h1', { readOnly: true })).toBe(false)
+  })
+  it('indent / outdent: spaces on plain lines, list indent on list items', () => {
+    const v = mkView('a\nb', 0, 3)
+    runEditorCommand(v, 'indent')
+    expect(doc(v)).toBe('  a\n  b')
+    runEditorCommand(v, 'outdent')
+    expect(doc(v)).toBe('a\nb')
+    const l = mkView('- a', 3)
+    expect(runEditorCommand(l, 'indent')).toBe(true)
+    expect(doc(l)).toBe('  - a')
+    runEditorCommand(l, 'outdent')
+    expect(doc(l)).toBe('- a')
+  })
+  it('edit-type ribbon commands do nothing read-only or while composing', () => {
+    for (const id of ['paste', 'cut', 'indent', 'hr', 'clear-format', 'replace'] as const) {
+      expect(runEditorCommand(mkView('- a', 0, 3, true), id)).toBe(false)
+    }
+    const v = mkView('abc', 0, 3)
+    ;(v as unknown as { composing: boolean }).composing = true
+    expect(runEditorCommand(v, 'hr')).toBe(false)
+    expect(runEditorCommand(v, 'indent')).toBe(false)
+  })
+  it('paste inserts clipboard text as an input transaction', async () => {
+    clip({ readText: async () => 'PASTED' })
+    const v = mkView('ab', 1)
+    expect(runEditorCommand(v, 'paste')).toBe(true)
+    await flush()
+    expect(doc(v)).toBe('aPASTEDb')
+    expect(await pasteFromClipboard(mkView('x', 1))).toBe('pasted')
+  })
+  it('paste replaces the selection', async () => {
+    clip({ readText: async () => 'Z' })
+    const v = mkView('abc', 0, 3)
+    await pasteFromClipboard(v)
+    expect(doc(v)).toBe('Z')
+  })
+  it('paste with a denied or missing clipboard is a no-op and says so', async () => {
+    const notify = vi.fn()
+    clip({ readText: async () => { throw new Error('denied') } })
+    const v = mkView('ab', 1)
+    expect(await pasteFromClipboard(v, { notify })).toBe('denied')
+    expect(doc(v)).toBe('ab')
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0][0]).toMatch(/Ctrl\+V/)
+    vi.stubGlobal('navigator', {})
+    expect(await pasteFromClipboard(v, { notify })).toBe('denied')
+    expect(notify).toHaveBeenCalledTimes(2)
+  })
+  it('paste is dropped if the doc became read-only while waiting', async () => {
+    let release: (t: string) => void = () => {}
+    clip({ readText: () => new Promise<string>((r) => { release = r }) })
+    const v = mkView('ab', 1)
+    const ctx = { readOnly: false }
+    const p = pasteFromClipboard(v, ctx)
+    ctx.readOnly = true
+    release('late')
+    expect(await p).toBe('blocked')
+    expect(doc(v)).toBe('ab')
+  })
+  it('copy writes the selection and leaves the text; empty selection is a no-op', async () => {
+    const writeText = vi.fn(async (_t: string) => {})
+    clip({ writeText })
+    const v = mkView('hello', 0, 5, true)
+    expect(runEditorCommand(v, 'copy')).toBe(true)
+    expect(writeText).toHaveBeenCalledWith('hello')
+    await flush()
+    expect(doc(v)).toBe('hello')
+    expect(runEditorCommand(mkView('hello', 2), 'copy')).toBe(false)
+  })
+  it('cut copies then deletes, but only what was copied', async () => {
+    const writeText = vi.fn(async (_t: string) => {})
+    clip({ writeText })
+    const v = mkView('hello world', 0, 5)
+    expect(runEditorCommand(v, 'cut')).toBe(true)
+    expect(writeText).toHaveBeenCalledWith('hello')
+    await flush()
+    expect(doc(v)).toBe(' world')
+    expect(v.state.selection.main.head).toBe(0)
+  })
+  it('cut leaves the text if the write failed or the text changed meanwhile', async () => {
+    clip({ writeText: async () => { throw new Error('no') } })
+    const v = mkView('hello', 0, 5)
+    runEditorCommand(v, 'cut')
+    await flush()
+    expect(doc(v)).toBe('hello')
+    let ok: () => void = () => {}
+    clip({ writeText: () => new Promise<void>((r) => { ok = r }) })
+    const w = mkView('hello', 0, 5)
+    runEditorCommand(w, 'cut')
+    w.dispatch({ changes: { from: 0, to: 5, insert: 'HELLO' } })
+    ok()
+    await flush()
+    expect(doc(w)).toBe('HELLO')
   })
 })

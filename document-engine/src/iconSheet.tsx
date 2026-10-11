@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { IconSheetRef } from 'theme-core'
-import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon, GraphExpandIcon, GraphCollapseIcon, BoldIcon, ItalicIcon, StrikeIcon, CodeIcon, LinkIcon, HeadingIcon, ListBulletIcon, ListNumberIcon, ListTaskIcon, QuoteIcon, UndoIcon, RedoIcon, SearchIcon } from './icons'
+import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon, GraphExpandIcon, GraphCollapseIcon, BoldIcon, ItalicIcon, StrikeIcon, CodeIcon, LinkIcon, HeadingIcon, ListBulletIcon, ListNumberIcon, ListTaskIcon, QuoteIcon, UndoIcon, RedoIcon, SearchIcon, DocPasteIcon, DocCutIcon, DocCopyIcon, DocSelectAllIcon, DocReplaceIcon, DocIndentIcon, DocOutdentIcon, DocClearFormatIcon, DocHrIcon, DocCodeBlockIcon, DocMathIcon, DocGraphIcon, DocImageIcon, DocTableIcon, DocUnderlineIcon, DocSubscriptIcon, DocSuperscriptIcon, DocFontGrowIcon, DocFontShrinkIcon, DocFontIcon, DocTextColorIcon, DocAlignLeftIcon, DocAlignCenterIcon, DocAlignRightIcon, DocAlignJustifyIcon, DocLineSpacingIcon, DocMarginsIcon, DocOrientationIcon, DocPageSizeIcon } from './icons'
 
 export type IconComponent = ComponentType<{ size?: number }>
 
@@ -31,6 +31,35 @@ export const ICON_NAMES = [
   'doc-undo',
   'doc-redo',
   'doc-search',
+  'doc-paste',
+  'doc-cut',
+  'doc-copy',
+  'doc-select-all',
+  'doc-replace',
+  'doc-indent',
+  'doc-outdent',
+  'doc-clear-format',
+  'doc-hr',
+  'doc-code-block',
+  'doc-math',
+  'doc-graph',
+  'doc-image',
+  'doc-table',
+  'doc-underline',
+  'doc-subscript',
+  'doc-superscript',
+  'doc-font-grow',
+  'doc-font-shrink',
+  'doc-font',
+  'doc-text-color',
+  'doc-align-left',
+  'doc-align-center',
+  'doc-align-right',
+  'doc-align-justify',
+  'doc-line-spacing',
+  'doc-margins',
+  'doc-orientation',
+  'doc-page-size',
 ] as const
 
 export type IconName = (typeof ICON_NAMES)[number]
@@ -64,6 +93,35 @@ const DEFAULT_SHEET: Record<IconName, IconComponent> = {
   'doc-undo': UndoIcon,
   'doc-redo': RedoIcon,
   'doc-search': SearchIcon,
+  'doc-paste': DocPasteIcon,
+  'doc-cut': DocCutIcon,
+  'doc-copy': DocCopyIcon,
+  'doc-select-all': DocSelectAllIcon,
+  'doc-replace': DocReplaceIcon,
+  'doc-indent': DocIndentIcon,
+  'doc-outdent': DocOutdentIcon,
+  'doc-clear-format': DocClearFormatIcon,
+  'doc-hr': DocHrIcon,
+  'doc-code-block': DocCodeBlockIcon,
+  'doc-math': DocMathIcon,
+  'doc-graph': DocGraphIcon,
+  'doc-image': DocImageIcon,
+  'doc-table': DocTableIcon,
+  'doc-underline': DocUnderlineIcon,
+  'doc-subscript': DocSubscriptIcon,
+  'doc-superscript': DocSuperscriptIcon,
+  'doc-font-grow': DocFontGrowIcon,
+  'doc-font-shrink': DocFontShrinkIcon,
+  'doc-font': DocFontIcon,
+  'doc-text-color': DocTextColorIcon,
+  'doc-align-left': DocAlignLeftIcon,
+  'doc-align-center': DocAlignCenterIcon,
+  'doc-align-right': DocAlignRightIcon,
+  'doc-align-justify': DocAlignJustifyIcon,
+  'doc-line-spacing': DocLineSpacingIcon,
+  'doc-margins': DocMarginsIcon,
+  'doc-orientation': DocOrientationIcon,
+  'doc-page-size': DocPageSizeIcon,
 }
 
 // Harmless placeholder for a name nobody knows: an empty square.

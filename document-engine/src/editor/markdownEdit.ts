@@ -317,3 +317,200 @@ export function makeLink(url?: string): MarkdownEdit {
     }
   }
 }
+
+// ------------------------------------------------------------- block styles
+
+export type BlockStyle = 'normal' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' | 'quote' | 'code' | 'list'
+/** The styles a user can apply (a list is detected, set with the list commands). */
+export type SettableBlockStyle = Exclude<BlockStyle, 'list'>
+
+const HEADING_PREFIX = /^ {0,3}#{1,6}(?:[ \t]+|$)/
+const HEADING_LEVEL = /^ {0,3}(#{1,6})(?:[ \t]|$)/
+const QUOTE_PREFIX = /^ {0,3}(?:>[ \t]?)+/
+const LIST_PREFIX = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/
+
+interface DocLine { start: number; end: number; text: string }
+
+/** The lines a selection touches (a selection ending right after a newline excludes the next line). */
+function selectedLines(doc: string, sel: EditSel): DocLine[] {
+  const lastPos = sel.to > sel.from && doc[sel.to - 1] === '\n' ? sel.to - 1 : sel.to
+  const lastEnd = lineEndOf(doc, lastPos)
+  const out: DocLine[] = []
+  let at = lineStartOf(doc, sel.from)
+  for (;;) {
+    const end = lineEndOf(doc, at)
+    out.push({ start: at, end, text: doc.slice(at, end) })
+    if (end >= lastEnd) break
+    at = end + 1
+  }
+  return out
+}
+
+/** The style of one non-fenced line: quote beats heading beats normal. */
+function lineStyle(text: string): BlockStyle {
+  if (QUOTE_PREFIX.test(text)) return 'quote'
+  const h = HEADING_LEVEL.exec(text)
+  return h ? (`h${h[1].length}` as BlockStyle) : 'normal'
+}
+
+/**
+ * Set the block style of the cursor line or every selected line. A style the
+ * lines already have is toggled back to normal. `code` wraps the selected
+ * lines in a ``` fence (the caret lands inside it on an empty line).
+ */
+export function setBlockStyle(style: SettableBlockStyle): MarkdownEdit {
+  return (doc, sel) => {
+    const lines = selectedLines(doc, sel)
+    const fenced = fencedLineStarts(doc)
+
+    if (style === 'code') {
+      if (lines.some(l => fenced.has(l.start))) return null
+      const first = lines[0]
+      const last = lines[lines.length - 1]
+      const changes: EditChange[] = [
+        { from: first.start, to: first.start, insert: '```\n' },
+        { from: last.end, to: last.end, insert: '\n```' },
+      ]
+      const shift = 4
+      const a = sel.from + shift
+      const b = sel.to + shift
+      return { changes, selection: sel.reversed ? { anchor: b, head: a } : { anchor: a, head: b } }
+    }
+
+    const open = lines.filter(l => !fenced.has(l.start))
+    if (!open.length) return null
+    const nonBlank = open.filter(l => l.text.trim() !== '')
+    const targets = nonBlank.length ? nonBlank : open
+    const toggledOff = targets.every(l => lineStyle(l.text) === style)
+    const eff: SettableBlockStyle = toggledOff ? 'normal' : style
+
+    const changes: EditChange[] = []
+    for (const l of targets) {
+      let body = l.text
+      const strip = (re: RegExp) => { const m = re.exec(body); if (m) body = body.slice(m[0].length) }
+      strip(QUOTE_PREFIX)
+      strip(HEADING_PREFIX)
+      if (eff[0] === 'h') strip(LIST_PREFIX)
+      const insert = eff === 'quote' ? '> ' : eff[0] === 'h' ? '#'.repeat(Number(eff[1])) + ' ' : ''
+      const oldLen = l.text.length - body.length
+      if (l.text.slice(0, oldLen) === insert) continue
+      changes.push({ from: l.start, to: l.start + oldLen, insert })
+    }
+    return { changes, selection: mapSel(sel, changes) }
+  }
+}
+
+// -------------------------------------------------------- clear formatting
+
+/** Strip emphasis / strike markers outside code spans, then unwrap the code spans. */
+function stripInline(text: string): string {
+  return text
+    .split(/(`[^`\n]+`)/)
+    .map((seg, i) => {
+      if (i % 2 === 1) return seg.slice(1, -1)
+      return seg
+        .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '$2')
+        .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '$1')
+        .replace(/(?<![*\w])\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)/g, '$1')
+        .replace(/(?<![_\w])_(?![\s_])(.+?)(?<![\s_])_(?![_\w])/g, '$1')
+    })
+    .join('')
+}
+
+/** Remove inline markers and the heading / quote / list prefix from the selected lines. */
+export function clearFormatting(): MarkdownEdit {
+  return (doc, sel) => {
+    const fenced = fencedLineStarts(doc)
+    const changes: EditChange[] = []
+    for (const l of selectedLines(doc, sel)) {
+      if (fenced.has(l.start)) continue
+      let body = l.text
+      for (const re of [QUOTE_PREFIX, HEADING_PREFIX, LIST_PREFIX]) {
+        const m = re.exec(body)
+        if (m) body = body.slice(m[0].length)
+      }
+      body = stripInline(body)
+      if (body !== l.text) changes.push({ from: l.start, to: l.end, insert: body })
+    }
+    if (!changes.length) return null
+    return { changes, selection: mapSel(sel, changes) }
+  }
+}
+
+// ------------------------------------------------------------ block inserts
+
+/**
+ * Insert `block` on its own, with a blank line either side. It goes after the
+ * line holding the selection's end (replacing that line when it is blank).
+ * `caret` is the offset inside `block` where the cursor lands. Null inside a fence.
+ */
+function insertBlock(block: string, caret: number): MarkdownEdit {
+  return (doc, sel) => {
+    const lineStart = lineStartOf(doc, sel.to)
+    if (fencedLineStarts(doc).has(lineStart)) return null
+    const to = lineEndOf(doc, sel.to)
+    const blank = doc.slice(lineStart, to).trim() === ''
+    const from = blank ? lineStart : to
+    const pre = doc.slice(0, from)
+    const post = doc.slice(to)
+    const lead = from === 0 || pre.endsWith('\n\n') ? '' : pre.endsWith('\n') ? '\n' : '\n\n'
+    const trail = post === '' ? '' : post.startsWith('\n\n') ? '' : '\n'
+    const at = from + lead.length + caret
+    return { changes: [{ from, to, insert: lead + block + trail }], selection: { anchor: at, head: at } }
+  }
+}
+
+export const insertHr = (): MarkdownEdit => insertBlock('---', 3)
+
+/** $$ fences: wraps the selected lines, or opens an empty pair with the caret between. */
+export function insertMathBlock(): MarkdownEdit {
+  return (doc, sel) => {
+    const lines = selectedLines(doc, sel)
+    if (lines.some(l => fencedLineStarts(doc).has(l.start))) return null
+    const first = lines[0]
+    const last = lines[lines.length - 1]
+    if (doc.slice(first.start, last.end).trim() === '') return insertBlock('$$\n\n$$', 3)(doc, sel)
+    const changes: EditChange[] = [
+      { from: first.start, to: first.start, insert: '$$\n' },
+      { from: last.end, to: last.end, insert: '\n$$' },
+    ]
+    const a = sel.from + 3
+    const b = sel.to + 3
+    return { changes, selection: sel.reversed ? { anchor: b, head: a } : { anchor: a, head: b } }
+  }
+}
+
+export const GRAPH_STARTER = 'y = sin(x)\nx in [-6.28, 6.28]'
+
+/** A ```graph fence with a starter plot, caret at the end of the body. */
+export function insertGraphFence(): MarkdownEdit {
+  const head = '```graph\n'
+  return insertBlock(head + GRAPH_STARTER + '\n```', head.length + GRAPH_STARTER.length)
+}
+
+// ---------------------------------------------------------- indent / outdent
+
+/** Add (delta 1) two spaces to, or remove up to two spaces (or one tab) from, each non-fenced selected line. */
+export function indentLines(delta: 1 | -1): MarkdownEdit {
+  return (doc, sel) => {
+    const fenced = fencedLineStarts(doc)
+    const changes: EditChange[] = []
+    for (const l of selectedLines(doc, sel)) {
+      if (fenced.has(l.start)) continue
+      if (delta === 1) {
+        if (l.text.trim() !== '') changes.push({ from: l.start, to: l.start, insert: '  ' })
+      } else {
+        const m = /^(?:\t| {1,2})/.exec(l.text)
+        if (m) changes.push({ from: l.start, to: l.start + m[0].length, insert: '' })
+      }
+    }
+    if (!changes.length) return null
+    return { changes, selection: mapSel(sel, changes) }
+  }
+}
+
+/** Whether every non-blank selected line is a list item. */
+export function selectionIsAllList(doc: string, sel: EditSel): boolean {
+  const ls = selectedLines(doc, sel).filter(l => l.text.trim() !== '')
+  return ls.length > 0 && ls.every(l => LIST_PREFIX.test(l.text))
+}
