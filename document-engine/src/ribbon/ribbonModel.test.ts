@@ -197,7 +197,7 @@ describe('ribbonToToolbarCommands', () => {
   it('maps buttons and toggles one to one with flags and shortcuts', () => {
     const cmds = ribbonToToolbarCommands(build('markdown', { marks: { ...NO_MARKS, italic: true } }))
     const bold = cmds.find((c) => c.id === 'bold')!
-    expect(bold).toMatchObject({ label: 'Bold', icon: 'doc-bold', group: 'font', enabled: true, active: false, shortcut: 'Mod-b' })
+    expect(bold).toMatchObject({ label: 'Bold', icon: 'doc-bold', group: 'Font', enabled: true, active: false, shortcut: 'Mod-b' })
     expect(cmds.find((c) => c.id === 'italic')!.active).toBe(true)
     expect(cmds.find((c) => c.id === 'copy')!.shortcut).toBe('Mod-c')
   })

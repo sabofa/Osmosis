@@ -14,8 +14,9 @@ import {
   type RibbonNumber, type RibbonColor, type RibbonSelect, type RibbonGallery,
 } from './ribbonModel'
 import {
-  rovingIndex, controlTitle, galleryWindow, galleryTileCount, overflowSplit, isNarrow, previewLook, clampNumber,
+  rovingIndex, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
 } from './ribbonNav'
+import { subscribeRibbonNotices } from './ribbonNotice'
 import './Ribbon.css'
 
 export interface RibbonProps {
@@ -30,6 +31,8 @@ export interface RibbonProps {
 interface Ctx {
   icons: IconSheetRef
   run(fn: () => void): void
+  /** Run without telling the owner (no focus return to the editor). */
+  runQuiet(fn: () => void): void
   compact: boolean
   tiles: number
   mac: boolean
@@ -201,7 +204,10 @@ function Popover({
       aria-label={label}
       style={style}
       onKeyDown={onKeyDown}
-      onMouseDown={prevent}
+      onMouseDown={(e) => {
+        // keep editor focus, except where the field itself needs the pointer
+        if (!/^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName)) e.preventDefault()
+      }}
     >
       {children}
     </div>
@@ -429,7 +435,8 @@ function NumberInput({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
     if (raw === null) return
     setDraft(null)
     const n = clampNumber(parseFloat(raw), item.min, item.max)
-    if (n !== null && n !== item.value) ctx.run(() => item.onChange(n))
+    // a blur means focus is going elsewhere on purpose: never pull it back to the editor
+    if (n !== null && n !== item.value) ctx.runQuiet(() => item.onChange(n))
   }
   const step = (dir: 1 | -1) => {
     const n = clampNumber(item.value + dir * item.step, item.min, item.max)
@@ -614,7 +621,7 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
   const all = useMemo(() => flattenRibbon(ribbon), [ribbon])
   // Each control is 28px + 2px gap; the row has 8px padding each side.
   const capacity = Math.floor((width - 16) / 30)
-  const { shown, overflow } = overflowSplit(all, capacity)
+  const { shown, overflow } = overflowSplit(all, capacity, (c) => controlSlots(c.kind))
   const pop = usePopover(ctx)
   return (
     <div
@@ -664,7 +671,22 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
 export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: RibbonProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = useWidth(rootRef)
-  const narrow = isNarrow(width)
+  const wasNarrow = useRef(false)
+  const narrow = isNarrow(width, wasNarrow.current)
+  wasNarrow.current = narrow
+  const [notice, setNotice] = useState<string | null>(null)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = subscribeRibbonNotices((m) => {
+      setNotice(m)
+      clearTimeout(timer)
+      timer = setTimeout(() => setNotice(null), 4000)
+    })
+    return () => {
+      off()
+      clearTimeout(timer)
+    }
+  }, [])
   const uid = useId()
   const [tabId, setTabId] = useState<string>(ribbon.tabs[0]?.id ?? '')
   const tab = ribbon.tabs.find((t) => t.id === tabId) ?? ribbon.tabs[0]
@@ -677,6 +699,7 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: 
       fn()
       doneRef.current?.()
     },
+    runQuiet: (fn) => fn(),
     compact: narrow,
     tiles: galleryTileCount(width),
     mac,
@@ -730,6 +753,7 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting' }: 
           </div>
         </>
       )}
+      <div className="de-r-status" role="status" aria-live="polite">{notice}</div>
     </div>
   )
 }

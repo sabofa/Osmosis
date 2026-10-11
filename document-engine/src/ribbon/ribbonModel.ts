@@ -322,7 +322,7 @@ export function flattenRibbon(ribbon: Ribbon): RibbonControl[] {
 
 /**
  * For hosts that only know ToolbarCommand: buttons and toggles map one to one;
- * a select or gallery becomes one command per option (group = its label, active
+ * a select or gallery becomes one command per option (group = the group label, like the buttons, active
  * on the current value). Number and colour controls have no command form and
  * are left out, as are placeholders.
  */
@@ -333,13 +333,13 @@ export function ribbonToToolbarCommands(ribbon: Ribbon): ToolbarCommand[] {
       for (const i of g.items) {
         if (i.kind === 'separator' || i.placeholder) continue
         if (i.kind === 'button' || i.kind === 'toggle') {
-          const c: ToolbarCommand = { id: i.id, label: i.label, icon: i.icon, group: g.id, enabled: i.enabled, active: i.active, run: i.run }
+          const c: ToolbarCommand = { id: i.id, label: i.label, icon: i.icon, group: g.label, enabled: i.enabled, active: i.active, run: i.run }
           if (i.shortcut) c.shortcut = i.shortcut
           out.push(c)
         } else if (i.kind === 'select' || i.kind === 'gallery') {
           for (const o of i.options) {
             out.push({
-              id: `${i.id}:${o.value}`, label: o.label, icon: i.icon, group: i.label,
+              id: `${i.id}:${o.value}`, label: o.label, icon: i.icon, group: g.label,
               enabled: i.enabled, active: o.value === i.value, run: () => i.onChange(o.value),
             })
           }

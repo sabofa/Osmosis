@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { buildCommands, commandsShape, type CommandState } from './commands'
 import { ICON_NAMES } from './iconSheet'
-import { buildEditorCommands } from './editor/editorCommands'
+import { buildEditorRibbon } from './ribbon/ribbonState'
+import { ribbonToToolbarCommands } from './ribbon/ribbonModel'
+
+const buildEditorCommands = (view: null) => ribbonToToolbarCommands(buildEditorRibbon(view))
 
 function state(over: Partial<CommandState> = {}): CommandState {
   return {

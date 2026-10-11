@@ -23,10 +23,10 @@ describe.each(FILES)('%s', (f) => {
   it('has no pixel or percent border radius', () => {
     expect(src).not.toMatch(/border-radius:\s*(?!var\(|calc\(var|0)[^;]*\b\d+(px|%)/)
   })
-  it('carries no box-shadow other than none and the popover shadow', () => {
+  it('carries no box-shadow at all (menus are separated by their hairline border)', () => {
     const shadows = [...src.matchAll(/box-shadow:\s*([^;]+);/g)].map((m) => m[1].trim())
     for (const s of shadows) {
-      expect(s === 'none' || /^0 4px 12px color-mix\(in srgb, var\(--de-text\) \d+%, transparent\)$/.test(s), s).toBe(true)
+      expect(s, s).toBe('none')
     }
   })
 })

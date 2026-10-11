@@ -338,13 +338,35 @@ describe('setBlockStyle', () => {
     expect(r.doc).toBe('```\n\n```')
     expect(r.sel).toBe('```\n|\n```')
   })
-  it('leaves fenced lines alone', () => {
-    const doc = '```\ncode\n```'
-    expect(setBlockStyle('h1')(doc, { from: 6, to: 6 })).toBeNull()
-    expect(setBlockStyle('code')(doc, { from: 6, to: 6 })).toBeNull()
+  it('any style un-fences a fenced block; Code toggles it off', () => {
+    for (const st of ['normal', 'h1', 'quote', 'code'] as const) {
+      expect(run(setBlockStyle(st), '```\nco|de\n```').doc).toBe('code')
+    }
+    expect(run(setBlockStyle('normal'), 'a\n```\nl1\nl|2\n```\nb').doc).toBe('a\nl1\nl2\nb')
+    expect(run(setBlockStyle('normal'), '```ts\nco|de\n```').doc).toBe('code')
+    expect(run(setBlockStyle('normal'), '```\n|\n```').doc).toBe('')
+    expect(run(setBlockStyle('normal'), '```\nco|de').doc).toBe('code')
+    expect(run(setBlockStyle('normal'), '[```\nx\n```]').doc).toBe('x')
+  })
+  it('keeps the selection on its text when un-fencing', () => {
+    expect(run(setBlockStyle('normal'), '```js\n[a\nb]\n```').sel).toBe('|a\nb|')
+  })
+  it('a mixed selection of fence and text with Code stays null', () => {
+    expect(setBlockStyle('code')('x\n```\nc\n```', { from: 0, to: 6 })).toBeNull()
   })
   it('skips fenced lines inside a mixed selection', () => {
     expect(run(setBlockStyle('h1'), '[a\n```\ncode\n```\nb]').doc).toBe('# a\n```\ncode\n```\n# b')
+  })
+})
+
+describe('clearFormatting keeps what is not formatting', () => {
+  it('leaves $math$, link targets and bare URLs alone', () => {
+    expect(run(clearFormatting(), '[$a*b*c$ and **x**]').doc).toBe('$a*b*c$ and x')
+    expect(run(clearFormatting(), '[**see** [a_b_c](http://x.com/a_b_c_d) *now*]').doc).toBe('see [a_b_c](http://x.com/a_b_c_d) now')
+    expect(run(clearFormatting(), '[go to https://x.com/a_b_c_d please **ok**]').doc).toBe('go to https://x.com/a_b_c_d please ok')
+  })
+  it('does not touch a horizontal rule line', () => {
+    for (const hr of ['* * *', '---', '___', '***']) expect(clearFormatting()(hr, { from: 0, to: hr.length })).toBeNull()
   })
 })
 

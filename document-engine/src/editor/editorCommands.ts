@@ -1,13 +1,12 @@
-// The Markdown editor's toolbar commands. editorCommandSpecs() is the pure
-// catalogue (ids, labels, groups, icons, shortcuts); buildEditorCommands()
-// binds it to a live EditorView; editorKeymap() registers the same shortcuts
-// inside the editor so the keyboard works without any toolbar.
+// The Markdown editor's commands. editorCommandSpecs() is the pure catalogue
+// (ids, labels, groups, icons, shortcuts); runEditorCommand() runs one against
+// a live EditorView; editorKeymap() registers the same shortcuts inside the
+// editor so the keyboard works without any toolbar.
 import { EditorSelection, type EditorState } from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
-import { undo, redo, undoDepth, redoDepth, selectAll, indentMore, indentLess } from '@codemirror/commands'
+import { undo, redo, selectAll, indentMore, indentLess } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
-import type { ToolbarCommand } from 'engine-host'
 import {
   toggleWrap, toggleLinePrefix, cycleHeading, makeLink, setBlockStyle, clearFormatting, insertHr, insertMathBlock,
   insertGraphFence, indentLines, selectionIsAllList, type MarkdownEdit, type BlockStyle, type SettableBlockStyle,
@@ -23,7 +22,7 @@ export type EditorCommandId =
   | 'paste' | 'cut' | 'copy' | 'select-all' | 'replace' | 'indent' | 'outdent' | 'clear-format'
   | 'hr' | 'code-block' | 'math-block' | 'graph-block'
 
-export type EditorCommandGroup = 'text' | 'block' | 'history' | 'find'
+type EditorCommandGroup = 'text' | 'block' | 'history' | 'find'
 
 export interface EditorCommandSpec {
   id: EditorCommandId
@@ -217,25 +216,29 @@ export async function pasteFromClipboard(view: EditorView, ctx: EditorCommandCon
   return 'pasted'
 }
 
-function copySelection(view: EditorView, cut: boolean): boolean {
+function copySelection(view: EditorView, cut: boolean, ctx: EditorCommandContext = {}): boolean {
   const sel = view.state.selection.main
   if (sel.empty) return false
+  const startDoc = view.state.doc
   const text = view.state.sliceDoc(sel.from, sel.to)
   const cb = clipboard()
+  const failed = () => ctx.notify?.(`${cut ? 'Cut' : 'Copy'} was blocked by the browser. Press Ctrl+${cut ? 'X' : 'C'} instead.`)
   const removeIfSame = () => {
-    // only delete what we copied, and only if the user has not moved on
-    if (view.state.readOnly || view.state.sliceDoc(sel.from, sel.to) !== text) return
+    // only delete what we copied, and only if nothing changed during the async write
+    if (view.state.readOnly || view.state.doc !== startDoc) return
     view.dispatch({ changes: { from: sel.from, to: sel.to }, selection: { anchor: sel.from }, userEvent: 'delete.cut' })
     view.focus()
   }
   if (cb?.writeText) {
     cb.writeText(text).then(
       () => { if (cut) removeIfSame() },
-      () => { legacyCommand(cut ? 'cut' : 'copy') },
+      () => { if (!legacyCommand(cut ? 'cut' : 'copy')) failed() },
     )
     return true
   }
-  return legacyCommand(cut ? 'cut' : 'copy')
+  if (legacyCommand(cut ? 'cut' : 'copy')) return true
+  failed()
+  return false
 }
 
 function runReplace(view: EditorView): boolean {
@@ -261,7 +264,7 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
     return true
   }
   // reading commands work on a read-only document too
-  if (id === 'copy') return copySelection(view, false)
+  if (id === 'copy') return copySelection(view, false, ctx)
   if (id === 'select-all') return selectAll(view)
   if (ctx.readOnly || view.state.readOnly) return false
   // An IME composition owns the text right now; a toolbar edit would corrupt it.
@@ -270,7 +273,7 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
     void pasteFromClipboard(view, ctx)
     return true
   }
-  if (id === 'cut') return copySelection(view, true)
+  if (id === 'cut') return copySelection(view, true, ctx)
   if (id === 'replace') return runReplace(view)
   if (id === 'indent') return runIndent(view, 1)
   if (id === 'outdent') return runIndent(view, -1)
@@ -281,64 +284,6 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
   return false
 }
 
-function isActive(marks: ActiveMarks, id: EditorCommandId): boolean {
-  switch (id) {
-    case 'bold': return marks.bold
-    case 'italic': return marks.italic
-    case 'strike': return marks.strike
-    case 'code': return marks.code
-    case 'heading-cycle': return marks.heading
-    case 'bullet-list': return marks.bullet
-    case 'numbered-list': return marks.numbered
-    case 'task-list': return marks.task
-    case 'quote': return marks.quote
-    default: return false
-  }
-}
-
-/** Pure flags for one command from the editor's facts; no view needed. */
-export function commandFlags(
-  id: EditorCommandId,
-  facts: { hasView: boolean; readOnly: boolean; undoDepth: number; redoDepth: number; marks: ActiveMarks }
-): { enabled: boolean; active: boolean } {
-  if (!facts.hasView) return { enabled: false, active: false }
-  if (id === 'find') return { enabled: true, active: false }
-  if (facts.readOnly) return { enabled: false, active: false }
-  if (id === 'undo') return { enabled: facts.undoDepth > 0, active: false }
-  if (id === 'redo') return { enabled: facts.redoDepth > 0, active: false }
-  return { enabled: true, active: isActive(facts.marks, id) }
-}
-
-export function buildEditorCommands(view: EditorView | null, ctx: EditorCommandContext = {}): ToolbarCommand[] {
-  let marks = NONE
-  let readOnly = !!ctx.readOnly
-  let undoN = 0
-  let redoN = 0
-  if (view) {
-    readOnly = readOnly || view.state.readOnly
-    undoN = undoDepth(view.state)
-    redoN = redoDepth(view.state)
-    const head = view.state.selection.main.head
-    marks = activeMarks(view.state, head)
-  }
-  return editorCommandSpecs().map((s) => {
-    const flags = commandFlags(s.id, { hasView: !!view, readOnly, undoDepth: undoN, redoDepth: redoN, marks })
-    const cmd: ToolbarCommand = {
-      id: s.id,
-      label: s.label,
-      icon: s.icon,
-      group: s.group,
-      enabled: flags.enabled,
-      active: flags.active,
-      run: () => {
-        if (view) runEditorCommand(view, s.id, ctx)
-      },
-    }
-    if (s.shortcut) cmd.shortcut = s.shortcut
-    return cmd
-  })
-}
-
 /** Key bindings for every spec shortcut; first in the keymap so they win. */
 export function editorKeymap(): KeyBinding[] {
   const out: KeyBinding[] = []
@@ -347,5 +292,7 @@ export function editorKeymap(): KeyBinding[] {
       if (key) out.push({ key, preventDefault: true, run: (v) => runEditorCommand(v, s.id) })
     }
   }
+  // Word's Replace; the ribbon button advertises it, so it must really be bound.
+  out.push({ key: 'Mod-h', preventDefault: true, run: (v) => runEditorCommand(v, 'replace') })
   return out
 }

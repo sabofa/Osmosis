@@ -5,7 +5,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { history } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
 import {
-  editorCommandSpecs, activeMarks, commandFlags, buildEditorCommands, runEditorCommand, editorKeymap,
+  editorCommandSpecs, activeMarks, runEditorCommand, editorKeymap,
   currentBlockStyle, pasteFromClipboard, runBlockStyle,
 } from './editorCommands'
 
@@ -33,7 +33,6 @@ const stateOf = (doc: string): EditorState => {
 }
 // activeMarks over a real EditorState + markdown() parse (no DOM needed).
 const am = (doc: string, pos: number) => activeMarks(stateOf(doc), pos)
-const byId = (cmds: ReturnType<typeof buildEditorCommands>, id: string) => cmds.find((c) => c.id === id)!
 
 describe('editorCommandSpecs', () => {
   const specs = editorCommandSpecs()
@@ -56,7 +55,7 @@ describe('editorCommandSpecs', () => {
   })
   it('keymap covers every shortcut including the redo alternate', () => {
     const keys = editorKeymap().map((k) => k.key)
-    expect(keys).toEqual(['Mod-b', 'Mod-i', 'Mod-e', 'Mod-k', 'Mod-z', 'Mod-Shift-z', 'Mod-y', 'Mod-f'])
+    expect(keys).toEqual(['Mod-b', 'Mod-i', 'Mod-e', 'Mod-k', 'Mod-z', 'Mod-Shift-z', 'Mod-y', 'Mod-f', 'Mod-h'])
   })
 })
 
@@ -115,56 +114,23 @@ describe('activeMarks', () => {
   })
 })
 
-describe('commandFlags matrix', () => {
-  const marks = am('**x**', 2)
-  const f = (id: Parameters<typeof commandFlags>[0], over = {}) =>
-    commandFlags(id, { hasView: true, readOnly: false, undoDepth: 0, redoDepth: 0, marks, ...over })
-  it('everything is off without a view', () => {
-    for (const s of editorCommandSpecs()) expect(commandFlags(s.id, { hasView: false, readOnly: false, undoDepth: 3, redoDepth: 3, marks })).toEqual({ enabled: false, active: false })
-  })
-  it('read-only disables edits but keeps find', () => {
-    expect(f('bold', { readOnly: true }).enabled).toBe(false)
-    expect(f('undo', { readOnly: true, undoDepth: 2 }).enabled).toBe(false)
-    expect(f('find', { readOnly: true }).enabled).toBe(true)
-  })
-  it('undo / redo follow history depth', () => {
-    expect(f('undo').enabled).toBe(false)
-    expect(f('undo', { undoDepth: 1 }).enabled).toBe(true)
-    expect(f('redo', { undoDepth: 1 }).enabled).toBe(false)
-    expect(f('redo', { redoDepth: 1 }).enabled).toBe(true)
-  })
-  it('active follows the marks', () => {
-    expect(f('bold')).toEqual({ enabled: true, active: true })
-    expect(f('italic').active).toBe(false)
-  })
-})
-
-describe('buildEditorCommands with a view', () => {
-  it('null view: all disabled', () => {
-    const cmds = buildEditorCommands(null)
-    expect(cmds).toHaveLength(13)
-    expect(cmds.every((c) => !c.enabled && !c.active)).toBe(true)
-  })
+describe('running commands on a view', () => {
   it('active marks reflect the caret and code fences are inert', () => {
     const v = mkView('# T\n\n**b**', 8)
-    const cmds = buildEditorCommands(v)
-    expect(byId(cmds, 'bold').active).toBe(true)
-    expect(byId(cmds, 'heading-cycle').active).toBe(false)
+    expect(activeMarks(v.state, 8).bold).toBe(true)
+    expect(activeMarks(v.state, 8).heading).toBe(false)
     const fenced = mkView('```\n**x**\n```', 7)
-    expect(byId(buildEditorCommands(fenced), 'bold').active).toBe(false)
+    expect(activeMarks(fenced.state, 7).bold).toBe(false)
     v.destroy()
     fenced.destroy()
   })
-  it('bold wraps the selection, with undo and redo enabled around it', () => {
+  it('bold wraps the selection, with undo and redo around it', () => {
     const v = mkView('hello world', 0, 5)
-    expect(byId(buildEditorCommands(v), 'undo').enabled).toBe(false)
-    byId(buildEditorCommands(v), 'bold').run()
+    runEditorCommand(v, 'bold')
     expect(v.state.doc.toString()).toBe('**hello** world')
-    expect(byId(buildEditorCommands(v), 'undo').enabled).toBe(true)
-    byId(buildEditorCommands(v), 'undo').run()
+    runEditorCommand(v, 'undo')
     expect(v.state.doc.toString()).toBe('hello world')
-    expect(byId(buildEditorCommands(v), 'redo').enabled).toBe(true)
-    byId(buildEditorCommands(v), 'redo').run()
+    runEditorCommand(v, 'redo')
     expect(v.state.doc.toString()).toBe('**hello** world')
     v.destroy()
   })
@@ -178,15 +144,13 @@ describe('buildEditorCommands with a view', () => {
   })
   it('read-only views refuse edits', () => {
     const v = mkView('abc', 0, 3, true)
-    const cmds = buildEditorCommands(v)
-    expect(byId(cmds, 'bold').enabled).toBe(false)
     expect(runEditorCommand(v, 'bold')).toBe(false)
     expect(v.state.doc.toString()).toBe('abc')
     v.destroy()
   })
-  it('ctx.readOnly disables without a read-only state', () => {
+  it('ctx.readOnly refuses without a read-only state', () => {
     const v = mkView('abc', 0, 3)
-    expect(byId(buildEditorCommands(v, { readOnly: true }), 'bold').enabled).toBe(false)
+    expect(runEditorCommand(v, 'bold', { readOnly: true })).toBe(false)
     v.destroy()
   })
   it('commands no-op while an IME composition is live', () => {
@@ -207,17 +171,17 @@ describe('buildEditorCommands with a view', () => {
     expect(sel.anchor).toBeGreaterThan(sel.head)
     v.destroy()
   })
-  it('block commands leave a fenced line alone', () => {
+  it('list and heading commands leave a fenced line alone', () => {
     const v = mkView('```\ncode\n```', 6)
-    expect(runEditorCommand(v, 'quote')).toBe(false)
+    expect(runEditorCommand(v, 'bullet-list')).toBe(false)
     expect(runEditorCommand(v, 'heading-cycle')).toBe(false)
     expect(v.state.doc.toString()).toBe('```\ncode\n```')
     v.destroy()
   })
-  it('every command carries its spec shortcut where it has one', () => {
-    const cmds = buildEditorCommands(null)
-    expect(byId(cmds, 'bold').shortcut).toBe('Mod-b')
-    expect(byId(cmds, 'quote').shortcut).toBeUndefined()
+  it('specs carry their shortcuts', () => {
+    const spec = (id: string) => editorCommandSpecs().find((c) => c.id === id)!
+    expect(spec('bold').shortcut).toBe('Mod-b')
+    expect(spec('quote').shortcut).toBeUndefined()
   })
 })
 
@@ -381,5 +345,30 @@ describe('ribbon commands on a view', () => {
     ok()
     await flush()
     expect(doc(w)).toBe('HELLO')
+  })
+  it('cut aborts when the document changed during the async write, even to the same text', async () => {
+    let ok: () => void = () => {}
+    clip({ writeText: () => new Promise<void>((r) => { ok = r }) })
+    const w = mkView('hello', 0, 5)
+    runEditorCommand(w, 'cut')
+    w.dispatch({ changes: { from: 0, to: 5, insert: 'hello' } })
+    ok()
+    await flush()
+    expect(doc(w)).toBe('hello')
+  })
+  it('copy and cut failures (write rejected, execCommand unavailable) are announced', async () => {
+    const notify = vi.fn()
+    clip({ writeText: async () => { throw new Error('no') } })
+    runEditorCommand(mkView('hello', 0, 5), 'copy', { notify })
+    runEditorCommand(mkView('hello', 0, 5), 'cut', { notify })
+    await flush()
+    expect(notify).toHaveBeenCalledTimes(2)
+    expect(notify.mock.calls[0][0]).toMatch(/Ctrl\+C/)
+    expect(notify.mock.calls[1][0]).toMatch(/Ctrl\+X/)
+  })
+  it('Mod-h is bound to Replace and prevents the browser default', () => {
+    const b = editorKeymap().find((k) => k.key === 'Mod-h')!
+    expect(b.preventDefault).toBe(true)
+    expect(typeof b.run).toBe('function')
   })
 })

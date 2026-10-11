@@ -63,20 +63,39 @@ export function galleryTileCount(width: number): number {
   return 2
 }
 
-/** Narrow row: the first `capacity` controls stay in the row, the rest overflow. */
-export function overflowSplit<T>(items: readonly T[], capacity: number): { shown: T[]; overflow: T[] } {
+/** Slots a control takes in the narrow row: wide controls count double. */
+export function controlSlots(kind: string): number {
+  return kind === 'select' || kind === 'gallery' || kind === 'number' || kind === 'color' ? 2 : 1
+}
+
+/**
+ * Narrow row: items stay in the row while their slots fit `capacity`, the rest
+ * overflow. When anything overflows, the overflow button takes one slot too.
+ */
+export function overflowSplit<T>(items: readonly T[], capacity: number, weight: (item: T) => number = () => 1): { shown: T[]; overflow: T[] } {
   const cap = Math.max(0, Math.floor(capacity))
-  if (items.length <= cap) return { shown: [...items], overflow: [] }
-  // The overflow button takes one slot of its own.
-  const keep = Math.max(0, cap - 1)
+  const total = items.reduce((n, i) => n + weight(i), 0)
+  if (total <= cap) return { shown: [...items], overflow: [] }
+  const room = Math.max(0, cap - 1)
+  let used = 0
+  let keep = 0
+  for (const i of items) {
+    const w = weight(i)
+    if (used + w > room) break
+    used += w
+    keep++
+  }
   return { shown: items.slice(0, keep), overflow: items.slice(keep) }
 }
 
 /** Container width under which the ribbon collapses to one icon row. */
 export const NARROW_BELOW = 640
+/** Once narrow, it stays narrow until the width reaches this (hysteresis against flicker). */
+export const WIDE_FROM = 664
 
-export function isNarrow(width: number): boolean {
-  return width > 0 && width < NARROW_BELOW
+export function isNarrow(width: number, wasNarrow = false): boolean {
+  if (width <= 0) return false
+  return wasNarrow ? width < WIDE_FROM : width < NARROW_BELOW
 }
 
 /** The CSS-free look of a preview option in the gallery strip / list. */

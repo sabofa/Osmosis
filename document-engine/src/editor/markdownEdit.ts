@@ -353,6 +353,57 @@ function lineStyle(text: string): BlockStyle {
   return h ? (`h${h[1].length}` as BlockStyle) : 'normal'
 }
 
+interface FenceBlock { openStart: number; openEnd: number; closeStart: number | null; closeEnd: number }
+
+/** Every fenced block in the document, with the line bounds of its delimiters. */
+function fenceBlocks(doc: string): FenceBlock[] {
+  const out: FenceBlock[] = []
+  let open: { ch: string; len: number; start: number; end: number } | null = null
+  let at = 0
+  for (;;) {
+    const end = lineEndOf(doc, at)
+    const text = doc.slice(at, end)
+    if (open) {
+      const c = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(text)
+      if (c && c[1][0] === open.ch && c[1].length >= open.len) {
+        out.push({ openStart: open.start, openEnd: open.end, closeStart: at, closeEnd: end })
+        open = null
+      }
+    } else {
+      const o = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text)
+      if (o && !(o[1][0] === '`' && o[2].includes('`'))) open = { ch: o[1][0], len: o[1].length, start: at, end }
+    }
+    if (end >= doc.length) break
+    at = end + 1
+  }
+  if (open) out.push({ openStart: open.start, openEnd: open.end, closeStart: null, closeEnd: open.end })
+  return out
+}
+
+/** Remove the opening and closing fence lines of every block the lines touch. */
+function unfence(doc: string, sel: EditSel, lines: DocLine[]): EditResult | null {
+  const lo = lines[0].start
+  const hi = lines[lines.length - 1].end
+  const raw: EditChange[] = []
+  for (const b of fenceBlocks(doc)) {
+    const blockEnd = b.closeStart === null ? doc.length : b.closeEnd
+    if (b.openStart > hi || blockEnd < lo) continue
+    // the opening line goes with its newline; at the very end of the document the preceding newline goes instead
+    if (b.openEnd < doc.length) raw.push({ from: b.openStart, to: b.openEnd + 1, insert: '' })
+    else raw.push({ from: Math.max(0, b.openStart - 1), to: b.openEnd, insert: '' })
+    if (b.closeStart !== null) raw.push({ from: Math.max(0, b.closeStart - 1), to: b.closeEnd, insert: '' })
+  }
+  if (!raw.length) return null
+  raw.sort((a, b) => a.from - b.from)
+  const changes: EditChange[] = []
+  for (const c of raw) {
+    const prev = changes[changes.length - 1]
+    if (prev && c.from <= prev.to) prev.to = Math.max(prev.to, c.to)
+    else changes.push({ ...c })
+  }
+  return { changes, selection: mapSel(sel, changes) }
+}
+
 /**
  * Set the block style of the cursor line or every selected line. A style the
  * lines already have is toggled back to normal. `code` wraps the selected
@@ -362,6 +413,9 @@ export function setBlockStyle(style: SettableBlockStyle): MarkdownEdit {
   return (doc, sel) => {
     const lines = selectedLines(doc, sel)
     const fenced = fencedLineStarts(doc)
+
+    // a fenced block is un-fenced by any style, Code included (it toggles off)
+    if (lines.every(l => fenced.has(l.start))) return unfence(doc, sel, lines)
 
     if (style === 'code') {
       if (lines.some(l => fenced.has(l.start))) return null
@@ -403,11 +457,15 @@ export function setBlockStyle(style: SettableBlockStyle): MarkdownEdit {
 // -------------------------------------------------------- clear formatting
 
 /** Strip emphasis / strike markers outside code spans, then unwrap the code spans. */
+const HR_LINE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
+
 function stripInline(text: string): string {
+  if (HR_LINE.test(text)) return text
+  // odd segments are protected: code spans (unwrapped), $math$, link targets and bare URLs (kept)
   return text
-    .split(/(`[^`\n]+`)/)
+    .split(/(`[^`\n]+`|\$[^$\n]+\$|\]\([^)\n]*\)|https?:\/\/[^\s)>\]]+)/)
     .map((seg, i) => {
-      if (i % 2 === 1) return seg.slice(1, -1)
+      if (i % 2 === 1) return seg[0] === '`' ? seg.slice(1, -1) : seg
       return seg
         .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g, '$2')
         .replace(/~~(?=\S)(.+?)(?<=\S)~~/g, '$1')
@@ -424,6 +482,7 @@ export function clearFormatting(): MarkdownEdit {
     const changes: EditChange[] = []
     for (const l of selectedLines(doc, sel)) {
       if (fenced.has(l.start)) continue
+      if (HR_LINE.test(l.text)) continue
       let body = l.text
       for (const re of [QUOTE_PREFIX, HEADING_PREFIX, LIST_PREFIX]) {
         const m = re.exec(body)

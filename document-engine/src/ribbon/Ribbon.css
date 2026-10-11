@@ -368,7 +368,7 @@
   color: var(--de-text);
   border: 1px solid var(--r-line);
   border-radius: var(--r-radius);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--de-text) 14%, transparent);
+  box-shadow: none;
 }
 
 .de-r-pop-gallery {
@@ -429,4 +429,21 @@
 /* On a dark sheet a light-ink shadow reads as a glow: the hairline alone separates the popover. */
 .document-viewer[data-mode='dark'] .de-r-pop {
   box-shadow: none;
+}
+
+/* Status line: short notices from commands (e.g. a denied clipboard). Always in
+   the DOM so a screen reader announces changes; collapses when empty. */
+.de-r-status {
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--de-text-muted);
+  border-top: 1px solid var(--r-rule);
+}
+
+.de-r-status:empty {
+  height: 0;
+  padding: 0;
+  border-top: 0;
+  overflow: hidden;
 }

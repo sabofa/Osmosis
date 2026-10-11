@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rovingIndex, prettyShortcut, controlTitle, galleryWindow, galleryTileCount, overflowSplit, isNarrow, previewLook } from './ribbonNav'
+import { rovingIndex, prettyShortcut, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook } from './ribbonNav'
 import { STYLE_OPTIONS } from './ribbonModel'
 
 describe('rovingIndex', () => {
@@ -64,6 +64,21 @@ describe('narrow row', () => {
     expect(overflowSplit([1, 2, 3], 3)).toEqual({ shown: [1, 2, 3], overflow: [] })
     expect(overflowSplit([1, 2, 3, 4, 5], 3)).toEqual({ shown: [1, 2], overflow: [3, 4, 5] })
     expect(overflowSplit([1, 2], 0)).toEqual({ shown: [], overflow: [1, 2] })
+  })
+  it('wide controls count as two slots', () => {
+    const items = [{ k: 'button' }, { k: 'select' }, { k: 'button' }, { k: 'color' }]
+    const w = (i: { k: string }) => controlSlots(i.k)
+    expect(overflowSplit(items, 6, w).overflow).toEqual([])
+    // room = 4 slots: button(1) + select(2) fit, the next button would make 4 -> fits, color does not
+    expect(overflowSplit(items, 5, w)).toEqual({ shown: items.slice(0, 3), overflow: items.slice(3) })
+    expect(overflowSplit(items, 3, w)).toEqual({ shown: items.slice(0, 1), overflow: items.slice(1) })
+  })
+  it('narrow has hysteresis: enter below 640, leave at 664', () => {
+    expect(isNarrow(650, false)).toBe(false)
+    expect(isNarrow(650, true)).toBe(true)
+    expect(isNarrow(663, true)).toBe(true)
+    expect(isNarrow(664, true)).toBe(false)
+    expect(isNarrow(639, false)).toBe(true)
   })
 })
 

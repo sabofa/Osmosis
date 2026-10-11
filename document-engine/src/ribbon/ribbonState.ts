@@ -4,13 +4,14 @@
 import type { EditorView } from '@codemirror/view'
 import { undoDepth, redoDepth } from '@codemirror/commands'
 import { activeMarks, currentBlockStyle, runEditorCommand, runBlockStyle, type EditorCommandId, type ActiveMarks } from '../editor/editorCommands'
+import { notifyRibbon } from './ribbonNotice'
 import { buildRibbon, type Ribbon, type RibbonHandlers, type RibbonState } from './ribbonModel'
 
 const NO_MARKS: ActiveMarks = {
   bold: false, italic: false, strike: false, code: false, heading: false, bullet: false, numbered: false, task: false, quote: false,
 }
 
-/** Whether the Paste button can read the clipboard in this browser. */
+/** Whether the browser exposes clipboard reading at all (informational: Paste stays enabled either way). */
 export function clipboardReadable(): boolean {
   return typeof navigator !== 'undefined' && typeof (navigator as { clipboard?: { readText?: unknown } }).clipboard?.readText === 'function'
 }
@@ -28,7 +29,8 @@ export function ribbonStateFromView(view: EditorView | null, opts: { readOnly?: 
     undoDepth: undoDepth(view.state),
     redoDepth: redoDepth(view.state),
     readOnly: !!opts.readOnly || view.state.readOnly,
-    clipboard: opts.clipboard ?? clipboardReadable(),
+    // Paste stays clickable even where reading is unavailable or denied: it then says to use Ctrl+V.
+    clipboard: opts.clipboard ?? true,
   }
 }
 
@@ -47,6 +49,8 @@ export function ribbonHandlers(view: EditorView | null, ctx: { readOnly?: boolea
   }
 }
 
+/** Messages go to `ctx.notify`, by default the shared ribbon notice line (<Ribbon> shows it). */
 export function buildEditorRibbon(view: EditorView | null, ctx: { readOnly?: boolean; notify?: (m: string) => void } = {}): Ribbon {
-  return buildRibbon({ mode: 'markdown', state: ribbonStateFromView(view, ctx), handlers: ribbonHandlers(view, ctx) })
+  const withNotify = { ...ctx, notify: ctx.notify ?? notifyRibbon }
+  return buildRibbon({ mode: 'markdown', state: ribbonStateFromView(view, withNotify), handlers: ribbonHandlers(view, withNotify) })
 }

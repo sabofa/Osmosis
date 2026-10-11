@@ -3,6 +3,7 @@ import { isFitMode, type ZoomMode } from './zoomModel'
 import { initialMenuIndex, menuKeyAction } from './menuKeys'
 import type { IconSheetRef } from 'theme-core'
 import { resolveIcon } from './iconSheet'
+import { useScrollbarWidth } from './useScrollbarWidth'
 import './ViewerControls.css'
 
 const DEFAULT_ICONS: IconSheetRef = { kind: 'default' }
@@ -36,6 +37,7 @@ export function ZoomControl({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  useScrollbarWidth(rootRef)
 
   useEffect(() => {
     if (!open) return
@@ -153,6 +155,7 @@ export function SettingsMenu({
   const DownloadIcon = resolveIcon('doc-download', icons)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  useScrollbarWidth(rootRef)
 
   useEffect(() => {
     if (!open) return
@@ -165,17 +168,17 @@ export function SettingsMenu({
 
   return (
     <div className="document-viewer-settings" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
-      <button type="button" aria-label="Document settings" title="Document settings" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" aria-label="Document settings" title="Document settings" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <MenuIcon size={14} />
       </button>
       {open && (
-        <div className="document-viewer-settings-menu">
-          <button type="button" onClick={onToggleOverlays}>
+        <div className="document-viewer-settings-menu" role="menu" aria-label="Document settings">
+          <button type="button" role="menuitem" onClick={onToggleOverlays}>
             <EyeIcon size={13} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}
           </button>
           {onDownload && (
-            <button type="button" onClick={onDownload}>
+            <button type="button" role="menuitem" onClick={onDownload}>
               <DownloadIcon size={13} />
               Download
             </button>

@@ -26,7 +26,8 @@
   --vc-radius: calc(var(--de-radius-sm) * 0.5);
 
   position: absolute;
-  right: var(--viewer-control-inset, 12px);
+  /* --viewer-scrollbar-width is set by useScrollbarWidth (0 for overlay scrollbars) */
+  right: calc(var(--viewer-control-inset, 12px) + var(--viewer-scrollbar-width, 0px));
   bottom: var(--viewer-control-inset, 12px);
   z-index: 2;
   display: flex;
@@ -139,7 +140,7 @@
   color: var(--de-text);
   border: 1px solid var(--vc-line);
   border-radius: var(--vc-radius);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--de-text) 14%, transparent);
+  box-shadow: none;
   transform-origin: bottom right;
   animation: document-viewer-pop-in 0.12s ease-out;
 }
@@ -188,8 +189,9 @@
   }
 }
 
-/* Dark sheet: no halo, the hairline alone separates the menu. */
-.document-viewer[data-mode='dark'] .document-viewer-settings-menu,
-.document-viewer[data-mode='dark'] .document-viewer-zoom-menu {
-  box-shadow: none;
+/* Touch screens have no hover to wake the controls: rest a little stronger. */
+@media (hover: none) {
+  .document-viewer-toolbar {
+    opacity: var(--viewer-control-viewer-opacity, 0.75);
+  }
 }
