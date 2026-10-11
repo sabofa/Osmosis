@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { inkGeometry, inkTransform, popoverOriginX, presenceInit, presenceReduce, parseTimeList, exitDurationMs } from './ribbonMotion'
+import { inkGeometry, inkTransform, popoverOriginX, presenceInit, presenceReduce, parseTimeList, exitDurationMs, isExitEnd } from './ribbonMotion'
 
 describe('indicator geometry', () => {
   it('follows the target box and rounds to hundredths', () => {
@@ -63,5 +63,28 @@ describe('exit duration', () => {
   it('is 0 when nothing animates (reduced motion / scale 0): unmount at once, never hang', () => {
     expect(exitDurationMs('0s', '0s', '0s', '0s')).toBe(0)
     expect(exitDurationMs('', '', '', '')).toBe(0)
+  })
+})
+
+describe('exit end filtering', () => {
+  const el = {}
+  const child = {}
+  it('counts only animations and transitions that really run', () => {
+    // slot 1 has a duration but name none: it plays nothing
+    expect(exitDurationMs('0.08s, 0.5s', '0s', '0s', '0s', 'de-pop-out, none')).toBe(80)
+    expect(exitDurationMs('0.5s', '0s', '0s', '0s', 'none')).toBe(0)
+    // a colour transition does not hold the exit
+    expect(exitDurationMs('0s', '0s', '0.3s, 0.1s', '0s', 'none', 'background-color, opacity')).toBe(100)
+    expect(exitDurationMs('0s', '0s', '0.3s', '0s', 'none', 'all')).toBe(300)
+  })
+  it('ends only on the element itself, for the exit animation or opacity / transform', () => {
+    expect(isExitEnd({ type: 'animationend', target: el, animationName: 'de-pop-out' }, el, 'de-pop-out')).toBe(true)
+    expect(isExitEnd({ type: 'animationend', target: child, animationName: 'de-pop-out' }, el, 'de-pop-out')).toBe(false)
+    expect(isExitEnd({ type: 'animationend', target: el, animationName: 'de-fade-in' }, el, 'de-pop-out')).toBe(false)
+    expect(isExitEnd({ type: 'transitionend', target: el, propertyName: 'opacity' }, el, 'none')).toBe(true)
+    expect(isExitEnd({ type: 'transitionend', target: el, propertyName: 'transform' }, el, 'none')).toBe(true)
+    expect(isExitEnd({ type: 'transitionend', target: el, propertyName: 'background-color' }, el, 'none')).toBe(false)
+    expect(isExitEnd({ type: 'transitionend', target: child, propertyName: 'opacity' }, el, 'none')).toBe(false)
+    expect(isExitEnd({ type: 'click', target: el }, el, 'none')).toBe(false)
   })
 })

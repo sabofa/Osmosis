@@ -62,11 +62,41 @@ export function parseTimeList(list: string): number[] {
  * animations and transitions (computed-style lists, paired by index). 0 means
  * there is nothing to wait for (reduced motion, scale 0, no exit style).
  */
-export function exitDurationMs(animationDuration: string, animationDelay: string, transitionDuration: string, transitionDelay: string): number {
-  const total = (dur: string, del: string) => {
+export function exitDurationMs(
+  animationDuration: string, animationDelay: string, transitionDuration: string, transitionDelay: string,
+  /** Optional computed `animation-name` / `transition-property` lists: entries that are not really running are not counted. */
+  animationName?: string, transitionProperty?: string,
+): number {
+  const list = (v: string) => v.split(',').map((x) => x.trim())
+  const total = (dur: string, del: string, keep?: (i: number) => boolean) => {
     const d = parseTimeList(dur)
     const l = parseTimeList(del)
-    return d.reduce((mx, v, i) => Math.max(mx, v > 0 ? v + Math.max(0, l[i % Math.max(1, l.length)] ?? 0) : 0), 0)
+    return d.reduce((mx, v, i) => (keep && !keep(i) ? mx : Math.max(mx, v > 0 ? v + Math.max(0, l[i % Math.max(1, l.length)] ?? 0) : 0)), 0)
   }
-  return Math.max(total(animationDuration, animationDelay), total(transitionDuration, transitionDelay))
+  const names = animationName === undefined ? null : list(animationName)
+  const props = transitionProperty === undefined ? null : list(transitionProperty)
+  return Math.max(
+    // an `animation-name: none` slot runs nothing, whatever its duration says (lists cycle)
+    total(animationDuration, animationDelay, names ? (i) => names[i % names.length] !== 'none' : undefined),
+    total(transitionDuration, transitionDelay, props ? (i) => ['all', 'opacity', 'transform'].includes(props[i % props.length]) : undefined),
+  )
+}
+
+/**
+ * Whether an animationend / transitionend event marks the END of the exit: it
+ * must come from the element itself (not a bubbling child), and be the exit
+ * animation (one of the element's running animation names) or an opacity /
+ * transform transition.
+ */
+export function isExitEnd(
+  e: { type: string; target: unknown; animationName?: string; propertyName?: string },
+  el: unknown,
+  runningAnimationNames: string,
+): boolean {
+  if (e.target !== el) return false
+  if (e.type === 'animationend') {
+    return !!e.animationName && runningAnimationNames.split(',').some((n) => n.trim() === e.animationName)
+  }
+  if (e.type === 'transitionend') return e.propertyName === 'opacity' || e.propertyName === 'transform'
+  return false
 }

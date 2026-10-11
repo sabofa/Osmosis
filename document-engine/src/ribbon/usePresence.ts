@@ -5,7 +5,7 @@
 // (reduced motion, --de-motion-scale: 0, a test environment). Focus is not
 // touched here.
 import { useLayoutEffect, useState, type RefObject } from 'react'
-import { exitDurationMs, presenceInit, presenceReduce, type PresenceState } from './ribbonMotion'
+import { exitDurationMs, isExitEnd, presenceInit, presenceReduce, type PresenceState } from './ribbonMotion'
 
 const SLACK_MS = 60
 
@@ -22,9 +22,11 @@ export function usePresence(open: boolean, ref: RefObject<HTMLElement | null>): 
     if (!exiting) return
     const el = ref.current
     let ms = 0
+    let names = ''
     if (el && typeof getComputedStyle === 'function') {
       const cs = getComputedStyle(el)
-      ms = exitDurationMs(cs.animationDuration, cs.animationDelay, cs.transitionDuration, cs.transitionDelay)
+      names = cs.animationName
+      ms = exitDurationMs(cs.animationDuration, cs.animationDelay, cs.transitionDuration, cs.transitionDelay, cs.animationName, cs.transitionProperty)
     }
     if (!el || ms <= 0) {
       setS((p) => presenceReduce(p, 'done'))
@@ -32,7 +34,8 @@ export function usePresence(open: boolean, ref: RefObject<HTMLElement | null>): 
     }
     const finish = () => setS((p) => presenceReduce(p, 'done'))
     const onEnd = (e: Event) => {
-      if (e.target === el) finish()
+      const ev = e as Partial<AnimationEvent & TransitionEvent>
+      if (isExitEnd({ type: e.type, target: e.target, animationName: ev.animationName, propertyName: ev.propertyName }, el, names)) finish()
     }
     el.addEventListener('animationend', onEnd)
     el.addEventListener('transitionend', onEnd)

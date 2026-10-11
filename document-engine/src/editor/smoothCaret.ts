@@ -12,9 +12,11 @@
 // inline position with its last one and suspends the transition for that
 // jump. The blink lives on the whole cursor layer; CodeMirror restarts its own
 // animation by flipping the inline animation-name, which we override with
-// !important and restart ourselves by flipping a data attribute.
+// !important and restart ourselves by flipping a data attribute (a steady caret,
+// blinkMs 0, has no animation rules at all: drawSelection's blink rate is 0).
+// A jump snaps when it is long, or lands on another line (see caretMotion).
 import { Compartment, type Extension } from '@codemirror/state'
-import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { EditorView, ViewPlugin, drawSelection, type ViewUpdate } from '@codemirror/view'
 
 export interface SmoothCaretOptions {
   /** Glide duration in ms (default 90). 0 turns the glide off. */
@@ -36,6 +38,34 @@ export function isLongJump(ax: number, ay: number, bx: number, by: number, snapP
   return Math.hypot(bx - ax, by - ay) > snapPx
 }
 
+export type CaretMotion = 'glide' | 'snap'
+
+/**
+ * How the caret should travel from `prev` to `next` (inline left/top in px).
+ * Like Word: it glides along a line (typing, End / Home, arrows left and right),
+ * but snaps when it lands on a different line (typing past the wrap point, a
+ * click, PageDown) - except for an ArrowUp / ArrowDown of one line, which glides.
+ * Any jump longer than `snapPx` snaps.
+ */
+export function caretMotion(
+  prev: { x: number; y: number }, next: { x: number; y: number },
+  o: { snapPx: number; lineHeight: number; verticalArrow: boolean },
+): CaretMotion {
+  if (isLongJump(prev.x, prev.y, next.x, next.y, o.snapPx)) return 'snap'
+  const dy = Math.abs(next.y - prev.y)
+  if (dy <= o.lineHeight / 2) return 'glide'
+  if (o.verticalArrow && dy <= o.lineHeight * 1.5) return 'glide'
+  return 'snap'
+}
+
+/** True for a style-attribute change that only touched `transition` (our own snap bookkeeping). */
+export function transitionOnlyChange(oldStyle: string | null, newStyle: string | null): boolean {
+  const strip = (v: string | null) => (v ?? '').replace(/(?:^|;)\s*transition[^;]*;?/gi, ';').replace(/\s+/g, '').replace(/^;+|;+$/g, '')
+  return strip(oldStyle) === strip(newStyle)
+}
+
+const ARROW_WINDOW_MS = 400
+
 type Pos = { x: number; y: number }
 
 class SmoothCaretPlugin {
@@ -44,6 +74,7 @@ class SmoothCaretPlugin {
   private last = new WeakMap<Element, Pos>()
   private phase = false
   private gone = false
+  private arrowAt = -Infinity
   private readonly view: EditorView
   private readonly snapPx: number
   constructor(view: EditorView, snapPx: number) {
@@ -52,13 +83,27 @@ class SmoothCaretPlugin {
     this.attach()
   }
 
+  noteKey(e: KeyboardEvent): void {
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.metaKey) this.arrowAt = performance.now()
+  }
+
   private attach(): void {
+    // drawSelection can be reconfigured (the layer is rebuilt): drop a detached layer and look again.
+    if (this.layer && !this.layer.isConnected) {
+      this.mo?.disconnect()
+      this.mo = null
+      this.layer = null
+    }
     if (this.layer || typeof MutationObserver === 'undefined') return
     const layer = this.view.scrollDOM.querySelector<HTMLElement>(':scope > .cm-cursorLayer')
     if (!layer) return
     this.layer = layer
-    this.mo = new MutationObserver(() => this.onMutate())
-    this.mo.observe(layer, { subtree: true, attributes: true, attributeFilter: ['style'], childList: true })
+    this.mo = new MutationObserver((records) => {
+      // Our own transition on/off writes are not caret moves.
+      if (records.every((r) => r.type === 'attributes' && transitionOnlyChange(r.oldValue, (r.target as HTMLElement).getAttribute('style')))) return
+      this.onMutate()
+    })
+    this.mo.observe(layer, { subtree: true, attributes: true, attributeFilter: ['style'], attributeOldValue: true, childList: true })
     this.onMutate()
   }
 
@@ -73,7 +118,9 @@ class SmoothCaretPlugin {
       const prev = this.last.get(el)
       this.last.set(el, { x, y })
       if (!prev || (prev.x === x && prev.y === y)) continue
-      if (!isLongJump(prev.x, prev.y, x, y, this.snapPx)) continue
+      const lineHeight = Math.max(parseFloat(el.style.height) || 0, this.view.defaultLineHeight)
+      const verticalArrow = performance.now() - this.arrowAt < ARROW_WINDOW_MS
+      if (caretMotion(prev, { x, y }, { snapPx: this.snapPx, lineHeight, verticalArrow }) === 'glide') continue
       // Suspend the glide until two frames after this write have styled.
       el.style.transition = 'none'
       requestAnimationFrame(() => requestAnimationFrame(() => { if (!this.gone) el.style.removeProperty('transition') }))
@@ -103,6 +150,7 @@ const fade = {
 }
 
 function caretTheme(glideMs: number, blinkMs: number): Extension {
+  const blinks = blinkMs > 0
   const layerFocused = '&.cm-focused > .cm-scroller > .cm-cursorLayer'
   const ease = 'cubic-bezier(0.25, 0.46, 0.45, 0.94)'
   return EditorView.theme({
@@ -123,24 +171,29 @@ function caretTheme(glideMs: number, blinkMs: number): Extension {
     '.cm-cursor-primary': {
       transition: `left var(--de-caret-glide) ${ease}, top var(--de-caret-glide) ${ease}, height var(--de-caret-glide) ${ease}`,
     },
-    [layerFocused]: {
-      animationName: 'var(--de-caret-anim-a) !important',
-      animationDuration: 'var(--de-caret-blink) !important',
-      animationIterationCount: 'infinite !important',
-    },
-    [`${layerFocused}[data-de-caret=b]`]: { animationName: 'var(--de-caret-anim-b) !important' },
+    ...(blinks
+      ? {
+          [layerFocused]: {
+            animationName: 'var(--de-caret-anim-a) !important',
+            animationDuration: 'var(--de-caret-blink) !important',
+            animationIterationCount: 'infinite !important',
+          },
+          [`${layerFocused}[data-de-caret=b]`]: { animationName: 'var(--de-caret-anim-b) !important' },
+          '@keyframes de-caret-a': fade,
+          '@keyframes de-caret-b': fade,
+        }
+      : {}),
     '&:not(.cm-focused) > .cm-scroller > .cm-selectionLayer': { opacity: '0.55' },
-    '@keyframes de-caret-a': fade,
-    '@keyframes de-caret-b': fade,
     '@media (prefers-reduced-motion: reduce)': {
       '.cm-cursor-primary': { transition: 'none' },
       // custom properties set on the layer itself beat the root's, whatever the specificity
-      '.cm-cursorLayer': { '--de-caret-anim-a': 'none', '--de-caret-anim-b': 'none' },
+      ...(blinks ? { '.cm-cursorLayer': { '--de-caret-anim-a': 'none', '--de-caret-anim-b': 'none' } } : {}),
     },
   })
 }
 
-const steady = EditorView.theme({ '&.cm-focused > .cm-scroller > .cm-cursorLayer': { animationName: 'none !important' } })
+// Steady caret: drawSelection's own blink rate, combined with the host's by min(), set to 0.
+const steady = drawSelection({ cursorBlinkRate: 0 })
 
 /** The Word-style caret: glide + soft fade. `enabled: false` leaves CodeMirror's own caret. */
 export function smoothCaret(opts: SmoothCaretOptions = {}): Extension {
@@ -149,9 +202,11 @@ export function smoothCaret(opts: SmoothCaretOptions = {}): Extension {
   const blink = opts.blinkMs ?? DEFAULT_BLINK_MS
   const snap = opts.snapPx ?? DEFAULT_SNAP_PX
   return [
-    caretTheme(glide, blink > 0 ? blink : DEFAULT_BLINK_MS),
+    caretTheme(glide, blink),
     blink > 0 ? [] : steady,
-    ViewPlugin.define((view) => new SmoothCaretPlugin(view, snap)),
+    ViewPlugin.define((view) => new SmoothCaretPlugin(view, snap), {
+      eventHandlers: { keydown(this: SmoothCaretPlugin, e: KeyboardEvent) { this.noteKey(e) } },
+    }),
   ]
 }
 
