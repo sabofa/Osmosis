@@ -14,8 +14,10 @@ import {
   type RibbonNumber, type RibbonColor, type RibbonSelect, type RibbonGallery,
 } from './ribbonModel'
 import {
-  rovingIndex, nextEnabledIndex, firstFocusIndex, tabClosesPopover, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
+  rovingIndex, rovingOwner, nextEnabledIndex, firstFocusIndex, tabClosesPopover, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
 } from './ribbonNav'
+import { usePart } from '../adapter/Part'
+import { AdapterProvider, type AdapterState } from '../adapter/useAdapter'
 import { subscribeRibbonNotices, type RibbonNotices } from './ribbonNotice'
 import { inkGeometry, inkTransform, popoverOriginX } from './ribbonMotion'
 import { usePresence } from './usePresence'
@@ -31,6 +33,12 @@ export interface RibbonProps {
   label?: string
   /** A private notice channel (createRibbonNotices); default: the shared module channel. */
   notices?: RibbonNotices
+  /**
+   * The theme adapter and its context. The viewer provides these through
+   * AdapterProvider already; pass them here only for a ribbon rendered outside
+   * a DocumentViewer (a shell that draws the published ribbon itself).
+   */
+  adapter?: AdapterState | null
 }
 
 interface Ctx {
@@ -167,7 +175,8 @@ function useRoving(ref: RefObject<HTMLElement | null>) {
   useLayoutEffect(apply)
   return {
     onFocus(e: React.FocusEvent<HTMLElement>) {
-      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-rv]')
+      // adapter-injected nodes are not part of the roving set unless they carry data-rv themselves
+      const t = rovingOwner(e.target as HTMLElement)
       if (t && !t.closest('[data-pop-root]')) {
         active.current = t.dataset.rv ?? null
         apply()
@@ -179,7 +188,9 @@ function useRoving(ref: RefObject<HTMLElement | null>) {
       if (target.tagName === 'INPUT') return
       if (e.altKey || e.ctrlKey || e.metaKey) return
       const list = controls()
-      const at = list.indexOf(target.closest<HTMLElement>('[data-rv]') as HTMLElement)
+      const owner = rovingOwner(target)
+      if (!owner) return // not a roving control (adapter territory, or the group chrome): the key is not ours
+      const at = list.indexOf(owner)
       const next = rovingIndex(e.key, at, list.length)
       if (next === null) return
       e.preventDefault()
@@ -259,7 +270,8 @@ function Popover({
       return
     }
     const items = popItems()
-    const target = (e.target as HTMLElement).closest<HTMLElement>('[data-pop], [data-rv]')
+    const target = rovingOwner(e.target as HTMLElement, ['data-pop', 'data-rv'])
+    if (!target && (e.target as HTMLElement).closest('[data-adapter-slot], [data-adapter]')) return
     if (!items.length || (e.target as HTMLElement).tagName === 'INPUT') return
     const next = nextEnabledIndex(e.key, target ? items.indexOf(target) : -1, items.map(isOff))
     if (next === null) return
@@ -268,15 +280,14 @@ function Popover({
     items[next]?.focus()
   }
   const style: CSSProperties = pos ? { left: pos.left, top: pos.top, transformOrigin: `${pos.origin}px 0` } : { left: 0, top: 0, visibility: 'hidden' }
-  return (
+  const p = usePart({ id: label, kind: 'popover', label, state: { open: pop.state === 'open' } }, { ref, className: `de-r-pop${className ? ' ' + className : ''}`, style })
+  return p.wrap(
     <div
-      ref={ref}
-      className={`de-r-pop${className ? ' ' + className : ''}`}
+      {...p.props}
       data-pop-root=""
       data-state={pop.state}
       role={role}
       aria-label={label}
-      style={style}
       onKeyDown={onKeyDown}
       onBlur={(e) => {
         // focus walked out of the popover (and not back onto its own trigger): close without stealing it back
@@ -288,8 +299,10 @@ function Popover({
         if (!/^(INPUT|TEXTAREA|SELECT)$/.test((e.target as HTMLElement).tagName)) e.preventDefault()
       }}
     >
+      {p.lead}
       {children}
-    </div>
+      {p.trail}
+    </div>,
   )
 }
 
@@ -330,23 +343,26 @@ function OptionList({ options, value, onPick, strength }: { options: RibbonOptio
 function ButtonControl({ item, ctx }: { item: Extract<RibbonControl, { kind: 'button' | 'toggle' }>; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
   const large = item.size === 'large' && !ctx.compact
-  return (
+  const p = usePart({ id: item.id, kind: 'ribbon-item', label: item.label, state: { active: item.kind === 'toggle' ? item.active : undefined, disabled: !item.enabled } }, { className: 'de-rb' })
+  return p.wrap(
     <button
+      {...p.props}
       type="button"
       onMouseDown={prevent}
       data-component="ribbon-button"
       data-rv={item.id}
       data-size={large ? 'large' : 'small'}
-      className="de-rb"
       aria-label={item.label}
       aria-pressed={item.kind === 'toggle' ? item.active : undefined}
       title={controlTitle(item, ctx.mac)}
       disabled={!item.enabled}
       onClick={() => ctx.run(item.run)}
     >
+      {p.lead}
       <Icon size={large ? 18 : 16} />
       {large && <span className="de-rb-label">{item.label}</span>}
-    </button>
+      {p.trail}
+    </button>,
   )
 }
 
@@ -372,8 +388,10 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
   const current = item.options.find((o) => o.value === item.value)
   const showText = !ctx.compact
   const showIcon = ctx.compact || item.id !== 'font-family'
-  return (
-    <span className="de-r-anchor" ref={pop.anchor}>
+  const p = usePart({ id: item.id, kind: 'ribbon-item', label: item.label, state: { disabled: !item.enabled, open: pop.open } }, { ref: pop.anchor, className: 'de-r-anchor' })
+  return p.wrap(
+    <span {...p.props}>
+      {p.lead}
       <button
         type="button"
         ref={pop.trigger}
@@ -413,7 +431,8 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
           />
         </Popover>
       )}
-    </span>
+      {p.trail}
+    </span>,
   )
 }
 
@@ -431,14 +450,17 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
     pop.close(false)
     ctx.run(() => item.onChange(v))
   }
+  const p = usePart({ id: item.id, kind: 'ribbon-item', label: item.label, state: { disabled: !item.enabled, open: pop.open } }, { ref: pop.anchor, className: 'de-r-anchor' })
+  const g = usePart({ id: item.id, kind: 'ribbon-gallery', label: item.label, state: { disabled: !item.enabled, open: pop.open } }, { className: 'de-gal-wrap' })
   const list = (
     <Popover key={pop.gen} pop={pop} ctx={ctx} role="listbox" label={item.label} className="de-r-pop-gallery">
       <OptionList options={item.options} value={item.value} strength={0.8} onPick={pick} />
     </Popover>
   )
   if (ctx.compact) {
-    return (
-      <span className="de-r-anchor" ref={pop.anchor}>
+    return p.wrap(
+      <span {...p.props}>
+        {p.lead}
         <button
           type="button"
           ref={pop.trigger}
@@ -458,13 +480,17 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
           <Chevron />
         </button>
         {pop.mounted && list}
-      </span>
+        {p.trail}
+      </span>,
     )
   }
   const tiles = galleryWindow(item.options, item.value, ctx.tiles)
-  return (
-    <span className="de-r-anchor" ref={pop.anchor}>
-      <span data-component="ribbon-gallery" className="de-gal-wrap">
+  return p.wrap(
+    <span {...p.props}>
+      {p.lead}
+      {g.wrap(
+      <span {...g.props} data-component="ribbon-gallery">
+        {g.lead}
         <span ref={galRef} role="listbox" aria-label={item.label} className="de-gal">
         <GalleryInk list={galRef} value={item.value} count={tiles.length} />
         {tiles.map((o) => {
@@ -514,9 +540,12 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
         >
           <Chevron />
         </button>
-      </span>
+        {g.trail}
+      </span>,
+      )}
       {pop.mounted && list}
-    </span>
+      {p.trail}
+    </span>,
   )
 }
 
@@ -567,15 +596,19 @@ function NumberInput({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
 function NumberControl({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
   const pop = usePopover()
+  const p = usePart({ id: item.id, kind: 'ribbon-item', label: item.label, state: { disabled: !item.enabled, open: pop.open } }, ctx.compact ? { ref: pop.anchor, className: 'de-r-anchor' } : { className: 'de-rnum-wrap' })
   if (!ctx.compact) {
-    return (
-      <span className="de-rnum-wrap" data-component="ribbon-button">
+    return p.wrap(
+      <span {...p.props} data-component="ribbon-button">
+        {p.lead}
         <NumberInput item={item} ctx={ctx} />
-      </span>
+        {p.trail}
+      </span>,
     )
   }
-  return (
-    <span className="de-r-anchor" ref={pop.anchor}>
+  return p.wrap(
+    <span {...p.props}>
+      {p.lead}
       <button
         type="button"
         ref={pop.trigger}
@@ -601,7 +634,8 @@ function NumberControl({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
           </span>
         </Popover>
       )}
-    </span>
+      {p.trail}
+    </span>,
   )
 }
 
@@ -612,8 +646,10 @@ function ColorControl({ item, ctx }: { item: RibbonColor; ctx: Ctx }) {
     pop.close(false)
     ctx.run(() => item.onChange(v))
   }
-  return (
-    <span className="de-r-anchor" ref={pop.anchor}>
+  const p = usePart({ id: item.id, kind: 'ribbon-item', label: item.label, state: { disabled: !item.enabled, open: pop.open } }, { ref: pop.anchor, className: 'de-r-anchor' })
+  return p.wrap(
+    <span {...p.props}>
+      {p.lead}
       <button
         type="button"
         ref={pop.trigger}
@@ -654,7 +690,8 @@ function ColorControl({ item, ctx }: { item: RibbonColor; ctx: Ctx }) {
           </button>
         </Popover>
       )}
-    </span>
+      {p.trail}
+    </span>,
   )
 }
 
@@ -684,26 +721,27 @@ function Group({ group, ctx, index }: { group: RibbonGroup; ctx: Ctx; index: num
   const twoRows = group.items.some((i) => i.kind === 'select' || i.kind === 'number')
   const hasGallery = group.items.some((i) => i.kind === 'gallery')
   const breakId = twoRows ? group.items.find((i) => i.kind === 'separator')?.id : undefined
-  return (
+  const p = usePart({ id: group.id, kind: 'ribbon-group', label: group.label }, { ref, className: 'de-rg', style: { '--i': index } as CSSProperties })
+  return p.wrap(
     <div
-      ref={ref}
+      {...p.props}
       role="group"
       aria-label={group.label}
       data-component="ribbon-group"
       data-rows={twoRows ? 2 : 1}
       data-gallery={hasGallery || undefined}
-      className="de-rg"
-      style={{ '--i': index } as CSSProperties}
       onFocus={rv.onFocus}
       onKeyDown={rv.onKeyDown}
     >
       <div className="de-rg-body">
+        {p.lead}
         {group.items.map((item) => (
           <Control key={item.id} item={item} ctx={ctx} brk={item.id === breakId} />
         ))}
+        {p.trail}
       </div>
       <div className="de-rg-label" aria-hidden="true">{group.label}</div>
-    </div>
+    </div>,
   )
 }
 
@@ -715,15 +753,16 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
   const capacity = Math.floor((width - 16) / 30)
   const { shown, overflow } = overflowSplit(all, capacity, (c) => controlSlots(c.kind))
   const pop = usePopover()
-  return (
+  const p = usePart({ id: 'narrow', kind: 'ribbon-panel', label }, { ref, className: 'de-rrow' })
+  return p.wrap(
     <div
-      ref={ref}
+      {...p.props}
       role="toolbar"
       aria-label={label}
-      className="de-rrow"
       onFocus={rv.onFocus}
       onKeyDown={rv.onKeyDown}
     >
+      {p.lead}
       {shown.map((item) => (
         <Control key={item.id} item={item} ctx={ctx} />
       ))}
@@ -756,7 +795,8 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
           )}
         </span>
       )}
-    </div>
+      {p.trail}
+    </div>,
   )
 }
 
@@ -766,7 +806,49 @@ function TabInk({ list, tabs, active }: { list: RefObject<HTMLElement | null>; t
   return <span ref={ink} className="de-rtab-ink" aria-hidden="true" />
 }
 
-export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', notices }: RibbonProps) {
+// One tab button (a part of its own so an adapter can decorate / replace it).
+function TabButton({ tab, active, uid, index, setRef, onSelect }: {
+  tab: RibbonData['tabs'][number]
+  active: boolean
+  uid: string
+  index: number
+  setRef(i: number, el: HTMLButtonElement | null): void
+  onSelect(id: string): void
+}) {
+  const p = usePart({ id: tab.id, kind: 'ribbon-tab', label: tab.label, state: { active } }, { ref: (el: HTMLButtonElement | null) => setRef(index, el), className: 'de-rtab' })
+  return p.wrap(
+    <button
+      {...p.props}
+      type="button"
+      role="tab"
+      id={`${uid}-tab-${tab.id}`}
+      aria-controls={`${uid}-panel-${tab.id}`}
+      aria-selected={active}
+      tabIndex={active ? 0 : -1}
+      data-component="ribbon-tab"
+      onMouseDown={prevent}
+      onClick={() => onSelect(tab.id)}
+    >
+      {p.lead}
+      {tab.label}
+      {p.trail}
+    </button>,
+  )
+}
+
+// The transient notice line.
+function Note({ text, state, noteRef }: { text: string; state: string; noteRef: RefObject<HTMLSpanElement | null> }) {
+  const p = usePart({ id: 'notice', kind: 'notice', label: text }, { ref: noteRef, className: 'de-r-note' })
+  return p.wrap(
+    <span {...p.props} data-state={state}>
+      {p.lead}
+      {text}
+      {p.trail}
+    </span>,
+  )
+}
+
+export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', notices, adapter }: RibbonProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = useWidth(rootRef)
   const wasNarrow = useRef(false)
@@ -826,6 +908,9 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
     boundary: rootRef,
   }
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const setTabRef = useCallback((i: number, el: HTMLButtonElement | null) => {
+    tabRefs.current[i] = el
+  }, [])
   function onTabKey(e: ReactKeyboardEvent<HTMLDivElement>) {
     const at = ribbon.tabs.findIndex((t) => t.id === tab?.id)
     const next = rovingIndex(e.key === 'ArrowUp' || e.key === 'ArrowDown' ? '' : e.key, at, ribbon.tabs.length)
@@ -834,9 +919,12 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
     selectTab(ribbon.tabs[next].id)
     tabRefs.current[next]?.focus()
   }
+  const root = usePart({ id: 'ribbon', kind: 'ribbon', label }, { ref: rootRef, className: 'de-ribbon' })
+  const panel = usePart({ id: tab?.id ?? '', kind: 'ribbon-panel', label: tab?.label }, { className: 'de-rpanel' })
   if (!tab) return null
-  return (
-    <div ref={rootRef} className="de-ribbon" data-component="ribbon" data-narrow={narrow || undefined}>
+  const body = root.wrap(
+    <div {...root.props} data-component="ribbon" data-narrow={narrow || undefined}>
+      {root.lead}
       <div className="de-rlayout" key={narrow ? 'narrow' : 'wide'} data-swap={swapped || undefined}>
       {narrow ? (
         <NarrowRow ribbon={ribbon} ctx={ctx} width={width} label={label} />
@@ -845,44 +933,31 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
           <div ref={tabListRef} role="tablist" aria-label={label} className="de-rtabs" onKeyDown={onTabKey}>
             <TabInk list={tabListRef} tabs={tabRefs} active={ribbon.tabs.findIndex((t) => t.id === tab.id)} />
             {ribbon.tabs.map((t, i) => (
-              <button
-                key={t.id}
-                ref={(el) => {
-                  tabRefs.current[i] = el
-                }}
-                type="button"
-                role="tab"
-                id={`${uid}-tab-${t.id}`}
-                aria-controls={`${uid}-panel-${t.id}`}
-                aria-selected={t.id === tab.id}
-                tabIndex={t.id === tab.id ? 0 : -1}
-                data-component="ribbon-tab"
-                className="de-rtab"
-                onMouseDown={prevent}
-                onClick={() => selectTab(t.id)}
-              >
-                {t.label}
-              </button>
+              <TabButton key={t.id} tab={t} active={t.id === tab.id} uid={uid} index={i} setRef={setTabRef} onSelect={selectTab} />
             ))}
           </div>
-          <div
-            role="tabpanel"
-            id={`${uid}-panel-${tab.id}`}
-            aria-labelledby={`${uid}-tab-${tab.id}`}
-            className="de-rpanel"
-          >
-            <PanelToolbar tab={tab} ctx={ctx} animate={moved} />
-          </div>
+          {panel.wrap(
+            <div
+              {...panel.props}
+              role="tabpanel"
+              id={`${uid}-panel-${tab.id}`}
+              aria-labelledby={`${uid}-tab-${tab.id}`}
+            >
+              {panel.lead}
+              <PanelToolbar tab={tab} ctx={ctx} animate={moved} />
+              {panel.trail}
+            </div>,
+          )}
         </>
       )}
       </div>
       <div className="de-r-status" role="status" aria-live="polite">
-        {notePresence.mounted && (
-          <span key={notePresence.gen} ref={noteRef} className="de-r-note" data-state={notePresence.state}>{lastNotice.current}</span>
-        )}
+        {notePresence.mounted && <Note key={notePresence.gen} noteRef={noteRef} state={notePresence.state} text={lastNotice.current} />}
       </div>
-    </div>
+      {root.trail}
+    </div>,
   )
+  return adapter ? <AdapterProvider state={adapter}>{body}</AdapterProvider> : body
 }
 
 // The toolbar of one tab: groups side by side. Group-level roving lives in Group.

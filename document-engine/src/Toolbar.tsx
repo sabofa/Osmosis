@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { isFitMode, type ZoomMode } from './zoomModel'
 import { initialMenuIndex, menuKeyAction } from './menuKeys'
 import type { IconSheetRef } from 'theme-core'
 import { resolveIcon } from './iconSheet'
 import { useScrollbarWidth } from './useScrollbarWidth'
 import { usePresence } from './ribbon/usePresence'
+import { usePart } from './adapter/Part'
 import './motion.css'
 import './ViewerControls.css'
 
@@ -83,8 +84,11 @@ export function ZoomControl({
     else close(action.refocus)
   }
 
-  return (
-    <div className="document-viewer-zoom" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
+  const p = usePart({ id: 'zoom', kind: 'zoom', label: 'Zoom', state: { open } }, { ref: rootRef, className: 'document-viewer-zoom' })
+  const m = usePart({ id: 'zoom', kind: 'zoom-menu', label: 'Zoom', state: { open: presence.state === 'open' } }, { ref: menuRef, className: 'document-viewer-zoom-menu' })
+  return p.wrap(
+    <div {...p.props} data-component="viewer-control" data-open={open || undefined}>
+      {p.lead}
       <div className="document-viewer-zoom-control" role="group" aria-label="Zoom controls">
         <button type="button" aria-label="Zoom out" title="Zoom out" onClick={onZoomOut}>
           {'−'}
@@ -112,8 +116,9 @@ export function ZoomControl({
           +
         </button>
       </div>
-      {presence.mounted && (
-        <div key={presence.gen} ref={menuRef} data-state={presence.state} className="document-viewer-zoom-menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
+      {presence.mounted && m.wrap(
+        <div key={presence.gen} {...m.props} data-state={presence.state} role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
+          {m.lead}
           {customPct !== null && (
             <div role="presentation" className="document-viewer-zoom-current" aria-hidden="true">
               {customPct}%
@@ -136,9 +141,11 @@ export function ZoomControl({
               {item.label}
             </button>
           ))}
-        </div>
+          {m.trail}
+        </div>,
       )}
-    </div>
+      {p.trail}
+    </div>,
   )
 }
 
@@ -196,8 +203,11 @@ export function SettingsMenu({
     else close(action.refocus)
   }
 
-  return (
-    <div className="document-viewer-settings" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
+  const p = usePart({ id: 'settings', kind: 'settings', label: 'Document settings', state: { open } }, { ref: rootRef, className: 'document-viewer-settings' })
+  const m = usePart({ id: 'settings', kind: 'settings-menu', label: 'Document settings', state: { open: presence.state === 'open' } }, { ref: menuRef, className: 'document-viewer-settings-menu' })
+  return p.wrap(
+    <div {...p.props} data-component="viewer-control" data-open={open || undefined}>
+      {p.lead}
       <button
         type="button"
         ref={triggerRef}
@@ -216,8 +226,9 @@ export function SettingsMenu({
       >
         <MenuIcon size={14} />
       </button>
-      {presence.mounted && (
-        <div key={presence.gen} ref={menuRef} data-state={presence.state} className="document-viewer-settings-menu" role="menu" aria-label="Document settings" onKeyDown={onMenuKeyDown}>
+      {presence.mounted && m.wrap(
+        <div key={presence.gen} {...m.props} data-state={presence.state} role="menu" aria-label="Document settings" onKeyDown={onMenuKeyDown}>
+          {m.lead}
           <button
             type="button"
             role="menuitem"
@@ -242,8 +253,23 @@ export function SettingsMenu({
               Download
             </button>
           )}
-        </div>
+          {m.trail}
+        </div>,
       )}
-    </div>
+      {p.trail}
+    </div>,
+  )
+}
+
+// The floating pill's container (zoom + settings). A part of its own so an
+// adapter can restyle or wrap the whole pill.
+export function ViewerControls({ children }: { children: ReactNode }) {
+  const p = usePart({ id: 'viewer-controls', kind: 'viewer-controls', label: 'Viewer controls' }, { className: 'document-viewer-toolbar' })
+  return p.wrap(
+    <div {...p.props}>
+      {p.lead}
+      {children}
+      {p.trail}
+    </div>,
   )
 }
