@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { resolve, toDocumentTokens, builtinById, DEFAULT_THEME_ID } from 'theme-core'
 import type { DocumentTokens } from 'theme-core'
+import { EditorView } from '@codemirror/view'
 import DocumentViewer from '../DocumentViewer'
 import type { ZoomMode } from '../zoomModel'
 import type { DocumentHighlight, DocumentHost, DocumentLayer, RenderGraph } from '../types'
@@ -143,6 +144,104 @@ const graphIndexBySpec = new Map<string, number>()
 const instrumentedGraph: RenderGraph = (spec, ctx) => {
   if (!graphIndexBySpec.has(spec)) graphIndexBySpec.set(spec, graphIndexBySpec.size)
   return <InstrumentedGraph index={graphIndexBySpec.get(spec)!} spec={spec} ctx={ctx} />
+}
+
+// ?case=editor: DocumentViewer interaction="edit" over a controlled markdown
+// text asset. window.__doc = {text, changes} (latest onTextChange value and
+// the count of calls); window.__setDoc(s) replaces the controlled value from
+// outside (the IME-during-composition check); window.__hl = current highlight
+// ranges (codepoints, from onHighlightsChange); window.__view() = the live
+// CodeMirror EditorView; window.__comp = composition DOM events seen;
+// window.__keys = keydown events that reached the wrapper in the bubble phase
+// and a capture-phase Mod-s probe on the wrapper (mimics web's handler).
+// ?host=1 publishes the editor commands to the stub strip (window.__hostCmds);
+// without it the unhosted viewer draws EditorCommandBar in place.
+const EDITOR_MD = [
+  '# Edit sheet',
+  '',
+  'Intro line with a few words.',
+  '',
+  '- item one',
+  '- item two',
+  '',
+  '- [ ] task one',
+  '',
+  '> quote line',
+  '',
+  '```js',
+  'const a = 1',
+  '```',
+  '',
+  'a 😀 b',
+  '',
+  'Final line of text.',
+].join('\n')
+
+type EditorGlobals = {
+  __doc: { text: string; changes: number }
+  __setDoc: (s: string) => void
+  __hl: { id: string; start: number; end: number; quote?: string }[]
+  __view: () => EditorView | null
+  __comp: string[]
+  __keys: string[]
+  __capKeys: string[]
+  // Set true to make the parent ignore onTextChange (state stays at the last
+  // __setDoc value) so a queued external value can be seen applying.
+  __hold: boolean
+}
+const eg = (): EditorGlobals => window as unknown as EditorGlobals
+if (typeof window !== 'undefined') {
+  const w = eg()
+  w.__comp ??= []
+  w.__keys ??= []
+  w.__capKeys ??= []
+  w.__view = () => {
+    const el = document.querySelector<HTMLElement>('.cm-editor')
+    return el ? EditorView.findFromDOM(el.parentElement ?? el) : null
+  }
+}
+
+function edRange(needle: string, text: string): { start: number; end: number; quote: string } {
+  const i = text.indexOf(needle)
+  if (i < 0) throw new Error('needle missing: ' + needle)
+  const start = cp(text.slice(0, i))
+  return { start, end: start + cp(needle), quote: needle }
+}
+
+function EditorCase({ tokens, host }: { tokens: DocumentTokens; host: DocumentHost | undefined }): ReactNode {
+  const [text, setText] = useState(EDITOR_MD)
+  const [hl, setHl] = useState<DocumentHighlight[]>(() => [
+    { id: 'above', color: 'yellow', ...edRange('Intro line', EDITOR_MD) },
+    { id: 'below', color: 'green', ...edRange('Final line', EDITOR_MD) },
+  ])
+  const w = eg()
+  w.__doc = { text, changes: (w.__doc?.changes ?? 0) }
+  w.__hl = hl.map((h) => ({ id: h.id, start: h.start, end: h.end, quote: h.quote }))
+  w.__setDoc = (s: string) => setText(s)
+  return (
+    <div
+      data-testid="editor-wrapper"
+      style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+      onKeyDownCapture={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') eg().__capKeys.push('Mod-s:' + e.defaultPrevented) }}
+      onKeyDown={(e) => { eg().__keys.push(e.key + ':' + e.defaultPrevented) }}
+      onCompositionStart={() => eg().__comp.push('start')}
+      onCompositionEnd={() => eg().__comp.push('end')}
+    >
+      <DocumentViewer
+        host={host}
+        asset={{ type: 'text', mime: 'text/markdown', content: text }}
+        tokens={tokens}
+        // ?ro=1 shows the same text in the read-only (annotate) viewer.
+        interaction={new URLSearchParams(location.search).has('ro') ? 'annotate' : 'edit'}
+        chrome="full"
+        layers={[]}
+        highlights={hl}
+        onHighlightsChange={setHl}
+        onTextChange={(t) => { eg().__doc.changes++; eg().__doc.text = t; if (!eg().__hold) setText(t) }}
+        renderGraph={stubGraph}
+      />
+    </div>
+  )
 }
 
 function tokensFor(mode: 'light' | 'dark'): DocumentTokens {
@@ -329,6 +428,9 @@ export default function ReviewPage(): ReactNode {
               : 'host: nothing published'}
           </pre>
         )}
+        {kase === 'editor' ? (
+          <EditorCase tokens={tokens} host={host} />
+        ) : (
         <DocumentViewer
           host={host}
           asset={pdf ? { type: 'file', mime: 'application/pdf', url: q.get('pdf') ?? '/review-shots/sample.pdf' } : { type: 'text', mime: 'text/markdown', content: kase === 'graphs' ? GRAPHS_MD : MD, extractedText: kase === 'graphs' ? GRAPHS_MD : MD }}
@@ -342,6 +444,7 @@ export default function ReviewPage(): ReactNode {
           onHighlightsChange={setHl}
           renderGraph={kase === 'graphs' ? instrumentedGraph : stubGraph}
         />
+        )}
       </div>
     </div>
   )
