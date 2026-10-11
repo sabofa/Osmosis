@@ -80,8 +80,12 @@ class SmoothCaretPlugin {
   constructor(view: EditorView, snapPx: number) {
     this.view = view
     this.snapPx = snapPx
+    view.dom.addEventListener('keydown', this.onKey, true)
     this.attach()
   }
+
+  // A capturing listener: the keymap may handle (and swallow) the arrow keys before plugin handlers run.
+  private readonly onKey = (e: KeyboardEvent) => this.noteKey(e)
 
   noteKey(e: KeyboardEvent): void {
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.metaKey) this.arrowAt = performance.now()
@@ -138,6 +142,7 @@ class SmoothCaretPlugin {
 
   destroy(): void {
     this.gone = true
+    this.view.dom.removeEventListener('keydown', this.onKey, true)
     this.mo?.disconnect()
   }
 }
@@ -204,9 +209,7 @@ export function smoothCaret(opts: SmoothCaretOptions = {}): Extension {
   return [
     caretTheme(glide, blink),
     blink > 0 ? [] : steady,
-    ViewPlugin.define((view) => new SmoothCaretPlugin(view, snap), {
-      eventHandlers: { keydown(this: SmoothCaretPlugin, e: KeyboardEvent) { this.noteKey(e) } },
-    }),
+    ViewPlugin.define((view) => new SmoothCaretPlugin(view, snap)),
   ]
 }
 
