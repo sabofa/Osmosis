@@ -3,6 +3,7 @@ import { isFitMode, type ZoomMode } from './zoomModel'
 import { initialMenuIndex, menuKeyAction } from './menuKeys'
 import type { IconSheetRef } from 'theme-core'
 import { resolveIcon } from './iconSheet'
+import './ViewerControls.css'
 
 const DEFAULT_ICONS: IconSheetRef = { kind: 'default' }
 
@@ -21,8 +22,8 @@ export function ZoomControl({
   onZoomIn,
   onZoomOut,
   onSelect,
-  icons = DEFAULT_ICONS,
 }: {
+  /** Kept for API stability: the zoom control draws text glyphs, not sheet icons. */
   icons?: IconSheetRef
   zoom: ZoomMode
   scale: number
@@ -31,8 +32,6 @@ export function ZoomControl({
   onZoomOut: () => void
   onSelect: (mode: ZoomMode) => void
 }) {
-  const ZoomOutIcon = resolveIcon('doc-zoom-out', icons)
-  const ZoomInIcon = resolveIcon('doc-zoom-in', icons)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -78,15 +77,14 @@ export function ZoomControl({
   }
 
   return (
-    <div className="document-viewer-zoom" ref={rootRef}>
-      <div className="document-viewer-zoom-control" data-component="tool-row">
-        <button type="button" data-component="pill" aria-label="Zoom out" onClick={onZoomOut}>
-          <ZoomOutIcon size={14} />
+    <div className="document-viewer-zoom" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
+      <div className="document-viewer-zoom-control" role="group" aria-label="Zoom controls">
+        <button type="button" aria-label="Zoom out" title="Zoom out" onClick={onZoomOut}>
+          {'−'}
         </button>
         <button
           type="button"
           ref={triggerRef}
-          data-component="pill"
           className="document-viewer-zoom-pct"
           aria-haspopup="menu"
           aria-expanded={open}
@@ -103,12 +101,12 @@ export function ZoomControl({
         >
           {Math.round(scale * 100)}%
         </button>
-        <button type="button" data-component="pill" aria-label="Zoom in" onClick={onZoomIn}>
-          <ZoomInIcon size={14} />
+        <button type="button" aria-label="Zoom in" title="Zoom in" onClick={onZoomIn}>
+          +
         </button>
       </div>
       {open && (
-        <div className="document-viewer-zoom-menu" data-component="menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
+        <div className="document-viewer-zoom-menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
           {customPct !== null && (
             <div role="presentation" className="document-viewer-zoom-current" aria-hidden="true">
               {customPct}%
@@ -123,7 +121,6 @@ export function ZoomControl({
               type="button"
               role="menuitemradio"
               aria-checked={checked[i]}
-              data-component="menu-item"
               onClick={() => {
                 onSelect(item.mode)
                 close(true)
@@ -167,18 +164,18 @@ export function SettingsMenu({
   }, [open])
 
   return (
-    <div className="document-viewer-settings" ref={rootRef}>
-      <button type="button" data-component="pill" aria-label="Document settings" onClick={() => setOpen((o) => !o)}>
-        <MenuIcon size={15} />
+    <div className="document-viewer-settings" ref={rootRef} data-component="viewer-control" data-open={open || undefined}>
+      <button type="button" aria-label="Document settings" title="Document settings" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <MenuIcon size={14} />
       </button>
       {open && (
-        <div className="document-viewer-settings-menu" data-component="menu">
-          <button type="button" data-component="menu-item" onClick={onToggleOverlays}>
+        <div className="document-viewer-settings-menu">
+          <button type="button" onClick={onToggleOverlays}>
             <EyeIcon size={13} />
             {showOverlays ? 'Hide highlights' : 'Show highlights'}
           </button>
           {onDownload && (
-            <button type="button" data-component="menu-item" onClick={onDownload}>
+            <button type="button" onClick={onDownload}>
               <DownloadIcon size={13} />
               Download
             </button>

@@ -320,29 +320,15 @@
   opacity: var(--de-alpha-media);
 }
 
-/* Chrome (toolbar, menus, popover). Every surface reads the theme's
-   component tokens first (--menu-*, --button-*, --chip-*, --color-text,
-   --bevel-*) so a workspace theme can restyle it via the data-component
-   hooks; the --de-chrome-* values (tokenVars.ts) are the fallback only.
-   Bevels: lit top/left, shaded bottom/right; --bevel-depth is 0 on flat
-   themes so nothing shows there. */
+/* Chrome: the highlight colour popover. It reads the theme's component
+   tokens first (--menu-*, --chip-*, --bevel-*) so a workspace theme can
+   restyle it via the data-component hooks; the --de-chrome-* values
+   (tokenVars.ts) are the fallback only. Bevels: lit top/left, shaded
+   bottom/right; --bevel-depth is 0 on flat themes so nothing shows there.
+   The zoom/settings controls are quiet and live in ViewerControls.css. */
 
-.document-viewer-toolbar {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  z-index: 2;
-}
-
-.document-viewer-zoom-control,
-.document-viewer-settings,
-.document-viewer-settings-menu,
-.document-viewer-zoom-menu,
 .document-viewer-highlight-action {
-  background: var(--menu-bg, var(--de-chrome-bg));
+  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
   color: var(--color-text, var(--de-chrome-text));
   border: var(--border-width, 0px) solid var(--menu-border, var(--de-chrome-border));
   border-top: var(--bevel-depth, 0px) solid var(--bevel-light, transparent);
@@ -352,13 +338,6 @@
   box-shadow: var(--menu-shadow, none);
 }
 
-/* The popover's fallback fill follows the callout alpha; a host --menu-bg wins. */
-.document-viewer-highlight-action {
-  background: var(--menu-bg, color-mix(in srgb, var(--de-chrome-bg) calc(var(--de-alpha-callout) * 100%), transparent));
-}
-
-.document-viewer-zoom-control button,
-.document-viewer-settings > button,
 .document-viewer-highlight-swatch {
   border: var(--bevel-depth, 0px) solid transparent;
   border-top-color: var(--bevel-light, transparent);
@@ -367,137 +346,10 @@
   border-right-color: var(--bevel-dark, transparent);
 }
 
-.document-viewer-zoom-control {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
-  padding: 4px;
-}
-
-.document-viewer-zoom-control button {
-  background: var(--chip-bg, var(--de-chrome-control-bg));
-  color: inherit;
-  cursor: pointer;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--de-font-stack-code);
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.document-viewer-zoom-control button:hover {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-.document-viewer-zoom-control button:active {
-  transform: scale(0.9);
-}
-
-.document-viewer-zoom-control button.document-viewer-zoom-pct {
-  width: auto;
-  height: auto;
-  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
-  padding: 4px 9px;
-  font-size: 11px;
-  background: none;
-}
-
-.document-viewer-zoom-control button.document-viewer-zoom-pct:hover {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-.document-viewer-settings {
-  position: relative;
-  display: flex;
-  align-items: center;
-  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
-}
-
-.document-viewer-settings > button {
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--chip-radius, var(--de-chrome-radius-round));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.document-viewer-settings > button:hover {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-.document-viewer-settings > button:active {
-  transform: scale(0.9);
-}
-
-.document-viewer-zoom {
-  position: relative;
-}
-
-.document-viewer-settings-menu,
-.document-viewer-zoom-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  border-radius: var(--menu-radius, var(--de-chrome-radius));
-  padding: 4px;
-  gap: 2px;
-  transform-origin: top right;
-  animation: document-viewer-pop-in 0.14s ease-out;
-}
-
-.document-viewer-settings-menu button,
-.document-viewer-zoom-menu button {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  background: none;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  text-align: left;
-  padding: 7px 9px;
-  border-radius: var(--button-radius, var(--de-chrome-radius));
-  white-space: nowrap;
-  transition: background 0.12s ease;
-}
-
-.document-viewer-settings-menu button:hover,
-.document-viewer-zoom-menu button:hover,
-.document-viewer-zoom-menu button:focus-visible,
-.document-viewer-zoom-menu button[aria-checked='true'] {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-.document-viewer-zoom-menu button:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: -2px;
-}
-
-/* Non-selectable readout of a custom (non-fit, non-100%) zoom. */
-.document-viewer-zoom-current {
-  font-size: 11px;
-  opacity: 0.7;
-  padding: 4px 9px 2px;
-}
-
 @keyframes document-viewer-pop-in {
   from {
     opacity: 0;
-    transform: scale(0.92) translateY(-4px);
+    transform: scale(0.96) translateY(4px);
   }
   to {
     opacity: 1;
@@ -738,59 +590,7 @@
   color: var(--de-text-muted);
 }
 
-.document-viewer-zoom-menu button[aria-checked='true'] {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-/* Unhosted edit: the in-place editor command row and the editor surface. */
-.document-viewer-editor-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--de-rule);
-}
-
-.document-viewer-editor-bar-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.document-viewer-editor-bar-sep {
-  width: 1px;
-  height: 16px;
-  margin: 0 4px;
-  background: var(--de-rule);
-}
-
-.document-viewer-editor-bar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: inherit;
-  cursor: pointer;
-  background: var(--chip-bg, var(--de-chrome-control-bg));
-  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
-}
-
-.document-viewer-editor-bar-btn:hover:not(:disabled) {
-  background: var(--menu-hover, var(--de-chrome-hover));
-}
-
-.document-viewer-editor-bar-btn[aria-pressed='true'] {
-  color: var(--de-accent);
-}
-
-.document-viewer-editor-bar-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
+/* Unhosted edit: the ribbon (ribbon/Ribbon.css) sits above the editor surface. */
 .document-viewer-editor {
   padding: 1em;
 }

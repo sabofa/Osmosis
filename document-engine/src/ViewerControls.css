@@ -1,0 +1,195 @@
+/* The viewer's quiet controls (Toolbar.tsx): zoom capsule and settings button.
+   They sit bottom-right inside .document-viewer, flat and half-faded, so they
+   read as part of the sheet: no glow, no shadow, no border until hovered.
+   The surface is the page colour, mostly transparent. Colours are --de-*
+   tokens only (chromeStyles.test.ts); data-component="viewer-control" is the
+   hook a shell theme can restyle later.
+
+   A host may override any of these custom properties on the viewer or an
+   ancestor (all optional):
+     --viewer-control-inset            distance from the viewer's right/bottom edge (12px)
+     --viewer-control-bg               resting surface
+     --viewer-control-fg               resting text and icon colour
+     --viewer-control-fg-hover         colour when hovered / focused / open
+     --viewer-control-border           hairline shown on hover
+     --viewer-control-hover-bg         button hover tint
+     --viewer-control-idle-opacity     opacity when nothing is near (0.5)
+     --viewer-control-viewer-opacity   opacity while the pointer is over the viewer (0.75)
+     --viewer-control-menu-bg          popover surface */
+
+.document-viewer-toolbar {
+  --vc-bg: var(--viewer-control-bg, color-mix(in srgb, var(--de-page) 70%, transparent));
+  --vc-fg: var(--viewer-control-fg, var(--de-text-muted));
+  --vc-fg-hover: var(--viewer-control-fg-hover, var(--de-text));
+  --vc-line: var(--viewer-control-border, color-mix(in srgb, var(--de-rule) 60%, transparent));
+  --vc-tint: var(--viewer-control-hover-bg, color-mix(in srgb, currentColor 8%, transparent));
+  --vc-radius: calc(var(--de-radius-sm) * 0.5);
+
+  position: absolute;
+  right: var(--viewer-control-inset, 12px);
+  bottom: var(--viewer-control-inset, 12px);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1;
+  opacity: var(--viewer-control-idle-opacity, 0.5);
+  transition: opacity 0.18s ease;
+}
+
+.document-viewer:hover .document-viewer-toolbar {
+  opacity: var(--viewer-control-viewer-opacity, 0.75);
+}
+
+.document-viewer .document-viewer-toolbar:hover,
+.document-viewer .document-viewer-toolbar:focus-within,
+.document-viewer .document-viewer-toolbar:has([data-open]) {
+  opacity: 1;
+}
+
+.document-viewer-zoom,
+.document-viewer-settings {
+  position: relative;
+}
+
+/* The capsule and the settings button: one flat surface, hairline on hover. */
+.document-viewer-zoom-control,
+.document-viewer-settings > button {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: var(--de-chrome-radius-pill);
+  background: var(--vc-bg);
+  color: var(--vc-fg);
+  box-shadow: none;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.document-viewer-zoom-control:hover,
+.document-viewer-zoom-control:focus-within,
+.document-viewer-settings > button:hover,
+.document-viewer-settings > button:focus-visible,
+.document-viewer-zoom[data-open] .document-viewer-zoom-control,
+.document-viewer-settings[data-open] > button {
+  border-color: var(--vc-line);
+  color: var(--vc-fg-hover);
+}
+
+.document-viewer-zoom-control button,
+.document-viewer-settings > button {
+  appearance: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.document-viewer-zoom-control button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--de-chrome-radius-pill);
+  background: none;
+  color: inherit;
+  font-size: 15px;
+  transition: background 0.12s ease;
+}
+
+.document-viewer-zoom-control button:hover {
+  background: var(--vc-tint);
+}
+
+.document-viewer-zoom-control button.document-viewer-zoom-pct {
+  width: auto;
+  min-width: 3.4em;
+  padding: 0 2px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.document-viewer-settings > button {
+  justify-content: center;
+  width: 24px;
+}
+
+.document-viewer-zoom-control button:focus-visible,
+.document-viewer-settings > button:focus-visible,
+.document-viewer-zoom-menu button:focus-visible,
+.document-viewer-settings-menu button:focus-visible {
+  outline: 2px solid var(--de-accent);
+  outline-offset: -2px;
+}
+
+/* Popovers: flat, hairline, no glow; open upward from the bottom corner. */
+.document-viewer-settings-menu,
+.document-viewer-zoom-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  min-width: 9em;
+  padding: 4px;
+  gap: 1px;
+  background: var(--viewer-control-menu-bg, color-mix(in srgb, var(--de-page) calc(var(--de-alpha-callout) * 100%), transparent));
+  color: var(--de-text);
+  border: 1px solid var(--vc-line);
+  border-radius: var(--vc-radius);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--de-text) 14%, transparent);
+  transform-origin: bottom right;
+  animation: document-viewer-pop-in 0.12s ease-out;
+}
+
+.document-viewer-settings-menu button,
+.document-viewer-zoom-menu button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--vc-radius);
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.document-viewer-settings-menu button:hover,
+.document-viewer-zoom-menu button:hover,
+.document-viewer-zoom-menu button:focus-visible {
+  background: var(--vc-tint);
+}
+
+.document-viewer-zoom-menu button[aria-checked='true'] {
+  background: color-mix(in srgb, var(--de-accent) 14%, transparent);
+  color: var(--de-accent);
+}
+
+/* Non-selectable readout of a custom (non-fit, non-100%) zoom. */
+.document-viewer-zoom-current {
+  padding: 4px 9px 2px;
+  font-size: 11px;
+  color: var(--de-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-viewer-toolbar,
+  .document-viewer-settings-menu,
+  .document-viewer-zoom-menu {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* Dark sheet: no halo, the hairline alone separates the menu. */
+.document-viewer[data-mode='dark'] .document-viewer-settings-menu,
+.document-viewer[data-mode='dark'] .document-viewer-zoom-menu {
+  box-shadow: none;
+}
