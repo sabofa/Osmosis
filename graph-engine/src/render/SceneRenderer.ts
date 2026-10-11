@@ -641,7 +641,7 @@ export class SceneRenderer {
     // 1e-8 window around x = 1000 does not quantise. The grid draws against the same origin.
     this.camera2d.setOrigin((view.xMin + view.xMax) / 2, (view.yMin + view.yMax) / 2)
     const { geometry, misc } = toRenderItems(scene.objects, overscanBox(view))
-    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px), this.camera2d.origin())
+    this.geometryGroupManager.update(geometry, this.palette, (px) => this.pixelToWorld(px), this.camera2d.origin(), (px) => this.pixelToWorldXY(px))
     this.drawGrid()
     this.updateMiscGroup(misc)
     this.needsRender = true
@@ -893,9 +893,14 @@ export class SceneRenderer {
 
     const group = new THREE.Group()
 
-    const halfWidth = this.pixelToWorld(RAY_WIDTH_PX) / 2
-    const nx = -dir.y * halfWidth
-    const ny = dir.x * halfWidth
+    // The normal is taken on screen (px space), so the shaft is RAY_WIDTH_PX thick at any direction.
+    const per = this.pixelToWorldXY(1)
+    const halfWidth = RAY_WIDTH_PX / 2
+    const pdx = dir.x / per.x
+    const pdy = dir.y / per.y
+    const plen = Math.hypot(pdx, pdy) || 1
+    const nx = (-pdy / plen) * per.x * halfWidth
+    const ny = (pdx / plen) * per.y * halfWidth
     const shaftPositions = new Float32Array([
       origin.x + nx, origin.y + ny, 0,
       origin.x - nx, origin.y - ny, 0,
@@ -1011,8 +1016,13 @@ export class SceneRenderer {
     if (obj.kind === 'angleMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
       const legLength = Math.min(Math.hypot(obj.from.x - obj.vertex.x, obj.from.y - obj.vertex.y), Math.hypot(obj.to.x - obj.vertex.x, obj.to.y - obj.vertex.y))
-      const radius = Math.min(this.pixelToWorld(ANGLE_ARC_RADIUS_PX), legLength * ANGLE_ARC_MAX_FRACTION)
-      const points = angleArcPoints(obj.vertex, obj.from, obj.to, radius)
+      // An arc of r px is an ellipse in world: built in px space, mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const toPx = (v: Vec2): Vec2 => ({ x: v.x / per.x, y: v.y / per.y })
+      const pxVertex = toPx(obj.vertex)
+      const pxLeg = Math.min(Math.hypot(toPx(obj.from).x - pxVertex.x, toPx(obj.from).y - pxVertex.y), Math.hypot(toPx(obj.to).x - pxVertex.x, toPx(obj.to).y - pxVertex.y))
+      const radiusPx = Math.min(ANGLE_ARC_RADIUS_PX, pxLeg * ANGLE_ARC_MAX_FRACTION)
+      const points = angleArcPoints(pxVertex, toPx(obj.from), toPx(obj.to), radiusPx).map((p) => ({ x: p.x * per.x, y: p.y * per.y }))
       const geometry = new THREE.BufferGeometry().setFromPoints(points.map((p) => new THREE.Vector3(p.x, p.y, 0)))
       const group = new THREE.Group()
       group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color })))
@@ -1031,19 +1041,30 @@ export class SceneRenderer {
 
     if (obj.kind === 'rightAngleMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
-      const legLength = Math.min(Math.hypot(obj.from.x - obj.vertex.x, obj.from.y - obj.vertex.y), Math.hypot(obj.to.x - obj.vertex.x, obj.to.y - obj.vertex.y))
-      const size = Math.min(this.pixelToWorld(RIGHT_ANGLE_SIZE_PX), legLength * RIGHT_ANGLE_MAX_FRACTION)
-      const points = rightAngleSquarePoints(obj.vertex, obj.from, obj.to, size)
+      // A square in px: built in px space, mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const toPx = (v: Vec2): Vec2 => ({ x: v.x / per.x, y: v.y / per.y })
+      const pxVertex = toPx(obj.vertex)
+      const pxLeg = Math.min(Math.hypot(toPx(obj.from).x - pxVertex.x, toPx(obj.from).y - pxVertex.y), Math.hypot(toPx(obj.to).x - pxVertex.x, toPx(obj.to).y - pxVertex.y))
+      const sizePx = Math.min(RIGHT_ANGLE_SIZE_PX, pxLeg * RIGHT_ANGLE_MAX_FRACTION)
+      const points = rightAngleSquarePoints(pxVertex, toPx(obj.from), toPx(obj.to), sizePx).map((p) => ({ x: p.x * per.x, y: p.y * per.y }))
       const geometry = new THREE.BufferGeometry().setFromPoints(points.map((p) => new THREE.Vector3(p.x, p.y, 0)))
       return new THREE.Line(geometry, new THREE.LineBasicMaterial({ color }))
     }
 
     if (obj.kind === 'tickMark') {
       const color = this.colorOr(obj.color, this.palette.axis)
-      const segLength = Math.hypot(obj.to.x - obj.from.x, obj.to.y - obj.from.y)
-      const tickLength = Math.min(this.pixelToWorld(TICK_LENGTH_PX), segLength * TICK_MAX_FRACTION)
-      const gap = Math.min(this.pixelToWorld(TICK_GAP_PX), segLength * TICK_MAX_FRACTION)
-      const segments = tickMarkSegments(obj.from, obj.to, obj.count, tickLength, gap)
+      // Ticks are laid out in px space (length, gap and perpendicular on screen), mapped back per axis.
+      const per = this.pixelToWorldXY(1)
+      const pxFrom: Vec2 = { x: obj.from.x / per.x, y: obj.from.y / per.y }
+      const pxTo: Vec2 = { x: obj.to.x / per.x, y: obj.to.y / per.y }
+      const segLength = Math.hypot(pxTo.x - pxFrom.x, pxTo.y - pxFrom.y)
+      const tickLength = Math.min(TICK_LENGTH_PX, segLength * TICK_MAX_FRACTION)
+      const gap = Math.min(TICK_GAP_PX, segLength * TICK_MAX_FRACTION)
+      const segments = tickMarkSegments(pxFrom, pxTo, obj.count, tickLength, gap).map(([a, b]) => [
+        { x: a.x * per.x, y: a.y * per.y },
+        { x: b.x * per.x, y: b.y * per.y },
+      ])
       const group = new THREE.Group()
       for (const [a, b] of segments) {
         const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(a.x, a.y, 0), new THREE.Vector3(b.x, b.y, 0)])

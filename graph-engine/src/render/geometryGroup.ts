@@ -101,7 +101,10 @@ const GAP_SIZE_PX = 5
 // same "fixed on-screen size" convention as point markers/hover dots — so
 // the ribbon's apparent weight stays constant across zoom instead of
 // thinning out as you zoom in.
-function computeCurveWidths(points: Vec2[], pixelToWorld: (px: number) => number): number[] {
+function computeCurveWidths(rawPoints: Vec2[], pixelToWorld: (px: number) => number, ry = 1): number[] {
+  // Curvature is a property of the curve as drawn, so with unequal px-per-unit it is measured in pixel space
+  // (y stretched by 1/ry, in units of the x pixel); ry = 1 leaves the points untouched.
+  const points = ry === 1 ? rawPoints : rawPoints.map((p) => ({ x: p.x, y: p.y / ry }))
   const n = points.length
   const stride = Math.max(4, Math.round(n / 40))
   const raw: number[] = new Array(n)
@@ -160,19 +163,21 @@ function computeCurveWidths(points: Vec2[], pixelToWorld: (px: number) => number
 // each sample point pushed outward along its local normal by half the
 // computed width. `pos` is a live view into the geometry's position buffer
 // (see growAttribute above), so this writes directly into it.
-function fillRibbonPositions(pos: Float32Array, points: Vec2[], widths: number[], ox = 0, oy = 0): void {
+// ry = worldPerPixel.y / worldPerPixel.x: the offset is taken along the on-screen normal, so a ribbon is the same
+// px thick whatever its direction when the axes' px-per-unit differ.
+function fillRibbonPositions(pos: Float32Array, points: Vec2[], widths: number[], ox = 0, oy = 0, ry = 1): void {
   const n = points.length
   for (let i = 0; i < n; i++) {
     const p = points[i]
     const a = points[Math.max(0, i - 1)]
     const c = points[Math.min(n - 1, i + 1)]
     let dx = c.x - a.x
-    let dy = c.y - a.y
+    let dy = (c.y - a.y) / ry
     const len = Math.hypot(dx, dy) || 1
     dx /= len
     dy /= len
     const nx = -dy
-    const ny = dx
+    const ny = dx * ry
     const hw = widths[i] / 2
     const li = i * 2
     const ri = i * 2 + 1
@@ -215,7 +220,19 @@ function buildRibbonIndices(n: number): number[] {
 // guarantee against this ever blowing up again regardless of cause.
 const MAX_DASH_CHUNKS = 2000
 
-function splitIntoDashChunks(from: Vec2, to: Vec2, period: number, dashLen: number): [Vec2, Vec2][] {
+// Runs a dash splitter in pixel space when the axes' px-per-unit differ (y scaled by 1/ry, in x-pixel units), so a
+// dash is the same px long vertically as horizontally, and maps its chunks back to world.
+function inPixelSpace(ry: number, pts: readonly Vec2[], split: (px: readonly Vec2[]) => [Vec2, Vec2][]): [Vec2, Vec2][] {
+  if (ry === 1) return split(pts)
+  const back = (p: Vec2): Vec2 => ({ x: p.x, y: p.y * ry })
+  return split(pts.map((p) => ({ x: p.x, y: p.y / ry }))).map(([a, b]) => [back(a), back(b)])
+}
+
+function splitIntoDashChunks(from: Vec2, to: Vec2, period: number, dashLen: number, ry = 1): [Vec2, Vec2][] {
+  return inPixelSpace(ry, [from, to], ([f, t]) => splitStraight(f, t, period, dashLen))
+}
+
+function splitStraight(from: Vec2, to: Vec2, period: number, dashLen: number): [Vec2, Vec2][] {
   const dx = to.x - from.x
   const dy = to.y - from.y
   const len = Math.hypot(dx, dy)
@@ -278,14 +295,14 @@ function splitPolylineIntoDashChunks(points: readonly Vec2[], period: number, da
 
 // Writes one quad (4 vertices, constant half-width) for a straight [from,
 // to] run at vertex index `vertIndex` into `pos`.
-function fillStraightQuad(pos: Float32Array, vertIndex: number, from: Vec2, to: Vec2, halfWidth: number, ox = 0, oy = 0): void {
+function fillStraightQuad(pos: Float32Array, vertIndex: number, from: Vec2, to: Vec2, halfWidth: number, ox = 0, oy = 0, ry = 1): void {
   let dx = to.x - from.x
-  let dy = to.y - from.y
+  let dy = (to.y - from.y) / ry
   const len = Math.hypot(dx, dy) || 1
   dx /= len
   dy /= len
   const nx = -dy * halfWidth
-  const ny = dx * halfWidth
+  const ny = dx * halfWidth * ry
   const o = vertIndex * 3
   const fx = from.x - ox
   const fy = from.y - oy
@@ -321,9 +338,9 @@ function buildQuadIndices(quadCount: number): number[] {
 // Writes straight [from, to] chunks into `geometry` as constant-weight quads
 // (the segment, segments and dashed-curve kinds all draw this way), reusing the
 // buffers and rebuilding the index only when the chunk count changed.
-function writeQuadChunks(geometry: THREE.BufferGeometry, chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number, o: Vec2): void {
+function writeQuadChunks(geometry: THREE.BufferGeometry, chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number, o: Vec2, ry = 1): void {
   const pos = growAttribute(geometry, 'position', chunks.length * 4, 3)
-  chunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth, o.x, o.y))
+  chunks.forEach(([from, to], i) => fillStraightQuad(pos, i * 4, from, to, halfWidth, o.x, o.y, ry))
   const expectedIndexCount = chunks.length * 6
   // The index buffer is a capacity, not an exact fit: quad i always uses
   // vertices 4i..4i+3, so any prefix of a larger buffer is a valid index for
@@ -338,10 +355,10 @@ function writeQuadChunks(geometry: THREE.BufferGeometry, chunks: readonly (reado
 }
 
 // A fresh mesh of constant-weight quads for the chunks, or null when there are none.
-function buildQuadMesh(chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number, color: number, o: Vec2): THREE.Mesh | null {
+function buildQuadMesh(chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: number, color: number, o: Vec2, ry = 1): THREE.Mesh | null {
   if (chunks.length === 0) return null
   const positions = new Float32Array(chunks.length * 4 * 3)
-  chunks.forEach(([from, to], i) => fillStraightQuad(positions, i * 4, from, to, halfWidth, o.x, o.y))
+  chunks.forEach(([from, to], i) => fillStraightQuad(positions, i * 4, from, to, halfWidth, o.x, o.y, ry))
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setIndex(buildQuadIndices(chunks.length))
@@ -353,9 +370,9 @@ function buildQuadMesh(chunks: readonly (readonly [Vec2, Vec2])[], halfWidth: nu
 // dashes and gaps a dashed segment has, at the constant LINE_WIDTH_PX weight of
 // one. The curvature taper is the pen of a plotted function; a dashed curve is a
 // boundary or a guide, and reads as a dashed segment does.
-function dashedCurveChunks(points: readonly Vec2[], pixelToWorld: (px: number) => number): [Vec2, Vec2][] {
+function dashedCurveChunks(points: readonly Vec2[], pixelToWorld: (px: number) => number, ry = 1): [Vec2, Vec2][] {
   const dashLen = pixelToWorld(DASH_SIZE_PX)
-  return splitPolylineIntoDashChunks(points, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
+  return inPixelSpace(ry, points, (pts) => splitPolylineIntoDashChunks(pts, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen))
 }
 
 interface GeometryEntry {
@@ -390,6 +407,8 @@ export class GeometryGroupManager {
   // Renderer-relative float32: every position below is written minus this origin (in float64) and the group sits on it,
   // so the GPU only ever sees small numbers. Chosen by the renderer at each rebuild (the build window's centre).
   origin: Vec2 = { x: 0, y: 0 }
+  // worldPerPixel.y / worldPerPixel.x of the current update (1 when the axes' scales match).
+  private ry = 1
 
   // Index-matches the new geometry-kind objects against what's already built
   // (buildScene emits them in a stable, statement-derived order, so during a
@@ -399,8 +418,10 @@ export class GeometryGroupManager {
   // matches, the existing buffer is updated in place; only a genuine
   // structural change (spec edited, curve split by a newly-detected
   // asymptote, etc.) falls back to disposing and building fresh.
-  update(objects: GeometryItem[], palette: GeometryPalette, pixelToWorld: (px: number) => number, origin: Vec2 = { x: 0, y: 0 }) {
+  update(objects: GeometryItem[], palette: GeometryPalette, pixelToWorld: (px: number) => number, origin: Vec2 = { x: 0, y: 0 }, pixelToWorldXY?: (px: number) => Vec2) {
     this.origin = origin
+    const per = pixelToWorldXY?.(1)
+    this.ry = per && per.x > 0 && per.y > 0 ? per.y / per.x : 1
     this.group.position.set(origin.x, origin.y, 0)
     const next: GeometryEntry[] = []
     for (let i = 0; i < objects.length; i++) {
@@ -435,12 +456,12 @@ export class GeometryGroupManager {
 
     if (obj.kind === 'curve') {
       if (obj.dashed) {
-        writeQuadChunks(geometry, dashedCurveChunks(obj.points, pixelToWorld), pixelToWorld(LINE_WIDTH_PX) / 2, this.origin)
+        writeQuadChunks(geometry, dashedCurveChunks(obj.points, pixelToWorld, this.ry), pixelToWorld(LINE_WIDTH_PX) / 2, this.origin, this.ry)
       } else {
         const n = obj.points.length
-        const widths = computeCurveWidths(obj.points, pixelToWorld)
+        const widths = computeCurveWidths(obj.points, pixelToWorld, this.ry)
         const pos = growAttribute(geometry, 'position', n * 2, 3)
-        fillRibbonPositions(pos, obj.points, widths, this.origin.x, this.origin.y)
+        fillRibbonPositions(pos, obj.points, widths, this.origin.x, this.origin.y, this.ry)
         // Only rebuild the index buffer when the point count actually changed
         // (an asymptote split, not a plain resample) — same buffer-reuse idea
         // as growAttribute, applied to topology instead of positions.
@@ -454,17 +475,17 @@ export class GeometryGroupManager {
     } else if (obj.kind === 'segment') {
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const chunks: [Vec2, Vec2][] = obj.dashed
-        ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
+        ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen, this.ry)
         : [[obj.from, obj.to]]
-      writeQuadChunks(geometry, chunks, pixelToWorld(LINE_WIDTH_PX) / 2, this.origin)
+      writeQuadChunks(geometry, chunks, pixelToWorld(LINE_WIDTH_PX) / 2, this.origin, this.ry)
       material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'segments') {
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const dashPeriod = dashLen + pixelToWorld(GAP_SIZE_PX)
       const allChunks: [Vec2, Vec2][] = obj.dashed
-        ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen))
+        ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen, this.ry))
         : obj.pairs
-      writeQuadChunks(geometry, allChunks, pixelToWorld(LINE_WIDTH_PX) / 2, this.origin)
+      writeQuadChunks(geometry, allChunks, pixelToWorld(LINE_WIDTH_PX) / 2, this.origin, this.ry)
       material.color?.setHex(themedColor(obj.color, palette.segment, palette))
     } else if (obj.kind === 'region') {
       const n = obj.triangles.length
@@ -485,11 +506,11 @@ export class GeometryGroupManager {
       const n = obj.points.length
       if (n < 2) return null
       if (obj.dashed) {
-        return buildQuadMesh(dashedCurveChunks(obj.points, pixelToWorld), pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.curve, palette), this.origin)
+        return buildQuadMesh(dashedCurveChunks(obj.points, pixelToWorld, this.ry), pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.curve, palette), this.origin, this.ry)
       }
-      const widths = computeCurveWidths(obj.points, pixelToWorld)
+      const widths = computeCurveWidths(obj.points, pixelToWorld, this.ry)
       const positions = new Float32Array(n * 2 * 3)
-      fillRibbonPositions(positions, obj.points, widths, this.origin.x, this.origin.y)
+      fillRibbonPositions(positions, obj.points, widths, this.origin.x, this.origin.y, this.ry)
       const geometry = new THREE.BufferGeometry()
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setIndex(buildRibbonIndices(n))
@@ -506,18 +527,18 @@ export class GeometryGroupManager {
     if (obj.kind === 'segment') {
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const chunks: [Vec2, Vec2][] = obj.dashed
-        ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen)
+        ? splitIntoDashChunks(obj.from, obj.to, dashLen + pixelToWorld(GAP_SIZE_PX), dashLen, this.ry)
         : [[obj.from, obj.to]]
-      return buildQuadMesh(chunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette), this.origin)
+      return buildQuadMesh(chunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette), this.origin, this.ry)
     }
 
     if (obj.kind === 'segments') {
       const dashLen = pixelToWorld(DASH_SIZE_PX)
       const dashPeriod = dashLen + pixelToWorld(GAP_SIZE_PX)
       const allChunks: [Vec2, Vec2][] = obj.dashed
-        ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen))
+        ? obj.pairs.flatMap(([from, to]) => splitIntoDashChunks(from, to, dashPeriod, dashLen, this.ry))
         : obj.pairs
-      return buildQuadMesh(allChunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette), this.origin)
+      return buildQuadMesh(allChunks, pixelToWorld(LINE_WIDTH_PX) / 2, themedColor(obj.color, palette.segment, palette), this.origin, this.ry)
     }
 
     if (obj.kind === 'region') {
