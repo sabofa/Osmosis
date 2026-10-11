@@ -1,0 +1,100 @@
+/* The engine chrome's motion tokens: the ONE place durations, easing and
+   distances are written (motionStyles.test.ts keeps raw ms literals out of
+   Ribbon.css / ViewerControls.css). A host or theme adapter retunes the chrome
+   by setting any --de-motion-* property on the viewer or an ancestor:
+     --de-motion-scale     0 turns all chrome motion off, 1 is the default
+     --de-motion-fast      hover tints, press, focus ring, popover open (120ms)
+     --de-motion-med       tab indicator, gallery indicator, layout swap (200ms)
+     --de-motion-out       popover / notice exit (80ms)
+     --de-motion-stagger   per-group delay when a tab's panel appears (24ms)
+     --de-ease             the easing curve
+   Defaults sit in :where(:root) (zero specificity) so any host rule beats them.
+   The effective --m-* values are computed on the scope roots below so a scale
+   set on the viewer, not only on :root, takes effect. Only transform, opacity,
+   colours and outline-color are ever animated. */
+
+:where(:root) {
+  --de-motion-scale: 1;
+  --de-motion-fast: 120ms;
+  --de-motion-med: 200ms;
+  --de-motion-out: 80ms;
+  --de-motion-stagger: 24ms;
+  --de-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+.de-ribbon,
+.document-viewer-toolbar {
+  --m-fast: calc(var(--de-motion-fast) * var(--de-motion-scale));
+  --m-med: calc(var(--de-motion-med) * var(--de-motion-scale));
+  --m-out: calc(var(--de-motion-out) * var(--de-motion-scale));
+  --m-stagger: calc(var(--de-motion-stagger) * var(--de-motion-scale));
+  /* distances and scales; the reduced-motion block zeroes them */
+  --m-rise: 4px;
+  --m-nudge: 2px;
+  --m-lift: 1px;
+  --m-slide: 3px;
+  --m-pop-scale: 0.97;
+  --m-press: 0.96;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .de-ribbon,
+  .document-viewer-toolbar {
+    --m-fast: calc(min(var(--de-motion-fast), 60ms) * var(--de-motion-scale));
+    --m-med: calc(min(var(--de-motion-med), 60ms) * var(--de-motion-scale));
+    --m-out: calc(min(var(--de-motion-out), 60ms) * var(--de-motion-scale));
+    --m-stagger: 0ms;
+    --m-rise: 0px;
+    --m-nudge: 0px;
+    --m-lift: 0px;
+    --m-slide: 0px;
+    --m-pop-scale: 1;
+    --m-press: 1;
+  }
+}
+
+/* Popovers and menus. --m-pop-dir is -1 for lists that open downward (they
+   settle down into place) and 1 for ones that open upward (they rise). */
+@keyframes de-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--m-rise) * var(--m-pop-dir, 1))) scale(var(--m-pop-scale));
+  }
+}
+
+@keyframes de-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--m-rise) * var(--m-pop-dir, 1) * 0.5)) scale(var(--m-pop-scale));
+  }
+}
+
+/* A tab's groups, one after the other. */
+@keyframes de-group-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--m-slide));
+  }
+}
+
+/* The tabs <-> icon-row swap. */
+@keyframes de-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The status notice. */
+@keyframes de-note-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--m-slide) * -1));
+  }
+}
+
+@keyframes de-note-out {
+  to {
+    opacity: 0;
+    transform: translateY(calc(var(--m-slide) * -1));
+  }
+}

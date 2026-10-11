@@ -17,6 +17,9 @@ import {
   rovingIndex, nextEnabledIndex, firstFocusIndex, tabClosesPopover, controlTitle, galleryWindow, galleryTileCount, overflowSplit, controlSlots, isNarrow, previewLook, clampNumber,
 } from './ribbonNav'
 import { subscribeRibbonNotices, type RibbonNotices } from './ribbonNotice'
+import { inkGeometry, inkTransform, popoverOriginX } from './ribbonMotion'
+import { usePresence } from './usePresence'
+import '../motion.css'
 import './Ribbon.css'
 
 export interface RibbonProps {
@@ -80,6 +83,62 @@ function useWidth(ref: RefObject<HTMLElement | null>): number {
   return w
 }
 
+// ---------------------------------------------------------------- sliding indicator
+
+// One absolutely positioned bar that follows a target element inside `list`.
+// Geometry comes from offsetLeft/offsetWidth (one layout read, no rects) and is
+// written straight to the bar's transform, so the ribbon never re-renders for
+// it. The first placement is instant; data-ready (set a frame later) switches
+// the CSS transition on, so only later moves slide. `pick` finds the target
+// (null hides the bar); `deps` say when to re-place it.
+function useInk(
+  list: RefObject<HTMLElement | null>,
+  pick: (list: HTMLElement) => HTMLElement | null,
+  deps: readonly unknown[],
+  fixedWidth = false,
+): RefObject<HTMLSpanElement | null> {
+  const ink = useRef<HTMLSpanElement | null>(null)
+  const pickRef = useRef(pick)
+  pickRef.current = pick
+  const place = useCallback(() => {
+    const bar = ink.current
+    const root = list.current
+    if (!bar || !root) return
+    const target = pickRef.current(root)
+    if (!target) {
+      bar.dataset.hidden = ''
+      return
+    }
+    delete bar.dataset.hidden
+    const g = inkGeometry(target)
+    bar.style.transform = fixedWidth ? `translateX(${g.x}px)` : inkTransform(g)
+    if (fixedWidth) bar.style.width = `${g.w}px`
+  }, [list, fixedWidth])
+  useLayoutEffect(() => {
+    place()
+    const bar = ink.current
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(() => { if (bar) bar.dataset.ready = '' }) : 0
+    return () => {
+      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [place])
+  useLayoutEffect(() => {
+    place()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  useEffect(() => {
+    const root = list.current
+    if (!root || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(place)
+    ro.observe(root)
+    root.querySelectorAll('[role="tab"], [role="option"]').forEach((e) => ro.observe(e))
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return ink
+}
+
 // ---------------------------------------------------------------- roving focus
 
 // One tab stop per container; arrow keys move between its [data-rv] controls.
@@ -135,18 +194,17 @@ function useRoving(ref: RefObject<HTMLElement | null>) {
 // (so the panel's own horizontal scroll cannot clip it and the viewer's
 // --de-* variables still reach it). Esc / outside click / Tab close it.
 function Popover({
-  anchor, ctx, onClose, children, role, label, className,
+  pop, ctx, children, role, label, className,
 }: {
-  anchor: RefObject<HTMLElement | null>
+  pop: PopoverHandle
   ctx: Ctx
-  onClose(refocus: boolean): void
   children: ReactNode
   role: 'listbox' | 'menu' | 'dialog'
   label: string
   className?: string
 }) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const { anchor, popRef: ref, close: onClose } = pop
+  const [pos, setPos] = useState<{ left: number; top: number; origin: number } | null>(null)
   useLayoutEffect(() => {
     const a = anchor.current
     const p = ref.current
@@ -155,8 +213,8 @@ function Popover({
     const ar = a.getBoundingClientRect()
     const br = b.getBoundingClientRect()
     const left = Math.max(4, Math.min(ar.left - br.left, br.width - p.offsetWidth - 4))
-    setPos({ left, top: ar.bottom - br.top + 4 })
-  }, [anchor, ctx.boundary])
+    setPos({ left, top: ar.bottom - br.top + 4, origin: popoverOriginX(ar.left - br.left, ar.width, left, p.offsetWidth) })
+  }, [anchor, ref, ctx.boundary])
   // Focus the selected (or first) item once the popover is placed and visible.
   const placed = pos !== null
   const popItems = (): HTMLElement[] => {
@@ -209,12 +267,13 @@ function Popover({
     e.stopPropagation()
     items[next]?.focus()
   }
-  const style: CSSProperties = pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, visibility: 'hidden' }
+  const style: CSSProperties = pos ? { left: pos.left, top: pos.top, transformOrigin: `${pos.origin}px 0` } : { left: 0, top: 0, visibility: 'hidden' }
   return (
     <div
       ref={ref}
       className={`de-r-pop${className ? ' ' + className : ''}`}
       data-pop-root=""
+      data-state={pop.state}
       role={role}
       aria-label={label}
       style={style}
@@ -296,12 +355,16 @@ function usePopover() {
   const [open, setOpen] = useState(false)
   const anchor = useRef<HTMLSpanElement | null>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
+  const popRef = useRef<HTMLDivElement | null>(null)
   const close = useCallback((refocus: boolean) => {
     setOpen(false)
     if (refocus) trigger.current?.focus()
   }, [])
-  return { open, setOpen, anchor, trigger, close }
+  // The popover stays mounted (data-state="closed") while its exit animation plays.
+  const presence = usePresence(open, popRef)
+  return { open, setOpen, anchor, trigger, close, popRef, mounted: presence.mounted, state: presence.state, gen: presence.gen }
 }
+type PopoverHandle = ReturnType<typeof usePopover>
 
 function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
@@ -337,8 +400,8 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
         {showText && <span className="de-rsel-text" style={{ fontFamily: current?.preview?.family }}>{current?.label ?? item.value}</span>}
         <Chevron />
       </button>
-      {pop.open && (
-        <Popover anchor={pop.anchor} ctx={ctx} onClose={pop.close} role="listbox" label={item.label}>
+      {pop.mounted && (
+        <Popover key={pop.gen} pop={pop} ctx={ctx} role="listbox" label={item.label}>
           <OptionList
             options={item.options}
             value={item.value}
@@ -354,15 +417,22 @@ function SelectControl({ item, ctx }: { item: RibbonSelect; ctx: Ctx }) {
   )
 }
 
+// The selected tile's accent outline: one bar that slides to the new tile.
+function GalleryInk({ list, value, count }: { list: RefObject<HTMLElement | null>; value: string; count: number }) {
+  const ink = useInk(list, (root) => root.querySelector<HTMLElement>('[aria-selected="true"]'), [value, count], true)
+  return <span ref={ink} className="de-gal-ink" aria-hidden="true" />
+}
+
 function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
   const Icon = resolveIcon(item.icon, ctx.icons)
   const pop = usePopover()
+  const galRef = useRef<HTMLSpanElement | null>(null)
   const pick = (v: string) => {
     pop.close(false)
     ctx.run(() => item.onChange(v))
   }
   const list = (
-    <Popover anchor={pop.anchor} ctx={ctx} onClose={pop.close} role="listbox" label={item.label} className="de-r-pop-gallery">
+    <Popover key={pop.gen} pop={pop} ctx={ctx} role="listbox" label={item.label} className="de-r-pop-gallery">
       <OptionList options={item.options} value={item.value} strength={0.8} onPick={pick} />
     </Popover>
   )
@@ -387,7 +457,7 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
           <Icon size={16} />
           <Chevron />
         </button>
-        {pop.open && list}
+        {pop.mounted && list}
       </span>
     )
   }
@@ -395,7 +465,8 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
   return (
     <span className="de-r-anchor" ref={pop.anchor}>
       <span data-component="ribbon-gallery" className="de-gal-wrap">
-        <span role="listbox" aria-label={item.label} className="de-gal">
+        <span ref={galRef} role="listbox" aria-label={item.label} className="de-gal">
+        <GalleryInk list={galRef} value={item.value} count={tiles.length} />
         {tiles.map((o) => {
           const look = previewLook(o.preview, 0.25)
           return (
@@ -444,7 +515,7 @@ function GalleryControl({ item, ctx }: { item: RibbonGallery; ctx: Ctx }) {
           <Chevron />
         </button>
       </span>
-      {pop.open && list}
+      {pop.mounted && list}
     </span>
   )
 }
@@ -522,8 +593,8 @@ function NumberControl({ item, ctx }: { item: RibbonNumber; ctx: Ctx }) {
       >
         <Icon size={16} />
       </button>
-      {pop.open && (
-        <Popover anchor={pop.anchor} ctx={ctx} onClose={pop.close} role="dialog" label={item.label}>
+      {pop.mounted && (
+        <Popover key={pop.gen} pop={pop} ctx={ctx} role="dialog" label={item.label}>
           <span className="de-rnum-wrap">
             <NumberInput item={item} ctx={ctx} />
             <span className="de-rnum-unit">{item.unit}</span>
@@ -561,8 +632,8 @@ function ColorControl({ item, ctx }: { item: RibbonColor; ctx: Ctx }) {
         <Icon size={16} />
         <span className="de-rcolor-bar" style={item.value ? { background: item.value } : undefined} data-auto={item.value ? undefined : ''} />
       </button>
-      {pop.open && (
-        <Popover anchor={pop.anchor} ctx={ctx} onClose={pop.close} role="dialog" label={item.label} className="de-r-pop-swatches">
+      {pop.mounted && (
+        <Popover key={pop.gen} pop={pop} ctx={ctx} role="dialog" label={item.label} className="de-r-pop-swatches">
           <div className="de-swatches">
             {item.swatches.map((c) => (
               <button
@@ -607,7 +678,7 @@ function Control({ item, ctx, brk }: { item: RibbonItem; ctx: Ctx; brk?: boolean
 
 // ---------------------------------------------------------------- groups & tabs
 
-function Group({ group, ctx }: { group: RibbonGroup; ctx: Ctx }) {
+function Group({ group, ctx, index }: { group: RibbonGroup; ctx: Ctx; index: number }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const rv = useRoving(ref)
   const twoRows = group.items.some((i) => i.kind === 'select' || i.kind === 'number')
@@ -622,6 +693,7 @@ function Group({ group, ctx }: { group: RibbonGroup; ctx: Ctx }) {
       data-rows={twoRows ? 2 : 1}
       data-gallery={hasGallery || undefined}
       className="de-rg"
+      style={{ '--i': index } as CSSProperties}
       onFocus={rv.onFocus}
       onKeyDown={rv.onKeyDown}
     >
@@ -673,8 +745,8 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
           >
             <MoreGlyph />
           </button>
-          {pop.open && (
-            <Popover anchor={pop.anchor} ctx={ctx} onClose={pop.close} role="dialog" label="More commands" className="de-r-pop-more">
+          {pop.mounted && (
+            <Popover key={pop.gen} pop={pop} ctx={ctx} role="dialog" label="More commands" className="de-r-pop-more">
               <div className="de-more-grid">
                 {overflow.map((item) => (
                   <Control key={item.id} item={item} ctx={ctx} />
@@ -688,6 +760,12 @@ function NarrowRow({ ribbon, ctx, width, label }: { ribbon: RibbonData; ctx: Ctx
   )
 }
 
+// The active tab's underline: one bar that slides between tabs.
+function TabInk({ list, tabs, active }: { list: RefObject<HTMLElement | null>; tabs: RefObject<(HTMLButtonElement | null)[]>; active: number }) {
+  const ink = useInk(list, () => tabs.current[active] ?? null, [active])
+  return <span ref={ink} className="de-rtab-ink" aria-hidden="true" />
+}
+
 export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', notices }: RibbonProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = useWidth(rootRef)
@@ -695,6 +773,11 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
   const narrow = isNarrow(width, wasNarrow.current)
   wasNarrow.current = narrow
   const [notice, setNotice] = useState<string | null>(null)
+  // the notice line slides in and out: keep its text while the exit plays
+  const noteRef = useRef<HTMLSpanElement | null>(null)
+  const notePresence = usePresence(notice !== null, noteRef)
+  const lastNotice = useRef('')
+  if (notice !== null) lastNotice.current = notice
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const off = (notices ? notices.subscribe : subscribeRibbonNotices)((m) => {
@@ -710,6 +793,23 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
   const uid = useId()
   const [tabId, setTabId] = useState<string>(ribbon.tabs[0]?.id ?? '')
   const tab = ribbon.tabs.find((t) => t.id === tabId) ?? ribbon.tabs[0]
+  // motion only after the first user-driven change: the ribbon does not animate in on mount
+  const [moved, setMoved] = useState(false)
+  const selectTab = (id: string) => {
+    if (id === tab?.id) return
+    setMoved(true)
+    setTabId(id)
+  }
+  // the tabs <-> icon-row swap fades in; the very first measurement (width 0 -> real) is not a swap
+  const wasNarrowOnce = useRef(narrow)
+  const prevWidth = useRef(0)
+  const [swapped, setSwapped] = useState(false)
+  if (wasNarrowOnce.current !== narrow) {
+    wasNarrowOnce.current = narrow
+    if (prevWidth.current > 0) setSwapped(true)
+  }
+  prevWidth.current = width
+  const tabListRef = useRef<HTMLDivElement | null>(null)
   const doneRef = useRef(onDone)
   doneRef.current = onDone
   const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || '')
@@ -731,17 +831,19 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
     const next = rovingIndex(e.key === 'ArrowUp' || e.key === 'ArrowDown' ? '' : e.key, at, ribbon.tabs.length)
     if (next === null) return
     e.preventDefault()
-    setTabId(ribbon.tabs[next].id)
+    selectTab(ribbon.tabs[next].id)
     tabRefs.current[next]?.focus()
   }
   if (!tab) return null
   return (
     <div ref={rootRef} className="de-ribbon" data-component="ribbon" data-narrow={narrow || undefined}>
+      <div className="de-rlayout" key={narrow ? 'narrow' : 'wide'} data-swap={swapped || undefined}>
       {narrow ? (
         <NarrowRow ribbon={ribbon} ctx={ctx} width={width} label={label} />
       ) : (
         <>
-          <div role="tablist" aria-label={label} className="de-rtabs" onKeyDown={onTabKey}>
+          <div ref={tabListRef} role="tablist" aria-label={label} className="de-rtabs" onKeyDown={onTabKey}>
+            <TabInk list={tabListRef} tabs={tabRefs} active={ribbon.tabs.findIndex((t) => t.id === tab.id)} />
             {ribbon.tabs.map((t, i) => (
               <button
                 key={t.id}
@@ -757,7 +859,7 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
                 data-component="ribbon-tab"
                 className="de-rtab"
                 onMouseDown={prevent}
-                onClick={() => setTabId(t.id)}
+                onClick={() => selectTab(t.id)}
               >
                 {t.label}
               </button>
@@ -769,21 +871,26 @@ export default function Ribbon({ ribbon, icons, onDone, label = 'Formatting', no
             aria-labelledby={`${uid}-tab-${tab.id}`}
             className="de-rpanel"
           >
-            <PanelToolbar tab={tab} ctx={ctx} />
+            <PanelToolbar tab={tab} ctx={ctx} animate={moved} />
           </div>
         </>
       )}
-      <div className="de-r-status" role="status" aria-live="polite">{notice}</div>
+      </div>
+      <div className="de-r-status" role="status" aria-live="polite">
+        {notePresence.mounted && (
+          <span key={notePresence.gen} ref={noteRef} className="de-r-note" data-state={notePresence.state}>{lastNotice.current}</span>
+        )}
+      </div>
     </div>
   )
 }
 
 // The toolbar of one tab: groups side by side. Group-level roving lives in Group.
-function PanelToolbar({ tab, ctx }: { tab: RibbonData['tabs'][number]; ctx: Ctx }) {
+function PanelToolbar({ tab, ctx, animate }: { tab: RibbonData['tabs'][number]; ctx: Ctx; animate: boolean }) {
   return (
-    <div role="toolbar" aria-label={tab.label} aria-orientation="horizontal" className="de-rtoolbar">
-      {tab.groups.map((g) => (
-        <Group key={g.id} group={g} ctx={ctx} />
+    <div role="toolbar" key={tab.id} data-anim={animate || undefined} aria-label={tab.label} aria-orientation="horizontal" className="de-rtoolbar">
+      {tab.groups.map((g, i) => (
+        <Group key={g.id} group={g} ctx={ctx} index={i} />
       ))}
     </div>
   )

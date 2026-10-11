@@ -4,7 +4,12 @@
    names (ribbon, ribbon-tab, ribbon-group, ribbon-button, ribbon-select,
    ribbon-gallery) carry these fallbacks, so a shell theme can restyle them
    later without the generic pill/tool-row look leaking in.
-   Sizes are px for the fixed control grid; radius derives from --de-radius-sm. */
+   Sizes are px for the fixed control grid; radius derives from --de-radius-sm.
+   Motion: every duration, easing and distance is a custom property defined once
+   in ../motion.css (--m-fast, --m-med, --m-out, --de-ease, --m-rise ...), so a
+   host can retune or zero it (--de-motion-scale) and prefers-reduced-motion
+   strips the transforms; only transform, opacity, colours and outline-color
+   are animated (motionStyles.test.ts). */
 
 .de-ribbon {
   --r-rule: color-mix(in srgb, var(--de-rule) 55%, transparent);
@@ -15,6 +20,8 @@
   --r-pressed-hover: color-mix(in srgb, var(--de-accent) 22%, transparent);
   --r-radius: calc(var(--de-radius-sm) * 0.5);
   --r-surface: color-mix(in srgb, var(--de-page) 96%, transparent);
+  /* the shared control transition: hover/toggle tint, icon colour, disabled fade, focus ring, press */
+  --r-t-ui: background-color var(--m-fast) var(--de-ease), color var(--m-fast) var(--de-ease), outline-color var(--m-fast) var(--de-ease), opacity var(--m-fast) var(--de-ease), transform var(--m-fast) var(--de-ease);
 
   position: relative;
   z-index: 3;
@@ -39,14 +46,21 @@
   stroke-width: 1.6;
 }
 
-.de-ribbon :focus-visible {
-  outline: 2px solid var(--de-accent);
+/* The ring is always laid out, transparent, so it can fade in (and shows in forced-colors mode). */
+.de-ribbon button,
+.de-ribbon input {
+  outline: 2px solid transparent;
   outline-offset: -2px;
+}
+
+.de-ribbon :focus-visible {
+  outline-color: var(--de-accent);
 }
 
 /* ---- tabs */
 
 .de-rtabs {
+  position: relative;
   display: flex;
   gap: 2px;
   height: 28px;
@@ -63,7 +77,28 @@
   background: none;
   color: var(--de-text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: var(--r-t-ui);
+}
+
+/* One bar under the active tab, 1px wide and stretched by scaleX (no layout
+   property animates); the first placement is instant, later ones slide. */
+.de-rtab-ink {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 2px;
+  background: var(--de-accent);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.de-rtab-ink[data-ready] {
+  transition: transform var(--m-med) var(--de-ease), opacity var(--m-fast) var(--de-ease);
+}
+
+.de-rtab-ink[data-hidden] {
+  opacity: 0;
 }
 
 .de-rtab:hover {
@@ -72,7 +107,11 @@
 
 .de-rtab[aria-selected='true'] {
   color: var(--de-text);
-  border-bottom-color: var(--de-accent);
+}
+
+/* The tabs <-> icon-row swap fades the incoming layout in (after the first real swap). */
+.de-rlayout[data-swap] {
+  animation: de-fade-in var(--m-med) var(--de-ease) backwards;
 }
 
 /* ---- panel and groups */
@@ -98,6 +137,13 @@
   display: flex;
   flex-direction: column;
   padding: 4px 8px 0;
+}
+
+/* A tab's groups ease in one after the other (the panel height is fixed, so nothing jumps).
+   No forwards fill: a held transform would turn each group into the popovers' containing block. */
+.de-rtoolbar[data-anim] .de-rg {
+  animation: de-group-in var(--m-fast) var(--de-ease) backwards;
+  animation-delay: calc(min(var(--i, 0), 4) * var(--m-stagger));
 }
 
 .de-rg + .de-rg {
@@ -177,7 +223,7 @@
   border-radius: var(--r-radius);
   background: none;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: var(--r-t-ui);
 }
 
 .de-rb:hover:not(:disabled),
@@ -192,6 +238,14 @@
 .de-r-opt[aria-selected='true'] {
   background: var(--r-pressed);
   color: var(--de-accent);
+}
+
+/* Pressed: a quick scale-down that settles back on release. */
+.de-rb:active:not(:disabled),
+.de-rsel:active:not(:disabled),
+.de-gal-tile:active:not(:disabled),
+.de-gal-more:active:not(:disabled) {
+  transform: scale(var(--m-press));
 }
 
 .de-rb[aria-pressed='true']:hover:not(:disabled) {
@@ -235,7 +289,7 @@
   border-radius: var(--r-radius);
   background: none;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: var(--r-t-ui);
 }
 
 .de-rsel[data-compact] {
@@ -276,6 +330,7 @@
   border-radius: var(--r-radius);
   background: none;
   text-align: center;
+  transition: var(--r-t-ui);
 }
 
 .de-rnum-unit {
@@ -308,12 +363,37 @@
 }
 
 .de-gal {
+  position: relative;
   display: inline-flex;
   align-items: stretch;
   gap: 2px;
 }
 
+/* The selected tile's accent outline is one bar that slides to the new tile
+   (width is set to the tile's, tiles are all one width, so it only translates). */
+.de-gal-ink {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  box-sizing: border-box;
+  width: 0;
+  border: 1px solid var(--de-accent);
+  border-radius: var(--r-radius);
+  background: var(--r-selected);
+  pointer-events: none;
+}
+
+.de-gal-ink[data-ready] {
+  transition: transform var(--m-med) var(--de-ease), opacity var(--m-fast) var(--de-ease);
+}
+
+.de-gal-ink[data-hidden] {
+  opacity: 0;
+}
+
 .de-gal-tile {
+  position: relative;
   appearance: none;
   display: flex;
   align-items: center;
@@ -324,12 +404,12 @@
   border-radius: var(--r-radius);
   background: none;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: var(--r-t-ui);
 }
 
-.de-gal-tile[aria-selected='true'] {
-  border-color: var(--de-accent);
-  background: var(--r-selected);
+/* a 1px lift on hover at most; the selected outline lives on .de-gal-ink */
+.de-gal-tile:hover:not(:disabled):not(:active) {
+  transform: translateY(calc(var(--m-lift) * -1));
 }
 
 .de-gal-name {
@@ -350,6 +430,7 @@
   border-radius: var(--r-radius);
   background: none;
   cursor: pointer;
+  transition: var(--r-t-ui);
 }
 
 /* ---- popovers */
@@ -369,6 +450,17 @@
   border: 1px solid var(--r-line);
   border-radius: var(--r-radius);
   box-shadow: none;
+  /* lists open downward: settle down 4px, grow from the trigger (transform-origin is set inline) */
+  --m-pop-dir: -1;
+}
+
+.de-r-pop[data-state='open'] {
+  animation: de-pop-in var(--m-fast) var(--de-ease) backwards;
+}
+
+.de-r-pop[data-state='closed'] {
+  animation: de-pop-out var(--m-out) var(--de-ease) forwards;
+  pointer-events: none;
 }
 
 .de-r-pop-gallery {
@@ -386,6 +478,7 @@
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
+  transition: var(--r-t-ui);
 }
 
 .de-swatches {
@@ -403,6 +496,7 @@
   border: 1px solid var(--r-line);
   border-radius: var(--r-radius);
   cursor: pointer;
+  transition: var(--r-t-ui);
 }
 
 .de-swatch[aria-pressed='true'] {
@@ -446,4 +540,17 @@
   padding: 0;
   border-top: 0;
   overflow: hidden;
+}
+
+/* The notice slides in under the tabs and out again; the line collapses once it is gone. */
+.de-r-note {
+  display: block;
+}
+
+.de-r-note[data-state='open'] {
+  animation: de-note-in var(--m-fast) var(--de-ease) backwards;
+}
+
+.de-r-note[data-state='closed'] {
+  animation: de-note-out var(--m-out) var(--de-ease) forwards;
 }

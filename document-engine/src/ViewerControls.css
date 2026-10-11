@@ -15,7 +15,8 @@
      --viewer-control-hover-bg         button hover tint
      --viewer-control-idle-opacity     opacity when nothing is near (0.5)
      --viewer-control-viewer-opacity   opacity while the pointer is over the viewer (0.75)
-     --viewer-control-menu-bg          popover surface */
+     --viewer-control-menu-bg          popover surface
+   Motion comes from ./motion.css (--de-motion-scale, --de-motion-fast, ...). */
 
 .document-viewer-toolbar {
   --vc-bg: var(--viewer-control-bg, color-mix(in srgb, var(--de-page) 70%, transparent));
@@ -36,17 +37,21 @@
   font-size: 12px;
   line-height: 1;
   opacity: var(--viewer-control-idle-opacity, 0.5);
-  transition: opacity 0.18s ease;
+  /* resting 2px low; settles into place when the pointer is over the viewer / the controls */
+  transform: translateY(var(--m-nudge));
+  transition: opacity var(--m-med) var(--de-ease), transform var(--m-med) var(--de-ease);
 }
 
 .document-viewer:hover .document-viewer-toolbar {
   opacity: var(--viewer-control-viewer-opacity, 0.75);
+  transform: none;
 }
 
 .document-viewer .document-viewer-toolbar:hover,
 .document-viewer .document-viewer-toolbar:focus-within,
 .document-viewer .document-viewer-toolbar:has([data-open]) {
   opacity: 1;
+  transform: none;
 }
 
 .document-viewer-zoom,
@@ -65,7 +70,7 @@
   background: var(--vc-bg);
   color: var(--vc-fg);
   box-shadow: none;
-  transition: border-color 0.18s ease, color 0.18s ease;
+  transition: border-color var(--m-med) var(--de-ease), color var(--m-med) var(--de-ease);
 }
 
 .document-viewer-zoom-control:hover,
@@ -97,7 +102,11 @@
   background: none;
   color: inherit;
   font-size: 15px;
-  transition: background 0.12s ease;
+  transition: background-color var(--m-fast) var(--de-ease), outline-color var(--m-fast) var(--de-ease), transform var(--m-fast) var(--de-ease);
+}
+
+.document-viewer-zoom-control button:active {
+  transform: scale(var(--m-press));
 }
 
 .document-viewer-zoom-control button:hover {
@@ -117,12 +126,17 @@
   width: 24px;
 }
 
+.document-viewer-zoom-control button,
+.document-viewer-settings > button {
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+}
+
 .document-viewer-zoom-control button:focus-visible,
 .document-viewer-settings > button:focus-visible,
 .document-viewer-zoom-menu button:focus-visible,
 .document-viewer-settings-menu button:focus-visible {
-  outline: 2px solid var(--de-accent);
-  outline-offset: -2px;
+  outline-color: var(--de-accent);
 }
 
 /* Popovers: flat, hairline, no glow; open upward from the bottom corner. */
@@ -142,7 +156,19 @@
   border-radius: var(--vc-radius);
   box-shadow: none;
   transform-origin: bottom right;
-  animation: document-viewer-pop-in 0.12s ease-out;
+}
+
+/* open: fade + 4px rise + a slight scale from the corner; closed: a faster fade (the element
+   stays mounted until it ends, Toolbar.tsx / usePresence). */
+.document-viewer-settings-menu[data-state='open'],
+.document-viewer-zoom-menu[data-state='open'] {
+  animation: de-pop-in var(--m-fast) var(--de-ease) backwards;
+}
+
+.document-viewer-settings-menu[data-state='closed'],
+.document-viewer-zoom-menu[data-state='closed'] {
+  animation: de-pop-out var(--m-out) var(--de-ease) forwards;
+  pointer-events: none;
 }
 
 .document-viewer-settings-menu button,
@@ -160,6 +186,9 @@
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: background-color var(--m-fast) var(--de-ease), color var(--m-fast) var(--de-ease), outline-color var(--m-fast) var(--de-ease);
 }
 
 .document-viewer-settings-menu button:hover,
@@ -180,18 +209,10 @@
   color: var(--de-text-muted);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .document-viewer-toolbar,
-  .document-viewer-settings-menu,
-  .document-viewer-zoom-menu {
-    transition: none;
-    animation: none;
-  }
-}
-
 /* Touch screens have no hover to wake the controls: rest a little stronger. */
 @media (hover: none) {
   .document-viewer-toolbar {
     opacity: var(--viewer-control-viewer-opacity, 0.75);
+    transform: none;
   }
 }

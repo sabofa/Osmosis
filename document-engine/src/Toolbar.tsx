@@ -4,6 +4,8 @@ import { initialMenuIndex, menuKeyAction } from './menuKeys'
 import type { IconSheetRef } from 'theme-core'
 import { resolveIcon } from './iconSheet'
 import { useScrollbarWidth } from './useScrollbarWidth'
+import { usePresence } from './ribbon/usePresence'
+import './motion.css'
 import './ViewerControls.css'
 
 const DEFAULT_ICONS: IconSheetRef = { kind: 'default' }
@@ -37,6 +39,9 @@ export function ZoomControl({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  // the menu stays mounted (data-state="closed") while its exit animation plays
+  const presence = usePresence(open, menuRef)
   useScrollbarWidth(rootRef)
 
   useEffect(() => {
@@ -107,8 +112,8 @@ export function ZoomControl({
           +
         </button>
       </div>
-      {open && (
-        <div className="document-viewer-zoom-menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
+      {presence.mounted && (
+        <div key={presence.gen} ref={menuRef} data-state={presence.state} className="document-viewer-zoom-menu" role="menu" aria-label="Zoom" onKeyDown={onMenuKeyDown}>
           {customPct !== null && (
             <div role="presentation" className="document-viewer-zoom-current" aria-hidden="true">
               {customPct}%
@@ -157,6 +162,8 @@ export function SettingsMenu({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const presence = usePresence(open, menuRef)
   const count = onDownload ? 2 : 1
   useScrollbarWidth(rootRef)
 
@@ -209,8 +216,8 @@ export function SettingsMenu({
       >
         <MenuIcon size={14} />
       </button>
-      {open && (
-        <div className="document-viewer-settings-menu" role="menu" aria-label="Document settings" onKeyDown={onMenuKeyDown}>
+      {presence.mounted && (
+        <div key={presence.gen} ref={menuRef} data-state={presence.state} className="document-viewer-settings-menu" role="menu" aria-label="Document settings" onKeyDown={onMenuKeyDown}>
           <button
             type="button"
             role="menuitem"
