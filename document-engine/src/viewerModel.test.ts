@@ -15,13 +15,19 @@ describe('capabilities', () => {
   it('view/full: settings but no highlighting', () => {
     expect(capabilities('view', 'full')).toEqual({
       selection: true, highlight: false, highlightPopover: false, settingsMenu: true,
-      layers: true, editStub: false, zoomControl: true,
+      layers: true, editStub: false, zoomControl: true, editorBar: false,
     })
   })
   it('edit under a host: no zoom control, settings menu or popover; standalone edit keeps them', () => {
     expect(capabilities('edit', 'full', true)).toMatchObject({ zoomControl: false, settingsMenu: false, highlightPopover: false })
     expect(capabilities('edit', 'full', false)).toMatchObject({ zoomControl: true, settingsMenu: true })
     expect(capabilities('annotate', 'full', true)).toMatchObject({ zoomControl: true, settingsMenu: true, highlightPopover: true })
+  })
+  it('editor command row: unhosted full-chrome edit only', () => {
+    const rows = (['view', 'annotate', 'edit'] as const).flatMap((i) =>
+      (['full', 'embedded'] as const).flatMap((c) => [false, true].map((h) => [`${i}/${c}/${h ? 'hosted' : 'bare'}`, capabilities(i, c, h).editorBar] as const))
+    )
+    expect(rows.filter((r) => r[1]).map((r) => r[0])).toEqual(['edit/full/bare'])
   })
   it('annotate/full: highlighting and popover', () => {
     expect(capabilities('annotate', 'full')).toMatchObject({ highlight: true, highlightPopover: true, settingsMenu: true, layers: true })

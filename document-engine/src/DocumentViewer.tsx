@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import type { EditorView } from '@codemirror/view'
+import MarkdownEditor from './editor/MarkdownEditor'
+import EditorCommandBar from './editor/EditorCommandBar'
+import { buildEditorCommands } from './editor/editorCommands'
 import PdfLayer from './PdfLayer'
 import SimplePdfPages from './SimplePdfPages'
 import TextContent from './TextContent'
@@ -94,6 +98,12 @@ export interface DocumentViewerProps {
   // for text. Fit modes are ignored for text; numbers are clamped to the
   // asset's range.
   initialZoom?: ZoomMode
+  // Edit mode over a text asset: with this set the viewer renders the
+  // Markdown editor (instead of the edit stub) and reports every text change.
+  // The asset's text stays the source of truth; hand the new text back down.
+  onTextChange?: (text: string) => void
+  // Keep the editor from changing the text (commands go disabled).
+  editorReadOnly?: boolean
 }
 
 // Plain text/markdown keeps a narrower numeric range and no fit modes.
@@ -141,6 +151,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   const isPdf = asset.mime === 'application/pdf'
   const isImage = !!asset.mime?.startsWith('image/')
   const isText = asset.type === 'text' || asset.mime === 'text/plain' || asset.mime === 'text/markdown'
+  const hasEditor = interaction === 'edit' && isText && !!props.onTextChange
   const usesPdfLayer = isPdf && !!asset.url && !embedded
   // null = the PDF layer's text has not arrived yet; '' = arrived, empty (scanned).
   const [pdfText, setPdfText] = useState<string | null>(null)
@@ -332,6 +343,25 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     if (highlights) setLocalHighlights(highlights)
   }, [highlights])
 
+  // The editor's view, re-read (animation-frame throttled) on selection and
+  // document changes so the published commands' enabled/active flags follow.
+  const [editorView, setEditorView] = useState<EditorView | null>(null)
+  const [, setEditorTick] = useState(0)
+  const editorRaf = useRef(0)
+  useEffect(() => () => cancelAnimationFrame(editorRaf.current), [])
+  const onEditorViewUpdate = useCallback(() => {
+    if (editorRaf.current) return
+    editorRaf.current = requestAnimationFrame(() => {
+      editorRaf.current = 0
+      setEditorTick((n) => n + 1)
+    })
+  }, [])
+  useEffect(() => {
+    if (!hasEditor) setEditorView(null)
+  }, [hasEditor])
+  // True while an IME composition is open in the editor (read by D2b).
+  const compositionActiveRef = useRef(false)
+
   const [pendingSelection, setPendingSelection] = useState<{ start: number; end: number; rect: DOMRect } | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -485,7 +515,28 @@ export default function DocumentViewer(props: DocumentViewerProps) {
   let body: ReactNode
   let sidePanel: ReactNode = null
 
-  if (embedded) {
+  if (hasEditor) {
+    body = (
+      <div className="document-viewer-editor">
+        <MarkdownEditor
+          key={props.editorReadOnly ? 'ro' : 'rw'}
+          value={text}
+          onChange={(t) => props.onTextChange?.(t)}
+          onReady={setEditorView}
+          onViewUpdate={onEditorViewUpdate}
+          highlights={localHighlights}
+          onHighlightsChange={(h) => {
+            setLocalHighlights(h)
+            onHighlightsChange?.(h)
+          }}
+          onCompositionChange={(c) => {
+            compositionActiveRef.current = c
+          }}
+          readOnly={props.editorReadOnly}
+        />
+      </div>
+    )
+  } else if (embedded) {
     if (isPdf && asset.url) body = <SimplePdfPages url={asset.url} onErrors={onErrors} scale={scale} onPageSizes={setPageSizes} />
     else if (isImage && asset.url) body = imageBody
     else if (isText) {
@@ -575,6 +626,7 @@ export default function DocumentViewer(props: DocumentViewerProps) {
     onToggleOverlays: () => setShowOverlays((v) => !v),
     onRemoveHighlight: removeHighlight,
     onDownload: handleDownload,
+    editorCommands: hasEditor ? buildEditorCommands(editorView, { readOnly: props.editorReadOnly }) : null,
     graph: expandable
       ? {
           canExpand: canExpandCommand(expand, graphCount),
@@ -588,16 +640,19 @@ export default function DocumentViewer(props: DocumentViewerProps) {
       : null,
   }
   useHostCommands(host, latest)
+  const showEditorBar = hasEditor && caps.editorBar
+  const showZoomControl = caps.zoomControl && !hasEditor
+  const showSettingsMenu = caps.settingsMenu && !hasEditor
 
   return (
     <div
       ref={rootRef}
-      className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}`}
+      className={`document-viewer document-viewer-mode-${embedded ? 'simple' : 'full'}${showEditorBar ? ' document-viewer-with-bar' : ''}`}
       data-mode={tokens.mode}
       style={cssVars as CSSProperties}
     >
       {!embedded && <style>{highlightCss}</style>}
-      {caps.editStub && (
+      {caps.editStub && !hasEditor && (
         <div className="document-viewer-edit-stub" data-component="well" role="status">
           {EDIT_STUB_MESSAGE}
         </div>
@@ -607,10 +662,11 @@ export default function DocumentViewer(props: DocumentViewerProps) {
           {gate.placeholder}
         </div>
       )}
+      {showEditorBar && <EditorCommandBar commands={latest.editorCommands ?? []} icons={iconRef} />}
       <div className={`document-viewer-scroll${gate.gated ? ' document-viewer-scroll-gated' : ''}${paged ? ' document-viewer-scroll-fit' : ''}`} ref={scrollRef}>
         <div
           className={`document-viewer-content${sidePanel ? ' document-viewer-content-split' : ''}${gate.contentHidden ? ' document-viewer-content-hidden' : ''}`}
-          style={paged ? undefined : { zoom: scale }}
+          style={paged || hasEditor ? undefined : { zoom: scale }}
           ref={contentRef}
           onMouseUp={handleMouseUp}
           aria-hidden={gate.contentHidden || undefined}
@@ -621,10 +677,10 @@ export default function DocumentViewer(props: DocumentViewerProps) {
         </div>
       </div>
 
-      {(caps.zoomControl || caps.settingsMenu) && (
+      {(showZoomControl || showSettingsMenu) && (
       <div className="document-viewer-toolbar" data-component="tool-row">
-        {caps.zoomControl && <ZoomControl icons={iconRef} zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />}
-        {caps.settingsMenu && (
+        {showZoomControl && <ZoomControl icons={iconRef} zoom={zoom} scale={scale} allowFit={paged} onZoomIn={zoomIn} onZoomOut={zoomOut} onSelect={(mode) => setZoom(mode)} />}
+        {showSettingsMenu && (
           <SettingsMenu
             icons={iconRef}
             showOverlays={showOverlays}

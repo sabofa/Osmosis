@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { buildCommands, commandsShape, type CommandState } from './commands'
 import { ICON_NAMES } from './iconSheet'
+import { buildEditorCommands } from './editor/editorCommands'
 
 function state(over: Partial<CommandState> = {}): CommandState {
   return {
@@ -37,6 +38,18 @@ describe('buildCommands matrix', () => {
   })
   it('edit offers only zoom and download', () => {
     expect(ids(state({ interaction: 'edit' }))).toEqual(['zoom-in', 'zoom-out', 'zoom-fit-width', 'zoom-fit-page', 'zoom-fit-height', 'download'])
+  })
+  it('edit over a text editor offers the editor commands and download, no zoom or graph', () => {
+    const editorCommands = buildEditorCommands(null)
+    const s = state({ interaction: 'edit', editorCommands, graph: { canExpand: true, canCollapse: false, onExpand: vi.fn(), onCollapse: vi.fn() } })
+    expect(ids(s)).toEqual([...editorCommands.map((c) => c.id), 'download'])
+    expect(ids(state({ interaction: 'edit', editorCommands, canDownload: false }))).toEqual(editorCommands.map((c) => c.id))
+    for (const c of buildCommands(s)) expect(ICON_NAMES as readonly string[]).toContain(c.icon)
+    expect(new Set(ids(s)).size).toBe(ids(s).length)
+  })
+  it('editor commands are ignored outside edit, and null keeps the zoom set', () => {
+    expect(ids(state({ editorCommands: buildEditorCommands(null) }))).toEqual(ids(state()))
+    expect(ids(state({ interaction: 'edit', editorCommands: null }))).toEqual(['zoom-in', 'zoom-out', 'zoom-fit-width', 'zoom-fit-page', 'zoom-fit-height', 'download'])
   })
   it('fit modes only when they apply; download only when one exists', () => {
     expect(ids(state({ allowFit: false, canDownload: false }))).toEqual(['zoom-in', 'zoom-out', 'highlights-toggle', 'highlight-remove'])

@@ -23,6 +23,10 @@ export interface CommandState {
   // Graph expand commands; absent/null when the text has no graph fences or
   // there is no renderGraph.
   graph?: GraphCommandState | null
+  // The text editor's commands (editor/editorCommands.ts), present only while
+  // a text asset is being edited. In that mode they replace the zoom and
+  // graph commands; download stays.
+  editorCommands?: ToolbarCommand[] | null
 }
 
 export interface GraphCommandState {
@@ -33,9 +37,15 @@ export interface GraphCommandState {
 }
 
 // What the viewer offers the host's toolbar. 'view' and embedded viewers
-// offer nothing; 'edit' offers zoom and download only (the editor adds its own).
+// offer nothing; 'edit' offers zoom and download, or, over a text editor, the
+// editor's commands and download.
 export function buildCommands(s: CommandState): ToolbarCommand[] {
   if (s.interaction === 'view' || s.chrome === 'embedded') return []
+  if (s.interaction === 'edit' && s.editorCommands) {
+    const cmds = [...s.editorCommands]
+    if (s.canDownload) cmds.push({ id: 'download', label: 'Download', icon: 'doc-download', group: 'file', enabled: true, active: false, run: s.onDownload })
+    return cmds
+  }
   const cmds: ToolbarCommand[] = [
     { id: 'zoom-in', label: 'Zoom in', icon: 'doc-zoom-in', group: 'view', enabled: !s.atMax, active: false, run: s.onZoomIn },
     { id: 'zoom-out', label: 'Zoom out', icon: 'doc-zoom-out', group: 'view', enabled: !s.atMin, active: false, run: s.onZoomOut },

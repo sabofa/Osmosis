@@ -2,7 +2,7 @@
 // font and size is a var(--de-*) reference; the host owns the sheet.
 import { EditorState, type Extension } from '@codemirror/state'
 import {
-  EditorView, keymap, drawSelection, rectangularSelection, crosshairCursor,
+  EditorView, keymap, drawSelection, rectangularSelection, crosshairCursor, type KeyBinding,
 } from '@codemirror/view'
 import {
   history, defaultKeymap, historyKeymap, indentMore, indentLess,
@@ -16,6 +16,8 @@ import { tags as t } from '@lezer/highlight'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
+  // Extra bindings, listed before every built-in one so they win.
+  extraKeymap?: KeyBinding[]
 }
 
 const LIST_NODES = new Set(['ListItem', 'BulletList', 'OrderedList'])
@@ -129,6 +131,7 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     editorTheme,
     // Earlier keymaps win: list Tab, line ops, search, brackets, then defaults.
     keymap.of([
+      ...(opts.extraKeymap ?? []),
       ...listIndentKeymap,
       ...lineOpsKeymap,
       ...searchKeymap,

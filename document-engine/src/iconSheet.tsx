@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import type { IconSheetRef } from 'theme-core'
-import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon, GraphExpandIcon, GraphCollapseIcon } from './icons'
+import { MenuIcon, ZoomInIcon, ZoomOutIcon, FitIcon, DownloadIcon, HighlightIcon, RemoveHighlightIcon, EyeIcon, CloseIcon, GraphExpandIcon, GraphCollapseIcon, BoldIcon, ItalicIcon, StrikeIcon, CodeIcon, LinkIcon, HeadingIcon, ListBulletIcon, ListNumberIcon, ListTaskIcon, QuoteIcon, UndoIcon, RedoIcon, SearchIcon } from './icons'
 
 export type IconComponent = ComponentType<{ size?: number }>
 
@@ -18,6 +18,19 @@ export const ICON_NAMES = [
   'doc-close',
   'graph-expand',
   'graph-collapse',
+  'doc-bold',
+  'doc-italic',
+  'doc-strike',
+  'doc-code',
+  'doc-link',
+  'doc-heading',
+  'doc-list-bullet',
+  'doc-list-number',
+  'doc-list-task',
+  'doc-quote',
+  'doc-undo',
+  'doc-redo',
+  'doc-search',
 ] as const
 
 export type IconName = (typeof ICON_NAMES)[number]
@@ -38,6 +51,19 @@ const DEFAULT_SHEET: Record<IconName, IconComponent> = {
   'doc-close': CloseIcon,
   'graph-expand': GraphExpandIcon,
   'graph-collapse': GraphCollapseIcon,
+  'doc-bold': BoldIcon,
+  'doc-italic': ItalicIcon,
+  'doc-strike': StrikeIcon,
+  'doc-code': CodeIcon,
+  'doc-link': LinkIcon,
+  'doc-heading': HeadingIcon,
+  'doc-list-bullet': ListBulletIcon,
+  'doc-list-number': ListNumberIcon,
+  'doc-list-task': ListTaskIcon,
+  'doc-quote': QuoteIcon,
+  'doc-undo': UndoIcon,
+  'doc-redo': RedoIcon,
+  'doc-search': SearchIcon,
 }
 
 // Harmless placeholder for a name nobody knows: an empty square.

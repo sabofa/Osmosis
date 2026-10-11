@@ -11,6 +11,10 @@ export interface Capabilities {
   // The viewer's own zoom control is drawn. False in edit mode under a host:
   // the host toolbar owns all chrome there.
   zoomControl: boolean
+  // The in-place editor command row: unhosted full-chrome edit only. (The
+  // viewer additionally requires an actual text editor.) Hosted edit draws
+  // its commands in the host toolbar instead.
+  editorBar: boolean
 }
 
 // Layers this viewer publishes to the host's layer controls.
@@ -36,6 +40,7 @@ export function capabilities(interaction: Interaction, chrome: Chrome, hosted = 
     layers: full,
     editStub: interaction === 'edit',
     zoomControl: !hostOwnsChrome,
+    editorBar: full && interaction === 'edit' && !hosted,
   }
 }
 

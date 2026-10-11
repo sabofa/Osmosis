@@ -5,6 +5,7 @@ import { Annotation, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import type { DocumentHighlight } from '../types'
 import { editorExtensions } from './extensions'
+import { editorKeymap } from './editorCommands'
 import { decideValueSync, remapHighlightsThroughChanges } from './editorSync'
 
 export interface MarkdownEditorProps {
@@ -14,6 +15,8 @@ export interface MarkdownEditorProps {
   highlights?: DocumentHighlight[]
   onHighlightsChange?(h: DocumentHighlight[]): void
   onCompositionChange?(composing: boolean): void
+  // Fired on every document or selection change (the viewer throttles it).
+  onViewUpdate?(view: EditorView): void
   readOnly?: boolean
   autoFocus?: boolean
 }
@@ -47,7 +50,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
       state: EditorState.create({
         doc: propsRef.current.value,
         extensions: [
-          editorExtensions({ readOnly: propsRef.current.readOnly }),
+          editorExtensions({ readOnly: propsRef.current.readOnly, extraKeymap: editorKeymap() }),
           EditorView.domEventHandlers({
             compositionstart: () => {
               composingRef.current = true
@@ -68,8 +71,9 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
             },
           }),
           EditorView.updateListener.of((u) => {
-            if (!u.docChanged) return
             const p = propsRef.current
+            if (u.docChanged || u.selectionSet) p.onViewUpdate?.(u.view)
+            if (!u.docChanged) return
             const oldText = u.startState.doc.toString()
             const newText = u.state.doc.toString()
             const hs = highlightsRef.current

@@ -741,3 +741,67 @@
 .document-viewer-zoom-menu button[aria-checked='true'] {
   background: var(--menu-hover, var(--de-chrome-hover));
 }
+
+/* Unhosted edit: the in-place editor command row and the editor surface. */
+.document-viewer-editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--de-rule);
+}
+
+.document-viewer-editor-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.document-viewer-editor-bar-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--de-rule);
+}
+
+.document-viewer-editor-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  background: var(--chip-bg, var(--de-chrome-control-bg));
+  border-radius: var(--chip-radius, var(--de-chrome-radius-pill));
+}
+
+.document-viewer-editor-bar-btn:hover:not(:disabled) {
+  background: var(--menu-hover, var(--de-chrome-hover));
+}
+
+.document-viewer-editor-bar-btn[aria-pressed='true'] {
+  color: var(--de-accent);
+}
+
+.document-viewer-editor-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.document-viewer-editor {
+  padding: 1em;
+}
+
+.document-viewer-with-bar {
+  display: flex;
+  flex-direction: column;
+}
+
+.document-viewer-with-bar > .document-viewer-scroll {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
