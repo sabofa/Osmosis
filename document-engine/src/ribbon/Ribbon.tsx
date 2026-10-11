@@ -88,7 +88,7 @@ function useRoving(ref: RefObject<HTMLElement | null>) {
   const controls = useCallback((): HTMLElement[] => {
     const root = ref.current
     if (!root) return []
-    return [...root.querySelectorAll<HTMLElement>('[data-rv]')].filter(
+    return Array.from(root.querySelectorAll<HTMLElement>('[data-rv]')).filter(
       (e) => !(e as HTMLButtonElement).disabled && !e.closest('[data-pop-root]'),
     )
   }, [ref])
@@ -185,7 +185,7 @@ function Popover({
       onClose(true)
       return
     }
-    const items = [...(ref.current?.querySelectorAll<HTMLElement>('[data-pop]') ?? [])]
+    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-pop]') ?? [])
     const target = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')
     if (!items.length || (e.target as HTMLElement).tagName === 'INPUT') return
     const next = rovingIndex(e.key, target ? items.indexOf(target) : -1, items.length)

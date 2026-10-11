@@ -597,7 +597,7 @@ export default function ReviewPage(): ReactNode {
   useEffect(() => {
     const vars = TYPO[q.get('typo') ?? '']
     if (!vars) return
-    for (const r of document.querySelectorAll<HTMLElement>('.document-viewer')) {
+    for (const r of Array.from(document.querySelectorAll<HTMLElement>('.document-viewer'))) {
       for (const [k, v] of Object.entries(vars)) r.style.setProperty(k, v)
     }
   })
