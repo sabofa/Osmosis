@@ -4,7 +4,7 @@ import { centreText, cursorText, focusLineFor, itemForId, toolCorner } from './f
 import { figureMapping, type FigureFrame } from './figure/frame'
 import { highlightAccent, highlightOf, highlightOverlay, outermostMatches, selectedItems } from './figure/highlight'
 import type { FigureHitItem, FigureTarget } from './figure/hitItems'
-import { splitFigureSvg, type LayerSpec } from './figure/layers'
+import { splitFigureSvg } from './figure/layers'
 import { compensatedSize, parseViewBox } from './figure/viewport'
 import { fittedCamera } from './view2d/camera'
 import { applySvgViewBox } from './view2d/dom/appliers'
@@ -52,6 +52,12 @@ export interface FigureViewProps {
   // Every selected item, in the order they were selected (a click selects one,
   // shift + click adds or removes); empty when nothing is selected.
   onSelect?(selection: FigureSelection[]): void
+  // How strongly the paper and its grid are drawn, 0..1 (default 1): the
+  // workspace's graph-paper and graph-grid alphas, so the frame's ambience can
+  // show through the paper while the drawing, points and labels stay solid.
+  // Changing them redraws from the painted tiles; nothing is repainted.
+  paperAlpha?: number
+  gridAlpha?: number
 }
 
 // Which attribute carries a size that must not grow with the view, and what
@@ -94,14 +100,14 @@ function compensate(root: SVGSVGElement, zoom: number, previous: Compensation | 
   return { root, entries }
 }
 
-// The figure is drawn in two parts. Everything that scales with the view (the
-// paper, the shading, the lines and marks) is painted into tiles and kept, and
-// a moving view only places them (view2d/dom/svgTiles.ts): a styled figure is
-// far too dear to repaint on every frame of a drag. What keeps its size on the
-// screen (points and labels, which are few and plain) stays a live <svg> over
-// the tiles, given the window on every frame, so it is always sharp.
-const TILED: LayerSpec = { name: 'tiled', groups: ['paper', 'regions', 'auxiliary', 'primary', 'marks'], commit: 'rest', overscan: 0 }
-const LIVE: LayerSpec = { name: 'live', groups: ['points', 'labels'], commit: 'motion', overscan: 0 }
+// The figure is drawn in layers (figure/layers.ts). Everything that scales
+// with the view (the paper, its grid, and the drawing itself) is painted into
+// tiles and kept, each its own plane with its own alpha, and a moving view
+// only places them (view2d/dom/svgTiles.ts): a styled figure is far too dear
+// to repaint on every frame of a drag. What keeps its size on the screen
+// (points and labels, which are few and plain) stays a live <svg> over the
+// tiles, given the window on every frame, so it is always sharp.
+const TILED_PLANES = ['paper', 'grid', 'content'] as const
 
 // The part of the drawing's plane worth painting: the content frame and four
 // times its size again on every side (paper reaches well past the frame; the
@@ -113,12 +119,19 @@ const tileExtent = (frame: Rect): Rect => {
 
 const NONE: readonly string[] = []
 
-export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect }: FigureViewProps) {
+export default function FigureView({ svg, theme, frame, items, startFocus, focus, coordinates, givens = 'top-left', onSelect, paperAlpha = 1, gridAlpha = 1 }: FigureViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const tilesHostRef = useRef<HTMLDivElement | null>(null)
 
-  const parts = useMemo(() => splitFigureSvg(svg, [TILED, LIVE]), [svg])
-  const tiledSvg = parts.find((part) => part.name === 'tiled')?.svg ?? null
+  const parts = useMemo(() => splitFigureSvg(svg), [svg])
+  // The tiled planes this figure has (a clean figure has no grid), bottom first.
+  const planes = useMemo(
+    () => TILED_PLANES.flatMap((name) => parts.filter((part) => part.name === name).map((part) => ({ name, svg: part.svg }))),
+    [parts],
+  )
+  const alphaOf = useCallback((name: string) => (name === 'paper' ? paperAlpha : name === 'grid' ? gridAlpha : 1), [paperAlpha, gridAlpha])
+  const alphaRef = useRef(alphaOf)
+  alphaRef.current = alphaOf
 
   // Stable across renders, and that identity is load-bearing rather than a
   // micro-optimisation: React compares the dangerouslySetInnerHTML *object*,
@@ -175,8 +188,12 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
   // at once.
   useLayoutEffect(() => {
     const host = tilesHostRef.current
-    if (!host || !tiledSvg || !content) return
-    const layer = new SvgTiles(tiledSvg, content, tileExtent(content))
+    if (!host || planes.length === 0 || !content) return
+    const layer = new SvgTiles(
+      planes.map((plane) => ({ svg: plane.svg, alpha: alphaRef.current(plane.name) })),
+      content,
+      tileExtent(content),
+    )
     host.appendChild(layer.canvas)
     tiles.current = layer
     const last = applied.current
@@ -185,7 +202,12 @@ export default function FigureView({ svg, theme, frame, items, startFocus, focus
       layer.dispose()
       if (tiles.current === layer) tiles.current = null
     }
-  }, [tiledSvg, content, paint])
+  }, [planes, content, paint])
+
+  // The alphas: redrawn from the painted tiles.
+  useEffect(() => {
+    planes.forEach((plane, i) => tiles.current?.setAlpha(i, alphaOf(plane.name)))
+  }, [planes, alphaOf])
 
   const view = useView2d({
     frame: content,

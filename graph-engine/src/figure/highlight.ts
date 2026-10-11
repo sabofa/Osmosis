@@ -114,8 +114,11 @@ function shapeElement(shape: HitShape, id: string): { tag: 'path'; d: string; po
       return { tag: 'path', d: pathOf([shape.a, shape.b], false), point: false }
     case 'polyline':
       return shape.points.length < 2 ? null : { tag: 'path', d: pathOf(shape.points, shape.closed), point: false }
-    case 'polygon':
-      return shape.points.length < 3 ? null : { tag: 'path', d: pathOf(shape.points, true), point: false }
+    case 'polygon': {
+      // Each drawn loop on its own; the hit polygon's bridges are not lines.
+      const rings = (shape.rings ?? [shape.points]).filter((ring) => ring.length >= 3)
+      return rings.length === 0 ? null : { tag: 'path', d: rings.map((ring) => pathOf(ring, true)).join(''), point: false }
+    }
     case 'circle':
       return { tag: 'circle', at: shape.center, r: shape.radius }
     case 'arc': {

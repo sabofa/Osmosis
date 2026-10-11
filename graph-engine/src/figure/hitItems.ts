@@ -48,6 +48,8 @@ export interface FigureHitInput {
 
 // A curved edge is sampled at this many segments, a whole ellipse at twice.
 const CURVE_SEGMENTS = 24
+// Arcs in a drawn outline (a highlight) are cut finer: it is seen, not tested.
+const DRAWN_CURVE_SEGMENTS = 96
 const ELLIPSE_SEGMENTS = 48
 
 const idOf = (target: FigureTarget): string => `${target.statement}/${target.object ?? ''}`
@@ -88,25 +90,32 @@ function arcSamples(arc: Arc): Vec2[] {
   return points
 }
 
-// A region's boundary as ONE even-odd polygon. A region with holes has several
-// loops; they are joined through their first points, each bridge walked there
-// and straight back, so that the two crossings of a bridge cancel under the
-// even-odd rule and the holes stay holes.
-function regionOutline(region: Region): Vec2[] {
-  const loops = region.loops.map((loop) => {
+// A region's loops, each a closed ring of points: arcs cut into `segments`
+// pieces each.
+function regionLoops(region: Region, segments: number): Vec2[][] {
+  return region.loops.map((loop) => {
     const points: Vec2[] = []
     for (const piece of loop) {
       if (piece.kind === 'segment') {
         points.push(piece.a)
         continue
       }
-      for (let i = 0; i < CURVE_SEGMENTS; i++) {
-        const angle = piece.from + ((piece.to - piece.from) * i) / CURVE_SEGMENTS
+      for (let i = 0; i < segments; i++) {
+        const angle = piece.from + ((piece.to - piece.from) * i) / segments
         points.push({ x: piece.center.x + piece.radius * Math.cos(angle), y: piece.center.y + piece.radius * Math.sin(angle) })
       }
     }
     return points
   })
+}
+
+// A region's boundary as ONE even-odd polygon, for hit-testing. A region with
+// holes has several loops; they are joined through their first points, each
+// bridge walked there and straight back, so that the two crossings of a bridge
+// cancel under the even-odd rule and the holes stay holes. (A highlight draws
+// the loops themselves, from regionLoops: the bridges are not lines.)
+function regionOutline(region: Region): Vec2[] {
+  const loops = regionLoops(region, CURVE_SEGMENTS)
   if (loops.length <= 1) return loops[0] ?? []
   const first = loops[0][0]
   const joined: Vec2[] = [...loops[0], first]
@@ -196,7 +205,7 @@ export function figureHitItems(input: FigureHitInput): FigureHitItem[] {
         add(item.id, { kind: 'polygon', points: view(chainOutline(item.edges)) })
         break
       case 'fill':
-        add(item.id, { kind: 'polygon', points: view(regionOutline(item.region)) })
+        add(item.id, { kind: 'polygon', points: view(regionOutline(item.region)), rings: regionLoops(item.region, DRAWN_CURVE_SEGMENTS).map(view) })
         break
       case 'angleMark':
       case 'rightAngleMark':

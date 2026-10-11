@@ -208,6 +208,16 @@ describe('highlightOverlay', () => {
     expect(highlightOverlay(full, 'x', [], accent)).toContain('<circle')
   })
 
+  it('draws a region with a hole as its rings, never the bridge its hit polygon walks', () => {
+    const outer = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+    const hole = [{ x: 4, y: 4 }, { x: 6, y: 4 }, { x: 6, y: 6 }]
+    // The hit polygon joins the hole through a bridge 0,0 -> 4,4 and back.
+    const shape = { kind: 'polygon' as const, points: [...outer, outer[0], ...hole, hole[0], outer[0]], rings: [outer, hole] }
+    const svg = highlightOverlay([{ id: 'r', shape }], 'r', [], accent)
+    expect(svg).toContain('d="M0 0L10 0L10 10L0 10ZM4 4L6 4L6 6Z"')
+    expect(svg).not.toContain('L4 4')
+  })
+
   it('outlines the givens panel but not the rect of a label', () => {
     expect(highlightOverlay(items, 'givens', [], accent)).toContain('d="M1 1L6 1L6 3L1 3Z"')
     expect(highlightOverlay(items, 'lab', [], accent)).toBe('')

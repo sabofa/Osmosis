@@ -3,8 +3,6 @@ import { flushSync } from 'react-dom'
 import { fittedCamera, pxPerUnit, screenToContent, visibleRect } from '../camera'
 import { GestureRecognizer, type Intent, type PointerKind, type PointerSample } from '../input'
 import { clampCamera, DEFAULT_LIMITS, type LimitsPolicy } from '../limits'
-import { commitDue, liveTransform, type LiveTransform } from '../liveTransform'
-import { SETTLE_MS } from '../feel'
 import { ViewMotion } from '../motion'
 import { hitTest, PointerSelection, type HitItem } from '../pointing'
 import type { Camera, Rect, Size, Vec } from '../types'
@@ -28,26 +26,10 @@ export interface View2dOptions {
   items?: readonly HitItem[]
   // Read when the view is first made; a different policy later is not picked up.
   limits?: LimitsPolicy
-  // Draw the window. Called whenever the drawn camera changes; or, if `onLive`
-  // is given, only when the drawing is *committed* (see onLive).
-  // `settled`: the view is at rest (a commit mid-gesture says false), so an
-  // engine can draw a cheaper drawing while it is not.
-  onApply(camera: Camera, visible: Rect, pxPerUnit: number, settled: boolean): void
-  // A cheap live view for a drawing that is dear to redraw. When given, a
-  // moving view is not drawn through `onApply` on every frame: the drawing is
-  // left as it was last committed and this is told how to move it (a
-  // translate and a scale, relative to the committed view; see
-  // ../liveTransform). `onApply` is then called to commit, when the motion
-  // has stopped or has drifted far enough (see commitDue); the engine clears
-  // its transform there.
-  // `live` is the window now, and `screen` its size, for an engine that keeps
-  // several drawings, each committed at its own time, and moves each on its own.
-  onLive?(transform: LiveTransform, live: Rect, screen: Size): void
-  // With `onLive`: how much larger than the screen the committed drawing is on
-  // each side, as a fraction of the screen (0: exactly the screen). The
-  // engine draws `visible` grown by this in `onApply`; the hook needs it to
-  // know when the live view has left the drawing.
-  overscan?: number
+  // Draw the window. Called on every frame the camera changes (and when the
+  // screen is measured), so it must be cheap: an engine whose drawing is dear
+  // to paint keeps it painted and only places it here (see svgTiles.ts).
+  onApply(camera: Camera, visible: Rect, pxPerUnit: number): void
   onHover?(id: string | null): void
   // Every selected id, in the order added; empty when nothing is selected.
   onSelect?(ids: readonly string[]): void
@@ -83,8 +65,6 @@ interface Publish {
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
 
-const sameRect = (a: Rect, b: Rect): boolean => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
-
 class Controller {
   private screen: Size = { width: 0, height: 0 }
   private motion: ViewMotion | null = null
@@ -94,16 +74,9 @@ class Controller {
   private readonly selection = new PointerSelection()
   private raf = 0
   private lastDrawn: Camera | null = null
-  // The view last committed through onApply, with `onLive` given: the visible
-  // window, the screen it was for, and when.
-  private committed: { visible: Rect; screen: Size; at: number } | null = null
-  // When the camera last changed (the clock of draw), for settling.
-  private lastChangeAt = 0
-  // The live view is not the committed one yet; the frame loop must go on
-  // until it is.
-  private uncommitted = false
-  // The last commit was made at rest (see draw).
-  private restCommitted = true
+  // The screen the camera was last drawn for: a new size is drawn even when
+  // the camera has not changed.
+  private drawnScreen: Size | null = null
   private lastAtStart = true
   // The pointer as last published, to publish only a change.
   private lastPointer: Vec | null = null
@@ -139,9 +112,7 @@ class Controller {
       this.motion = null
       this.key = null
       this.lastDrawn = null
-      this.committed = null
-      this.uncommitted = false
-      this.restCommitted = true
+      this.drawnScreen = null
       this.pointerScreen = null
       this.clearPointing()
       return
@@ -155,8 +126,7 @@ class Controller {
     if (key !== this.key) {
       this.key = key
       this.lastDrawn = null
-      this.committed = null
-      this.restCommitted = true
+      this.drawnScreen = null
       this.clearPointing()
     }
     this.draw()
@@ -445,9 +415,7 @@ class Controller {
     if (!m) return
     const moving = m.step(performance.now())
     this.draw(true)
-    // Past the end of the motion the loop runs on until the drawing is
-    // committed (a few frames: the view must be still for SETTLE_MS).
-    if (moving || this.uncommitted) this.kick()
+    if (moving) this.kick()
   }
 
   // The start view as the motion would hold it: past a limit it is clamped,
@@ -458,61 +426,21 @@ class Controller {
   }
 
   private draw(inFrame = false): void {
-    const { frame, onApply, onLive, overscan } = this.read()
+    const { frame, onApply } = this.read()
     const m = this.motion
     // An unmeasured view has no window to draw; the engine's own markup shows
     // until the first measurement.
-    if (!m || !frame || this.screen.width <= 0 || this.screen.height <= 0) {
-      this.uncommitted = false
-      return
-    }
+    if (!m || !frame || this.screen.width <= 0 || this.screen.height <= 0) return
     const camera = m.current
     const changed = camera !== this.lastDrawn
-    const now = performance.now()
-    if (changed) {
-      this.lastDrawn = camera
-      this.lastChangeAt = now
-      if (this.pointerScreen) this.setPointer(screenToContent(this.pointerScreen, frame, camera, this.screen))
-    }
-    const visible = visibleRect(frame, camera, this.screen)
+    const resized = this.drawnScreen === null || this.drawnScreen.width !== this.screen.width || this.drawnScreen.height !== this.screen.height
+    if (!changed && !resized) return
+    this.lastDrawn = camera
+    this.drawnScreen = { ...this.screen }
+    if (changed && this.pointerScreen) this.setPointer(screenToContent(this.pointerScreen, frame, camera, this.screen))
     const ppu = pxPerUnit(frame, camera, this.screen)
-    if (!onLive) {
-      // The engine draws every change itself.
-      if (!changed) return
-      onApply(camera, visible, ppu, true)
-    } else {
-      // The drawing is committed now and then; between, it is moved.
-      const prior = this.committed
-      // At rest: still, and for long enough (a first draw has nothing to wait for).
-      const atRest = !m.moving && (prior === null || now - this.lastChangeAt >= SETTLE_MS)
-      const due =
-        commitDue({
-          committed: prior ? prior.visible : null,
-          live: visible,
-          overscan: overscan ?? 0,
-          moving: m.moving,
-          idleMs: now - this.lastChangeAt,
-          sinceCommitMs: prior ? now - prior.at : Infinity,
-          reduced: this.reduced,
-          screenChanged: prior !== null && (prior.screen.width !== this.screen.width || prior.screen.height !== this.screen.height),
-        }) ||
-        // A move always ends in a commit made at rest, even when its last
-        // commit already shows the window the view stopped at: an engine that
-        // redraws its dear layers only at rest (FigureView) is waiting for it.
-        (prior !== null && atRest && !this.restCommitted)
-      if (due) {
-        this.committed = { visible, screen: { ...this.screen }, at: now }
-        this.restCommitted = atRest
-        onApply(camera, visible, ppu, atRest)
-      } else if (changed && prior) {
-        onLive(liveTransform(prior.visible, visible, this.screen), visible, this.screen)
-      }
-      const base = this.committed
-      this.uncommitted = base !== null && (!sameRect(base.visible, visible) || !this.restCommitted)
-      // A commit with the camera unchanged (the view settled) has nothing new
-      // to publish.
-      if (!changed) return
-    }
+    onApply(camera, visibleRect(frame, camera, this.screen), ppu)
+    if (!changed) return
     if (this.read().trackCamera) {
       // From a frame (or the size observer), the readout is rendered now, in the frame that drew the
       // camera: a state update from a rAF callback is otherwise left to
