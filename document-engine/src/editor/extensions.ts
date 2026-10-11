@@ -18,6 +18,8 @@ import { liveOptions, type LiveOptions } from './liveWidgets'
 import { highlightExtensions } from './highlightDecos'
 import { autocorrectSlot } from './autocorrect'
 import { structureKeymap } from './structureKeys'
+import { compositionGuard } from './compositionGuard'
+import { altGraphObserver } from './editorCommands'
 import { wordSelectionStyle } from './selectionFeel'
 
 export interface EditorExtensionOptions {
@@ -135,14 +137,52 @@ export function setEditorLang(view: EditorView, lang: string | undefined): void 
   view.dispatch({ effects: typingCompartment.reconfigure(typingAttributes(lang)) })
 }
 
-/** The nearest ancestor that actually scrolls (the host's page), or null for the window. */
-function scrollingAncestor(view: EditorView): HTMLElement | null {
+/** The nearest ancestor that scrolls (the host's page) when `onlyOverflowing`, else the nearest scroll container at all; null for the window. */
+function scrollingAncestor(view: EditorView, onlyOverflowing = true): HTMLElement | null {
   for (let el = view.dom.parentElement; el && el !== document.body; el = el.parentElement) {
     const oy = getComputedStyle(el).overflowY
-    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return el
+    if ((oy === 'auto' || oy === 'scroll') && (!onlyOverflowing || el.scrollHeight > el.clientHeight)) return el
   }
   return null
 }
+
+/** Bottom room of the content: 35vh at most, and never more than 40% of the scroll container's height. */
+export function comfortPadPx(viewportHeight: number, containerHeight: number | null): number {
+  const cap = 0.4 * (containerHeight ?? viewportHeight)
+  return Math.round(Math.min(0.35 * viewportHeight, cap))
+}
+
+// Keeps --de-comfort-pad (the .cm-content bottom padding) in step with the
+// host: a small embedded editor must not get a screenful of dead scroll.
+const comfortPad = ViewPlugin.fromClass(class {
+  ro: ResizeObserver | null = null
+  gone = false
+  readonly view: EditorView
+  constructor(view: EditorView) {
+    this.view = view
+    this.apply = this.apply.bind(this)
+    // The view's dom is attached to its parent only after plugins are built.
+    queueMicrotask(() => {
+      if (this.gone) return
+      this.apply()
+      if (typeof ResizeObserver !== 'undefined') {
+        const box = scrollingAncestor(view, false)
+        if (box) { this.ro = new ResizeObserver(this.apply); this.ro.observe(box) }
+      }
+    })
+    window.addEventListener('resize', this.apply)
+  }
+  apply() {
+    const box = scrollingAncestor(this.view, false)
+    const px = comfortPadPx(window.innerHeight, box ? box.clientHeight : null)
+    this.view.dom.style.setProperty('--de-comfort-pad', `${px}px`)
+  }
+  destroy() {
+    this.gone = true
+    this.ro?.disconnect()
+    window.removeEventListener('resize', this.apply)
+  }
+})
 
 // Word-like comfortable scrolling: while TYPING, the caret is kept about a
 // third of the viewport away from the bottom edge (arrow keys, clicks and
@@ -176,6 +216,7 @@ export function comfortScrollBy(view: EditorView, caretBottom: number): number {
 
 const comfortScroll: Extension = [
   typingPlugin,
+  comfortPad,
   EditorView.scrollHandler.of((view, range, target) => {
     if (target.y !== 'nearest' || !view.plugin(typingPlugin)?.typing) return false
     // Layout may not be read mid-update: the line's box comes from the height map.
@@ -187,6 +228,7 @@ const comfortScroll: Extension = [
 
 export const editorTheme = EditorView.theme({
   '&': {
+    '--de-comfort-pad-default': '35vh',
     backgroundColor: 'transparent',
     color: 'var(--de-text)',
     fontFamily: 'var(--de-font-stack-body)',
@@ -198,7 +240,7 @@ export const editorTheme = EditorView.theme({
     maxWidth: 'var(--de-measure)',
     marginInline: 'auto',
     // the bottom room lets the last lines scroll up to the comfortable caret position
-    padding: '1em 0.5em 35vh',
+    padding: '1em 0.5em var(--de-comfort-pad, var(--de-comfort-pad-default))',
     caretColor: 'var(--de-text)',
   },
   '.cm-line': { padding: '0' },
@@ -250,6 +292,8 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
     EditorView.lineWrapping,
     typingCompartment.of(typingAttributes(opts.lang)),
     comfortScroll,
+    compositionGuard,
+    altGraphObserver,
     wordSelectionStyle,
     autocorrectSlot(opts.autocorrect !== false),
     // Above the Markdown keymap's own Enter / Backspace, below autocorrect's revert.

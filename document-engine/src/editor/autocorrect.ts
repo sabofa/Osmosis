@@ -13,18 +13,21 @@ import { EditorView, keymap } from '@codemirror/view'
 import { isolateHistory, undo } from '@codemirror/commands'
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import { inlineMathInLine } from './liveScan'
+import { composingNow } from './compositionGuard'
 
 // ------------------------------------------------------------------- zones
 
 // Inside these (strictly between from and to) nothing is corrected.
 const STRICT_ZONES = new Set(['InlineCode', 'LinkTitle', 'HTMLTag', 'Comment', 'CommentBlock', 'ProcessingInstruction'])
 // Inside these, edges included (a caret at the end of a URL is still in it).
-const EDGE_ZONES = new Set(['FencedCode', 'CodeBlock', 'CodeText', 'CodeInfo', 'URL', 'Autolink', 'HTMLBlock'])
+const EDGE_ZONES = new Set(['FencedCode', 'CodeBlock', 'CodeText', 'CodeInfo', 'URL', 'Autolink', 'HTMLBlock', 'Table'])
 
 /** True when `pos` is somewhere typing must stay literal: code, math, URLs, HTML. */
 export function inLiteralZone(state: EditorState, pos: number): boolean {
   const line = state.doc.lineAt(pos)
   const before = state.doc.sliceString(line.from, pos)
+
+  if (inFrontMatter(state, line.number)) return true
 
   // an unclosed backtick on this line (the code span is not in the tree yet)
   if ((before.match(/(?<!\\)`/g)?.length ?? 0) % 2 === 1) return true
@@ -39,8 +42,9 @@ export function inLiteralZone(state: EditorState, pos: number): boolean {
     const last = before.lastIndexOf('$')
     if (last !== -1 && before[last - 1] !== '$' && before[last - 1] !== '\\' && !/[\p{L}\p{N}]/u.test(before[last - 1] ?? '')) {
       const next = before[last + 1]
-      // `$5` is a price, `$ ` is not math; `$x^2` is math in progress
-      if (next !== undefined && !/[\s\d]/.test(next)) return true
+      // `$5` is a price, `$ ` is not math; `$x^2` is math in progress, but only
+      // when a closing `$` follows on this line (`$HOME` or `US$` is just text).
+      if (next !== undefined && !/[\s\d]/.test(next) && closingDollarAhead(before, line.text.slice(pos - line.from))) return true
     }
   }
   // block math: an odd number of `$$` opener lines above (single-line $$x$$ pairs cancel)
@@ -69,6 +73,27 @@ export function inLiteralZone(state: EditorState, pos: number): boolean {
   return false
 }
 
+/** A `$` ahead on the line whose left neighbour is not a space (a math closer). */
+function closingDollarAhead(before: string, after: string): boolean {
+  for (let j = after.indexOf('$'); j !== -1; j = after.indexOf('$', j + 1)) {
+    const left = j === 0 ? before.slice(-1) : after[j - 1]
+    if (left && !/\s/.test(left) && left !== '\\') return true
+  }
+  return false
+}
+
+/** Is line `lineNo` inside a leading YAML front matter block (`---` ... `---`)? */
+function inFrontMatter(state: EditorState, lineNo: number): boolean {
+  const doc = state.doc
+  if (doc.line(1).text.trimEnd() !== '---') return false
+  const cap = Math.min(doc.lines, 300)
+  for (let n = 2; n <= cap; n++) {
+    const t = doc.line(n).text.trimEnd()
+    if (t === '---' || t === '...') return lineNo <= n
+  }
+  return false
+}
+
 // -------------------------------------------------------------------- plan
 
 export interface AutocorrectPlan {
@@ -82,7 +107,7 @@ export interface AutocorrectPlan {
   caretAtEnd: boolean
 }
 
-const OPENING_BEFORE = /[\s([{<“‘—–]/
+const OPENING_BEFORE = /[\s([{<“‘—–*_~|>]/
 const L = '\\p{L}\\p{N}'
 const EM_RE = new RegExp(`([${L}])--([${L}][${L}'’]*)$`, 'u')
 const EN_RE = /[^\s-]\s--\s[^\s-]+$/
@@ -107,14 +132,19 @@ export function planAutocorrect(state: EditorState, from: number, to: number, te
 
   if (text === '"' || text === "'") {
     if (prev === '\\' || prev === '`') return null
-    const opening = before === '' || OPENING_BEFORE.test(prev)
+    // `**"Quoted"**` and `|"cell"|`: emphasis marks do not count as the previous character
+    const ctx = before.replace(/[*_~]+$/, '')
+    // a second quote right after an opening one is the closing half of an empty pair
+    const emptyPair = (text === '"' && prev === '“') || (text === "'" && prev === '‘')
+    const opening = !emptyPair && (ctx === '' || OPENING_BEFORE.test(ctx.slice(-1)))
     const insert = text === '"' ? (opening ? '“' : '”') : (opening ? '‘' : '’')
     plan = { typed, fix: { from, to: from + 1, insert }, original: text, caretAtEnd: true }
   } else if (text === '.' && before.endsWith('..') && !before.endsWith('...')) {
     plan = { typed, fix: { from: from - 2, to: from + 1, insert: '…' }, original: '...', caretAtEnd: true }
   } else if (text === ')') {
     const m = MARK_RE.exec(before)
-    if (m) {
+    // `(c)` / `(r)` opening a line is a list enumeration, not a symbol
+    if (m && before.slice(0, before.length - m[2].length - 1).trim() !== '') {
       const len = m[2].length + 1
       const stepOver = from === to && state.doc.sliceString(to, to + 1) === ')'
       plan = {
@@ -129,7 +159,8 @@ export function planAutocorrect(state: EditorState, from: number, to: number, te
     const em = EM_RE.exec(before)
     if (em) {
       const at = line.from + before.length - em[0].length + em[1].length
-      plan = { typed, fix: { from: at, to: at + 2, insert: '—' }, original: '--', caretAtEnd: false }
+      const range = /\d/.test(em[1]) && /^\d/.test(em[2]) // 1--2 is a range
+      plan = { typed, fix: { from: at, to: at + 2, insert: range ? '–' : '—' }, original: '--', caretAtEnd: false }
     } else {
       const en = EN_RE.exec(before)
       if (en) {
@@ -220,7 +251,7 @@ export function revertAutocorrect(view: CmdView): boolean {
 }
 
 const inputExtension = EditorView.inputHandler.of((view, from, to, text) => {
-  if (view.composing || view.compositionStarted || view.state.readOnly) return false
+  if (composingNow(view) || view.state.readOnly) return false
   if (view.state.selection.ranges.length > 1) return false
   const plan = planAutocorrect(view.state, from, to, text)
   if (!plan) return false

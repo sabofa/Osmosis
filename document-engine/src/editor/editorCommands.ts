@@ -3,7 +3,7 @@
 // a live EditorView; editorKeymap() registers the same shortcuts inside the
 // editor so the keyboard works without any toolbar.
 import { EditorSelection, type EditorState } from '@codemirror/state'
-import type { EditorView, KeyBinding } from '@codemirror/view'
+import { EditorView, type KeyBinding } from '@codemirror/view'
 import { undo, redo, selectAll, indentMore, indentLess } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
 import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
@@ -286,9 +286,22 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
 
 export const CLEAR_FORMAT_KEY = 'Mod-\\'
 
+// On Windows and many European layouts AltGr is Ctrl+Alt, so Mod-Alt-<digit>
+// would swallow AltGr characters (e.g. AltGr+2 on a Polish layout). The
+// observer remembers whether the key event being dispatched carried AltGraph.
+let altGraphDown = false
+
+/** Record a key event's AltGraph state (the observer below; exported for tests). */
+export function noteAltGraph(e: { getModifierState?: (k: string) => boolean }): void {
+  altGraphDown = !!e.getModifierState?.('AltGraph')
+}
+
+/** Observes every keydown before the keymap runs, so heading chords can step aside for AltGr. */
+export const altGraphObserver = EditorView.domEventObservers({ keydown: (e) => noteAltGraph(e) })
+
 /** Apply a block style unless the caret line already has it (Word keeps Heading 1 on Ctrl+Alt+1). */
 function setStyleKeepingIt(view: EditorView, style: SettableBlockStyle): boolean {
-  if (view.state.readOnly) return false
+  if (view.state.readOnly || altGraphDown) return false
   const sel = view.state.selection.main
   if (sel.empty && currentBlockStyle(view.state) === style) return true
   return runBlockStyle(view, style)
@@ -311,7 +324,8 @@ export function editorKeymap(): KeyBinding[] {
     ['Mod-Alt-0', 'normal'], ['Mod-Alt-1', 'h1'], ['Mod-Alt-2', 'h2'], ['Mod-Alt-3', 'h3'], ['Mod-Alt-4', 'h4'],
   ]
   for (const [key, style] of styles) {
-    out.push({ key, preventDefault: true, run: (v) => setStyleKeepingIt(v, style) })
+    // No preventDefault: it would swallow the AltGr character when the run steps aside.
+    out.push({ key, run: (v) => setStyleKeepingIt(v, style) })
   }
   return out
 }

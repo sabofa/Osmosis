@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { undo, redo } from '@codemirror/commands'
 import { ensureSyntaxTree } from '@codemirror/language'
@@ -107,8 +107,8 @@ describe('dashes, ellipsis, symbols', () => {
   })
   it('(c) (r) (tm) become symbols; 1/2 stays', () => {
     const v = mk('')
-    type(v, '(c) (R) (tm) 1/2')
-    expect(text(v)).toBe('© ® ™ 1/2')
+    type(v, 'x (c) (R) (tm) 1/2')
+    expect(text(v)).toBe('x © ® ™ 1/2')
   })
   it('(c) steps over an auto-closed bracket', () => {
     const v = mk('x (c|)')
@@ -131,7 +131,7 @@ describe('where autocorrect stays out', () => {
       ['```\nx|\n```', '"'],
       ['```\nx..|\n```', '.'],
       ['$x|$', "'"],
-      ['$x', "'"],
+      ['$x $y|$', "'"],
       ['$$\nx|\n$$', '"'],
       ['see https://a.example/x|', '.'],
       ['see www.a.example/x..|', '.'],
@@ -230,5 +230,118 @@ describe('toggle', () => {
   })
   it('autocorrectExtension() is usable on its own', () => {
     expect(autocorrectExtension()).toBeTruthy()
+  })
+})
+
+describe('opening quote context', () => {
+  it('quotes after emphasis marks, table pipes and quote markers open', () => {
+    const a = mk(''); type(a, '**"Quoted"**'); expect(text(a)).toBe('**“Quoted”**')
+    const b = mk(''); type(b, '|"cell"|'); expect(text(b)).toBe('|“cell”|')
+    const c = mk(''); type(c, '~~"x"~~'); expect(text(c)).toBe('~~“x”~~')
+    const d = mk(''); type(d, '_"x"_'); expect(text(d)).toBe('_“x”_')
+    const e = mk(''); type(e, '>"x"'); expect(text(e)).toBe('>“x”')
+  })
+  it('a quote after bold text still closes', () => {
+    const v = mk(''); type(v, 'say "**hi**"')
+    expect(text(v)).toBe('say “**hi**”')
+  })
+  it('a second quote right after an opening one closes the empty pair', () => {
+    const a = mk(''); type(a, '""'); expect(text(a)).toBe('“”')
+    const b = mk(''); type(b, "x ''"); expect(text(b)).toBe('x ‘’')
+  })
+})
+
+describe('minor autocorrect rules', () => {
+  it('(c) opening a line is an enumeration, not a symbol', () => {
+    const a = mk(''); type(a, '(c) item'); expect(text(a)).toBe('(c) item')
+    const b = mk(''); type(b, '  (r) item'); expect(text(b)).toBe('  (r) item')
+    const c = mk(''); type(c, 'Ben (c)'); expect(text(c)).toBe('Ben ©')
+  })
+  it('a lone dollar does not switch autocorrect off for the line', () => {
+    const a = mk(''); type(a, 'echo $HOME and "x"'); expect(text(a)).toBe('echo $HOME and “x”')
+    const b = mk(''); type(b, 'US$ is "dollars"'); expect(text(b)).toBe('US$ is “dollars”')
+    const c = mk(''); type(c, 'costs $5 -- cheap '); expect(text(c)).toBe('costs $5 – cheap ')
+  })
+  it('math with a closing dollar on the line stays literal', () => {
+    const v = mk('$x "y|$')
+    expect(planAutocorrect(v.state, v.state.selection.main.head, v.state.selection.main.head, '"')).toBeNull()
+  })
+  it('YAML front matter is left alone', () => {
+    const v = mk('---\ntitle: "x|\n---\nbody')
+    const h = v.state.selection.main.head
+    expect(planAutocorrect(v.state, h, h, '"')).toBeNull()
+    const w = mk('---\ntitle: x\n---\nsay |')
+    const hw = w.state.selection.main.head
+    expect(planAutocorrect(w.state, hw, hw, '"')).not.toBeNull()
+  })
+  it('an unclosed leading --- is just a rule, not front matter', () => {
+    const v = mk('---\nsay |')
+    const h = v.state.selection.main.head
+    expect(planAutocorrect(v.state, h, h, '"')).not.toBeNull()
+  })
+  it('table rows are left alone', () => {
+    const put = (doc: string) => {
+      const x = mk('')
+      x.dispatch({ changes: { from: 0, insert: doc }, selection: { anchor: doc.length } })
+      ensureSyntaxTree(x.state, x.state.doc.length, 5000)
+      return x
+    }
+    const v = put('| a | b |\n| - | - |\n| "x')
+    const h = v.state.selection.main.head
+    expect(planAutocorrect(v.state, h, h, "'")).toBeNull()
+    const w = put('| a | b |\n| - | - |\n\nsay ')
+    const hw = w.state.selection.main.head
+    expect(planAutocorrect(w.state, hw, hw, '"')).not.toBeNull()
+  })
+  it('1--2 between digits is an en dash, words get an em dash', () => {
+    const a = mk(''); type(a, 'pages 1--2 '); expect(text(a)).toBe('pages 1–2 ')
+    const b = mk(''); type(b, 'a--b '); expect(text(b)).toBe('a—b ')
+    const c = mk(''); type(c, 'x1--y2 '); expect(text(c)).toBe('x1—y2 ')
+  })
+})
+
+describe('undo with other history events around it', () => {
+  it('a history-free effect between the correction and Backspace keeps the revert', () => {
+    const v = mk('')
+    type(v, 'ab...')
+    v.dispatch({ effects: [] })
+    expect(key(v, 'Backspace')).toBe(true)
+    expect(text(v)).toBe('ab...')
+    undo(v)
+    expect(text(v)).toBe('')
+  })
+  it('an earlier non-history edit is never rewound by undo', () => {
+    const v = mk('top\n')
+    v.dispatch({ changes: { from: 0, insert: 'HEAD ' }, annotations: Transaction.addToHistory.of(false) })
+    type(v, 'ab...')
+    expect(text(v)).toBe('HEAD top\nab…')
+    expect(key(v, 'Backspace')).toBe(true)
+    expect(text(v)).toBe('HEAD top\nab...')
+    undo(v)
+    undo(v)
+    expect(text(v)).toBe('HEAD top\n')
+  })
+  it('two corrections in a row revert one at a time, newest first', () => {
+    const v = mk('')
+    type(v, 'a... b...')
+    expect(text(v)).toBe('a… b…')
+    expect(key(v, 'Backspace')).toBe(true)
+    expect(text(v)).toBe('a… b...')
+    expect(key(v, 'Backspace')).toBe(false) // the record is spent
+    undo(v)
+    expect(text(v)).toBe('a…') // the typed " b..." chunk is one history event
+  })
+  it('after an isolating edit elsewhere the record is gone and Backspace is plain', () => {
+    const v = mk('x\n')
+    type(v, 'ab...')
+    v.dispatch({ changes: { from: 0, insert: 'Z' } })
+    expect(key(v, 'Backspace')).toBe(false)
+  })
+  it('redo after a Backspace revert replays the typed state, not the correction', () => {
+    const v = mk('')
+    type(v, 'ab...')
+    key(v, 'Backspace')
+    redo(v)
+    expect(text(v)).toBe('ab…')
   })
 })

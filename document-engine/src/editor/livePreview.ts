@@ -10,9 +10,9 @@ import {
 } from '@codemirror/view'
 import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
-import { inlineMathInLine, insideBlock, touchesSel } from './liveScan'
+import { decideBlockWidgets, inlineMathInLine, insideBlock, touchesSel } from './liveScan'
 import { documentRoles, roleKindOfNode, type BlockRole } from '../documentRoles'
-import { MathWidget, blocksOf, liveWidgetExtensions, rebuildLiveWidgets } from './liveWidgets'
+import { MathWidget, blocksOf, editLocked, liveOptions, liveWidgetExtensions, rebuildLiveWidgets } from './liveWidgets'
 
 export interface LiveSpan { from: number; to: number }
 
@@ -62,6 +62,7 @@ class CheckboxWidget extends WidgetType {
     box.addEventListener('mousedown', (e) => {
       e.preventDefault()
       e.stopPropagation()
+      if (editLocked(view)) return
       toggleTaskAt(view, view.posAtDOM(box))
     })
     box.addEventListener('click', (e) => e.preventDefault())
@@ -72,6 +73,7 @@ class CheckboxWidget extends WidgetType {
 
 /** Flip `[ ]` <-> `[x]` for the task marker starting at `pos`. */
 export function toggleTaskAt(view: EditorView, pos: number): boolean {
+  if (editLocked(view)) return false
   const mid = view.state.sliceDoc(pos, pos + 3)
   if (!/^\[[ xX]\]$/.test(mid)) return false
   view.dispatch({
@@ -89,12 +91,17 @@ const lineDeco = (cls: string, style?: string, extra?: Record<string, string>) =
 // Roles for the document's top-level blocks (title / lede / section), keyed by
 // the block's first-line start, over the whole tree (the viewport may start
 // mid-document but section numbers count from the top).
-function topLevelRoles(tree: ReturnType<typeof syntaxTree>): Map<number, BlockRole & { to: number }> {
+type RoleMap = Map<number, BlockRole & { to: number }>
+const rolesCache = new WeakMap<object, RoleMap>()
+function topLevelRoles(tree: ReturnType<typeof syntaxTree>): RoleMap {
+  const hit = rolesCache.get(tree)
+  if (hit) return hit
   const nodes: { from: number; to: number; type: string }[] = []
   for (let c = tree.topNode.firstChild; c; c = c.nextSibling) nodes.push({ from: c.from, to: c.to, type: roleKindOfNode(c.name) })
   const roles = documentRoles(nodes)
   const map = new Map<number, BlockRole & { to: number }>()
   nodes.forEach((n, i) => map.set(n.from, { ...roles[i], to: n.to }))
+  rolesCache.set(tree, map)
   return map
 }
 
@@ -145,7 +152,9 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
     out.push({ from, to, deco, hidden })
   }
   const pushLine = (lineFrom: number, deco: Decoration) => push(lineFrom, lineFrom, deco, false, `L${lineFrom}:${deco.spec.attributes.class}`)
-  const hide = (from: number, to: number) => { if (to > from) push(from, to, HIDE, true) }
+  // A replace decoration from a plugin may not span a line break (CodeMirror
+// throws and drops the whole plugin), so such a hide is skipped.
+  const hide = (from: number, to: number) => { if (to > from && doc.lineAt(from).to >= to) push(from, to, HIDE, true) }
   // `mark` plus one following space (inside the line).
   const withSpace = (_from: number, mTo: number) => (doc.sliceString(mTo, mTo + 1) === ' ' ? mTo + 1 : mTo)
 
@@ -203,7 +212,8 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
             const open = marks[0]
             const close = marks.find((mk) => mk !== open && doc.sliceString(mk.from, mk.to) === ']')
             if (!open || !close) return
-            if (touches(sel, nodeRef.from, nodeRef.to)) {
+            // A link whose target or title wraps onto another line: the tail cannot be hidden, so show the source.
+            if (touches(sel, nodeRef.from, nodeRef.to) || doc.lineAt(close.from).to < nodeRef.to) {
               push(nodeRef.from, nodeRef.to, markDeco('cm-lp-link cm-lp-link-src'))
             } else {
               push(open.to, close.from, markDeco('cm-lp-link'))
@@ -342,10 +352,15 @@ export function buildLiveDecos(state: EditorState, ctx: LiveContext): DecoSpec[]
     }
   }
   const mathBlocks = blocks.filter((b) => b.kind === 'math')
-  if (inlineMath.length === 0 && mathBlocks.length === 0) return out
+  // A graph block drawn as a widget swallows its source lines: no code chrome on them.
+  const graphOn = !!state.facet(liveOptions).renderGraph
+  const widgetGraphs = decideBlockWidgets(blocks, sel, { graph: graphOn })
+    .filter((d) => d.block.kind === 'graph' && !d.revealed).map((d) => d.block)
+  const swallowed = [...mathBlocks, ...widgetGraphs]
+  if (inlineMath.length === 0 && swallowed.length === 0) return out
   return out.filter((d) => {
     if (d.deco.spec.widget instanceof MathWidget || d.deco.spec.class === 'cm-lp-mathsrc-inline') return true
-    if (mathBlocks.some((b) => d.from >= b.from && d.to <= b.to)) return false
+    if (swallowed.some((b) => d.from >= b.from && d.to <= b.to)) return false
     return d.to === d.from || !inlineMath.some((m) => d.from >= m.from && d.to <= m.to)
   })
 }

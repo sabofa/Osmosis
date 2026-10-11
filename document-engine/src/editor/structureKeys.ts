@@ -5,10 +5,12 @@
 import type { EditorState, ChangeSpec } from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
 import { ensureSyntaxTree } from '@codemirror/language'
+import { composingNow } from './compositionGuard'
 
-type CmdView = Pick<EditorView, 'state' | 'dispatch'> & { composing?: boolean }
+type CmdView = Pick<EditorView, 'state' | 'dispatch'> & { composing?: boolean; compositionStarted?: boolean }
 
 const LIST_ITEM = /^([ \t]*)((?:[-*+]|\d+[.)])(?:[ \t]+\[[ xX]\])?)(?:[ \t]+|$)/
+const LIST_MARK = /^[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]+\[[ xX]\])?/
 const LIST_EMPTY = /^[ \t]*(?:[-*+]|\d+[.)])(?:[ \t]+\[[ xX]\])?[ \t]*$/
 const QUOTE_PREFIX = /^[ \t]{0,3}(?:>[ \t]?)+/
 const QUOTE_EMPTY = /^[ \t]{0,3}(?:>[ \t]*)+$/
@@ -25,13 +27,23 @@ function lineIn(state: EditorState, lineTo: number, markAt: number, kind: 'ListI
   return false
 }
 
-/** Indent of the list item this line is nested under (0 when none is found). */
-function parentIndent(state: EditorState, lineNo: number, indent: number): number {
+/** Width in columns of leading whitespace `ws`: a tab advances to the next tab stop. */
+export function indentColumns(ws: string, tabSize: number): number {
+  let col = 0
+  for (const c of ws) col = c === '\t' ? col + tabSize - (col % tabSize) : col + 1
+  return col
+}
+
+/** Indent (in columns) of the list item this line is nested under (0 when none is found). */
+function parentIndent(state: EditorState, lineNo: number, cols: number): number {
   for (let n = lineNo - 1; n >= 1; n--) {
     const text = state.doc.line(n).text
     if (text.trim() === '') continue
     const m = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]/.exec(text)
-    if (m && m[1].length < indent) return m[1].length
+    if (m) {
+      const c = indentColumns(m[1], state.tabSize)
+      if (c < cols) return c
+    }
     if (!/^[ \t]/.test(text)) break
   }
   return 0
@@ -42,7 +54,7 @@ function prevIsText(state: EditorState, lineNo: number): boolean {
 }
 
 function usable(view: CmdView): boolean {
-  if (view.composing || view.state.readOnly) return false
+  if (composingNow(view) || view.state.readOnly) return false
   const sel = view.state.selection
   return sel.ranges.length === 1 && sel.main.empty
 }
@@ -55,10 +67,13 @@ export function enterExitStructure(view: CmdView): boolean {
   const line = state.doc.lineAt(head)
   const text = line.text
   const indent = /^[ \t]*/.exec(text)![0].length
+  const col = head - line.from
 
-  if (LIST_EMPTY.test(text) && lineIn(state, line.to, line.from + indent, 'ListItem')) {
+  // The caret must sit at or after the marker, else Enter splits above it as usual.
+  const markEnd = LIST_MARK.exec(text)?.[0].length ?? 0
+  if (LIST_EMPTY.test(text) && col >= markEnd && lineIn(state, line.to, line.from + indent, 'ListItem')) {
     if (indent > 0) {
-      const to = parentIndent(state, line.number, indent)
+      const to = parentIndent(state, line.number, indentColumns(text.slice(0, indent), state.tabSize))
       view.dispatch({
         changes: { from: line.from, to: line.from + indent, insert: ' '.repeat(to) },
         selection: { anchor: line.from + to + (text.length - indent) },
@@ -70,7 +85,7 @@ export function enterExitStructure(view: CmdView): boolean {
     return leave(view, line.from, line.to, line.number)
   }
 
-  if (QUOTE_EMPTY.test(text) && lineIn(state, line.to, line.from + indent, 'Blockquote')) {
+  if (QUOTE_EMPTY.test(text) && col > text.indexOf('>') && lineIn(state, line.to, line.from + indent, 'Blockquote')) {
     const levels = (text.match(/>/g) ?? []).length
     if (levels > 1) {
       const kept = text.slice(0, text.lastIndexOf('>')).replace(/[ \t]*$/, ' ')
@@ -113,7 +128,7 @@ export function backspaceStructure(view: CmdView): boolean {
     const indent = lm[1].length
     if (!lineIn(state, line.to, line.from + indent, 'ListItem')) return false
     if (indent > 0) {
-      const to = parentIndent(state, line.number, indent)
+      const to = parentIndent(state, line.number, indentColumns(text.slice(0, indent), state.tabSize))
       view.dispatch({
         changes: { from: line.from, to: line.from + indent, insert: ' '.repeat(to) },
         selection: { anchor: head - indent + to },

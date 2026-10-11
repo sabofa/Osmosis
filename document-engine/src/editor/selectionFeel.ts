@@ -2,8 +2,41 @@
 // space, triple-click takes the whole paragraph (a block between blank lines).
 // Drag after the click keeps growing the selection by that unit; shift-click
 // extends from the existing anchor.
-import { EditorSelection, type EditorState, type SelectionRange } from '@codemirror/state'
+import { EditorSelection, findClusterBreak, type EditorState, type SelectionRange } from '@codemirror/state'
 import { EditorView, type MouseSelectionStyle } from '@codemirror/view'
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u
+
+function docLang(): string | undefined {
+  try {
+    return (typeof document !== 'undefined' && document.documentElement.lang) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * CodeMirror treats a whole run of Han / kana as one word; narrow it to the
+ * dictionary word around `pos` when the platform can segment. `null` keeps the
+ * run unchanged.
+ */
+function narrowCjk(text: string, offset: number): { from: number; to: number } | null {
+  if (!CJK.test(text)) return null
+  const Seg = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter
+  if (!Seg) return null
+  try {
+    let hit: { from: number; to: number } | null = null
+    for (const seg of new Seg(docLang(), { granularity: 'word' }).segment(text)) {
+      const from = seg.index
+      const to = from + seg.segment.length
+      if (offset >= from && offset < to) return { from, to }
+      if (offset === to) hit = { from, to }
+    }
+    return hit
+  } catch {
+    return null
+  }
+}
 
 /** Word at `pos` plus one trailing space or tab (not a newline), as Word selects it. */
 export function wordWithTrailingSpace(state: EditorState, pos: number): { from: number; to: number } {
@@ -13,12 +46,19 @@ export function wordWithTrailingSpace(state: EditorState, pos: number): { from: 
   if (w) {
     from = w.from
     to = w.to
+    const n = narrowCjk(state.doc.sliceString(w.from, w.to), pos - w.from)
+    if (n) {
+      from = w.from + n.from
+      to = w.from + n.to
+    }
   } else {
     // whitespace or punctuation: the run of the same kind of character
     const len = state.doc.length
     const ch = (i: number) => state.doc.sliceString(i, i + 1)
     const isSpace = (c: string) => c === ' ' || c === '\t'
-    const kind = isSpace(ch(pos)) ? 'space' : isSpace(ch(pos - 1)) ? 'space' : 'other'
+    // the character at `pos` decides; only at the end of a line does a space before it count
+    const here = ch(pos)
+    const kind = isSpace(here) ? 'space' : (here === '' || here.length === 1 && here.charCodeAt(0) === 10) && isSpace(ch(pos - 1)) ? 'space' : 'other'
     from = pos
     to = pos
     if (kind === 'space') {
@@ -27,7 +67,17 @@ export function wordWithTrailingSpace(state: EditorState, pos: number): { from: 
       to = Math.max(to, from)
       while (to < len && isSpace(ch(to))) to++
     } else {
-      to = Math.min(len, pos + 1)
+      // one whole grapheme cluster (astral emoji, ZWJ sequences, flags), not half a surrogate pair
+      const line = state.doc.lineAt(pos)
+      const off = pos - line.from
+      if (off >= line.length) {
+        to = Math.min(len, pos + 1)
+      } else {
+        const end = findClusterBreak(line.text, off, true)
+        const start = findClusterBreak(line.text, end, false)
+        from = line.from + start
+        to = line.from + end
+      }
     }
     return { from, to }
   }

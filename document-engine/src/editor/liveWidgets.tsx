@@ -5,7 +5,7 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { useRef, useState, type ReactNode } from 'react'
 import {
-  EditorState, Facet, StateEffect, StateField, type Extension, type Range,
+  EditorState, Facet, StateEffect, StateField, type ChangeSet, type Extension, type Range, type Text,
 } from '@codemirror/state'
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
 import { renderMath } from '../mathRender'
@@ -29,6 +29,11 @@ export interface LiveOptions {
 export const liveOptions = Facet.define<LiveOptions, LiveOptions>({
   combine: (v) => Object.assign({}, ...v) as LiveOptions,
 })
+
+/** True when the document must not be edited from a widget: read-only state or a non-editable view. */
+export function editLocked(view: Pick<EditorView, 'state'>): boolean {
+  return view.state.readOnly || !view.state.facet(EditorView.editable)
+}
 
 export const rebuildLiveWidgets = StateEffect.define<null>()
 
@@ -119,11 +124,15 @@ function LiveGraph({ spec, options, render, onErrors }: {
 }
 
 const mounted = new WeakMap<HTMLElement, Root>()
+// The widget a live DOM node currently shows (updateDOM swaps it in), so late
+// event handlers read current options, not the ones from toDOM time.
+const current = new WeakMap<HTMLElement, GraphWidget>()
 // Live counters for the review harness: mounts - unmounts = graphs on screen.
 export const graphCounters = { mounts: 0, unmounts: 0 }
 
 /** Rewrite the fence info line of the graph that starts at `pos`. One transaction. */
 export function rewriteGraphInfo(view: EditorView, pos: number, edit: GraphOptionEdit): boolean {
+  if (editLocked(view)) return false
   const line = view.state.doc.lineAt(pos)
   const m = /^(\s*```\s*)(.*)$/.exec(line.text)
   if (!m || !/^graph(\s|$)/.test(m[2])) return false
@@ -196,7 +205,11 @@ export class GraphWidget extends WidgetType {
       b.textContent = s.label
       b.title = `Graph size ${s.label}`
       b.addEventListener('mousedown', (e) => e.preventDefault())
-      b.addEventListener('click', (e) => { e.preventDefault(); rewriteGraphInfo(view, here(), { size: s.id }) })
+      b.addEventListener('click', (e) => {
+        e.preventDefault()
+        if (editLocked(view)) return
+        rewriteGraphInfo(view, here(), { size: s.id })
+      })
       bar.append(b)
     }
     const src = document.createElement('button')
@@ -213,6 +226,7 @@ export class GraphWidget extends WidgetType {
     grip.addEventListener('pointerdown', (e) => {
       e.preventDefault()
       e.stopPropagation()
+      if (editLocked(view)) return
       grip.setPointerCapture(e.pointerId)
       startY = e.clientY
       startH = host.getBoundingClientRect().height
@@ -231,10 +245,11 @@ export class GraphWidget extends WidgetType {
     })
     grip.addEventListener('pointercancel', (e) => {
       if (grip.hasPointerCapture(e.pointerId)) grip.releasePointerCapture(e.pointerId)
-      this.applyStyle(dom)
+      current.get(dom)?.applyStyle(dom)
     })
 
     this.applyStyle(dom)
+    current.set(dom, this)
     const root = createRoot(host)
     graphCounters.mounts++
     mounted.set(dom, root)
@@ -246,6 +261,7 @@ export class GraphWidget extends WidgetType {
   updateDOM(dom: HTMLElement, view: EditorView): boolean {
     const root = mounted.get(dom)
     if (!root) return false
+    current.set(dom, this)
     this.applyStyle(dom)
     this.render(view, root)
     return true
@@ -296,6 +312,33 @@ export function blockDecorations(
   return { decos: Decoration.set(all, true), atomic: Decoration.set(rep, true) }
 }
 
+const FENCE_MARK = /```|\$\$/
+
+/**
+ * The blocks after an edit. A full rescan (which needs the whole text as one
+ * string) only happens when an edit lies in or against a known block, or the
+ * lines it leaves behind contain a fence or `$$`; otherwise the old blocks are
+ * just shifted. `newDoc.toString()` is therefore taken lazily.
+ */
+export function blocksAfterChange(
+  prev: readonly LiveBlock[], oldDoc: Text, newDoc: Text, changes: ChangeSet,
+): LiveBlock[] {
+  let rescan = false
+  changes.iterChanges((fromA, toA, fromB, toB) => {
+    if (rescan) return
+    if (prev.some((b) => fromA <= b.to && toA >= b.from)) { rescan = true; return }
+    const a = newDoc.lineAt(fromB).from
+    const z = newDoc.lineAt(toB).to
+    if (FENCE_MARK.test(newDoc.sliceString(a, z))) { rescan = true; return }
+    // text that was removed: its old lines may have held a (now broken) opener
+    const oa = oldDoc.lineAt(fromA).from
+    const oz = oldDoc.lineAt(toA).to
+    if (FENCE_MARK.test(oldDoc.sliceString(oa, oz))) rescan = true
+  })
+  if (rescan) return scanLiveBlocks(newDoc.toString())
+  return prev.map((b) => ({ ...b, from: changes.mapPos(b.from, -1), to: changes.mapPos(b.to, 1) }))
+}
+
 export const blockField = StateField.define<BlockState>({
   create(state) {
     const graph = !!state.facet(liveOptions).renderGraph
@@ -307,7 +350,7 @@ export const blockField = StateField.define<BlockState>({
     const forced = tr.effects.some((e) => e.is(rebuildLiveWidgets))
     const compose = tr.docChanged && tr.isUserEvent('input.type.compose')
     if (!tr.docChanged && !tr.selection && !forced && graph === v.graph) return v
-    const blocks = tr.docChanged ? scanLiveBlocks(tr.newDoc.toString()) : v.blocks
+    const blocks = tr.docChanged ? blocksAfterChange(v.blocks, tr.startState.doc, tr.newDoc, tr.changes) : v.blocks
     if (compose && !forced) {
       // Composing: only map (the IME owns the text); rebuilt after compositionend.
       return { blocks, graph: v.graph, decos: v.decos.map(tr.changes), atomic: v.atomic.map(tr.changes) }

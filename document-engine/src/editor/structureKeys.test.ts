@@ -186,3 +186,46 @@ describe('selection units', () => {
     expect(paragraphAt(st('a\n\nb'), 2)).toEqual({ from: 2, to: 2 })
   })
 })
+
+describe('structure keys: caret position, tabs and composition', () => {
+  it('Enter on an empty item only exits with the caret at or after the marker', () => {
+    expect(enterExitStructure(mk('|- '))).toBe(false)
+    expect(enterExitStructure(mk('text\n\n|- '))).toBe(false)
+    const after = mk('text\n\n- |')
+    expect(enterExitStructure(after)).toBe(true)
+    const atMarkerEnd = mk('text\n\n-| ')
+    expect(enterExitStructure(atMarkerEnd)).toBe(true)
+  })
+  it('an empty quote line is only exited from after the >', () => {
+    expect(enterExitStructure(mk('> a\n|> '))).toBe(false)
+    expect(enterExitStructure(mk('> a\n>| '))).toBe(true)
+  })
+  it('a tab-indented nested item outdents to its tab-indented parent, not to a 1-wide guess', () => {
+    const v = mk('- a\n\t- b\n\t\t- |')
+    expect(enterExitStructure(v)).toBe(true)
+    // parent "\t- b" is 4 columns wide: the child lands there as 4 spaces
+    expect(v.state.doc.toString()).toBe('- a\n\t- b\n    - ')
+  })
+  it('a nested tab item under a top-level item outdents to column 0', () => {
+    const v = mk('- a\n\t- |')
+    expect(enterExitStructure(v)).toBe(true)
+    expect(v.state.doc.toString()).toBe('- a\n- ')
+  })
+  it('Backspace after a nested marker uses the same column maths', () => {
+    const v = mk('- a\n\t- b\n\t\t- |')
+    expect(backspaceStructure(v)).toBe(true)
+    expect(v.state.doc.toString()).toBe('- a\n\t- b\n    - ')
+  })
+  it('no key action during composition or just after it', async () => {
+    const { markCompositionEnd } = await import('./compositionGuard')
+    const v = mk('- a\n- |')
+    v.composing = true
+    expect(enterExitStructure(v)).toBe(false)
+    expect(backspaceStructure(v)).toBe(false)
+    v.composing = false
+    markCompositionEnd(v, Date.now())
+    expect(enterExitStructure(v)).toBe(false)
+    markCompositionEnd(v, Date.now() - 500)
+    expect(enterExitStructure(v)).toBe(true)
+  })
+})
