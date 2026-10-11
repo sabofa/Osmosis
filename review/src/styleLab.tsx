@@ -7,7 +7,7 @@ import { EXAMPLE_GROUPS, EXAMPLES } from '../../graph-engine/src/examples'
 import { contactSheet, LINE_DEMO, SHEET_CSS, sheetSectionsHtml } from '../../graph-engine/src/figure/contactSheet'
 import { cssColor } from '../../graph-engine/src/figure/document'
 import type { FigurePen } from '../../graph-engine/src/figure/pen'
-import { renderFigure } from '../../graph-engine/src/figure/render'
+import { renderFigure, type FigureResult } from '../../graph-engine/src/figure/render'
 import { styledPen } from '../../graph-engine/src/figure/styledPen'
 import { parseSpec } from '../../graph-engine/src/parser/parseSpec'
 import { DARK_PALETTE, LIGHT_PALETTE, type Palette } from '../../graph-engine/src/render/palette'
@@ -86,10 +86,12 @@ function writeHash(state: LabState, style: Style): void {
 // Rendering
 // ---------------------------------------------------------------------------
 
-function draw(spec: string, layer: StyleLayer, palette: Palette): { svg: string; errors: string[] } {
+function draw(spec: string, layer: StyleLayer, palette: Palette): { svg: string; errors: string[]; frame: FigureResult['frame']; items: FigureResult['items'] } {
   const parsed = parseSpec(spec)
   const result = renderFigure(parsed.statements, { ...parsed.config, style: layer }, palette)
-  return { svg: result.svg, errors: [...parsed.errors, ...result.errors].map((e) => e.message) }
+  // The frame and items too, so hover, selection and shift-select work here as
+  // they do in the app.
+  return { svg: result.svg, errors: [...parsed.errors, ...result.errors].map((e) => e.message), frame: result.frame, items: result.items }
 }
 
 // Small swatches for the pickers, drawn by the engine's own styled pen: a
@@ -379,7 +381,7 @@ function StyleLab() {
 
           <main className="lab-stage">
             <div className="lab-figure">
-              <FigureView svg={figure.svg} theme={state.theme} />
+              <FigureView svg={figure.svg} theme={state.theme} frame={figure.frame} items={figure.items} />
               <div className="lab-figure-caption">
                 <strong>{example.label}</strong>
                 <span>

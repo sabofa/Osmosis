@@ -17,6 +17,6 @@ export const ruled: PaperType = {
     const box = cover(view)
     const x = view.x + 0.06 * view.width
     const margin = tag('line', { x1: x, y1: box.y, x2: x, y2: box.y + box.height, stroke: colour('#e08a8a'), 'stroke-width': 1.1, 'data-paper': 'margin' })
-    return { defs: [pattern], background: [sheet(view, tint), sheet(view, `url(#${id('ruled')})`), margin] }
+    return { defs: [pattern], background: [sheet(view, tint)], grid: [sheet(view, `url(#${id('ruled')})`), margin] }
   },
 }

@@ -1,5 +1,7 @@
 # HANDOFF 2D handling and geometry, 2026-10-07
 
+> **Superseded for the in-flight list (H1–H8) by `HANDOFF-2026-10-10-2d-handling.md`**: the tile renderer replaced the live-transform work, and the engine has a new owner.
+
 **Branch / worktree / last commit:** `milestone-a/geometry`, in `C:/Users/benif/Osmosis/.claude/worktrees/milestone-a-geometry`, last commit `ae3815b` (perf(view2d): …). Base of the unmerged work is `d1a8ef4` (the Milestone A integration merge on `milestone-a/main`).
 
 **Plan + ledger paths:**

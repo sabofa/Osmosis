@@ -43,6 +43,17 @@ export function levelFor(devicePxPerUnit: number): number {
   return Math.abs(exact - near) < 1e-6 ? near : Math.ceil(exact)
 }
 
+// Whether `outer` contains `inner` (up to rounding).
+export function coversRect(outer: Rect, inner: Rect): boolean {
+  const eps = 1e-9 * Math.max(Math.abs(outer.width), Math.abs(outer.height), 1e-300)
+  return (
+    inner.x >= outer.x - eps &&
+    inner.y >= outer.y - eps &&
+    inner.x + inner.width <= outer.x + outer.width + eps &&
+    inner.y + inner.height <= outer.y + outer.height + eps
+  )
+}
+
 // A tile's side, in content units.
 export const tileUnits = (level: number): number => TILE_PX / levelScale(level)
 
