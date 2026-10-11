@@ -450,7 +450,7 @@ function buildCircle(statement: Statement & { kind: 'circle' }, statementIndex: 
 
 // A closed shape from >= 3 labeled vertices — the edges reuse 'segments'
 // (straight, constant weight, matching a geometry diagram's crisp corners
-// rather than the curvature-driven ribbon a 'curve' would give a polygon's
+// rather than the round-jointed ribbon a 'curve' would give a polygon's
 // sharp turns), plus one 'point' per vertex so labels/dots render exactly
 // like a plain "A = (x, y)" statement would. Vertex *names* are resolved to
 // coordinates separately, in collectNamedPoints, so angle:/tick:/

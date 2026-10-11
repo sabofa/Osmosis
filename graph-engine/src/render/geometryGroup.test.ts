@@ -39,7 +39,7 @@ describe('GeometryGroupManager', () => {
     // Same THREE object reused in place (the whole point of this update
     // path), but its buffer must actually reflect the grown point set. A
     // curve renders as a ribbon (left/right offset pairs per point, see
-    // computeCurveWidths) rather than a plain polyline, so recover each
+    // fillRibbonPositions) rather than a plain polyline, so recover each
     // sample's centerline by averaging its left/right pair — that's exactly
     // the original point regardless of the computed width.
     expect(objectAfter).toBe(objectBefore)
