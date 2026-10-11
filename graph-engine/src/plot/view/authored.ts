@@ -37,3 +37,14 @@ export function authoredBounds(
 export function axisZoomAllowedFor(aspect: PlotAspect | null): boolean {
   return aspect?.kind === 'ratioXY' || aspect?.kind === 'auto'
 }
+
+/**
+ * The aspect the 2D camera starts with. An authored @aspect wins; with none, a fully authored @bounds window
+ * (parse requires all four numbers) is honoured exactly ('auto', the window stretches to the screen); with
+ * neither, null = equal.
+ */
+export function resolvePlotAspect(config: Pick<GraphConfig, 'bounds'> & { space: { aspect: PlotAspect | null } }): PlotAspect | null {
+  if (config.space.aspect) return config.space.aspect
+  const b = config.bounds
+  return b && [b.xMin, b.xMax, b.yMin, b.yMax].every((v) => typeof v === 'number') ? { kind: 'auto' } : null
+}

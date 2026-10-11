@@ -146,9 +146,10 @@ describe('gridPlan', () => {
     expect(plan.labelsX.map((l) => l.label)).toEqual(
       ['−10', '−9', '−8', '−7', '−6', '−5', '−4', '−3', '−2', '−1', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
     )
-    expect(plan.labelsX[0].at).toEqual({ x: -10, y: -OFFSET.y })
+    expect(plan.labelsX[0].at.y).toBe(-OFFSET.y)
     expect(plan.labelsY.map((l) => l.label)).toContain('0')
-    expect(plan.labelsY[0].at).toEqual({ x: -OFFSET.x, y: -6 })
+    expect(plan.labelsY[0].at.x).toBe(-OFFSET.x)
+    expect(plan.labelsY[0].at.y).toBeCloseTo(-6 + 8 * (12 / 480), 9) // slid up half a label height (8px) off the bottom edge
   })
 
   it('draws a log axis: decades strong with power labels, 2..9 faint', () => {
@@ -161,8 +162,9 @@ describe('gridPlan', () => {
     for (let k = 0; k < 4; k++) for (let m = 2; m <= 9; m++) minors.push(Math.log10(m) + k)
     expect(plan.faintY).toHaveLength(minors.length)
     plan.faintY.forEach((v, i) => expect(v).toBeCloseTo(minors[i], 12))
-    // labels are drawn at forward(value): 1 sits at v = 0
-    expect(plan.labelsY[0].at.y).toBeCloseTo(0, 12)
+    // labels are drawn at forward(value): 1 sits at v = 0, slid up half a label height so its box stays in view
+    expect(plan.labelsY[0].at.y).toBeGreaterThanOrEqual(0)
+    expect(plan.labelsY[0].at.y).toBeLessThan(0.1)
   })
 
   it('walks pi steps with pi labels', () => {

@@ -146,7 +146,10 @@ describe('sceneToSvg', () => {
       for (const [s, k] of [['π/2', 1], ['π', 2], ['3π/2', 3], ['2π', 4]] as const) {
         const t = ts.find((q) => q.s === s)
         expect(t, s).toBeDefined()
-        expect(Math.abs(t!.x - ((k * Math.PI) / 2) * (800 / (2 * Math.PI)))).toBeLessThan(0.5)
+        const exact = ((k * Math.PI) / 2) * (800 / (2 * Math.PI))
+        // the 2π label sits on the right edge: it slides inward so its box stays in the canvas
+        if (k === 4) expect(t!.x + (s.length * 7) / 2).toBeLessThanOrEqual(800 + 1e-6)
+        else expect(Math.abs(t!.x - exact)).toBeLessThan(0.5)
       }
     })
 

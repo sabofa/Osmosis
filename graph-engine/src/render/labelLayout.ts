@@ -105,6 +105,30 @@ export function labelBoxesPx(
   })
 }
 
+/**
+ * Shift label centres inward so every estimated label box (same width as labelBoxesPx) lies inside the view.
+ * A label wider than the view is centred. Positions are (u,v) plane coordinates; returns new objects.
+ */
+export function keepLabelsInside<T extends { label: string; at: { x: number; y: number } }>(
+  labels: readonly T[],
+  bounds: TitleBounds,
+  widthPx: number,
+  heightPx: number,
+): T[] {
+  const spanX = bounds.xMax - bounds.xMin
+  const spanY = bounds.yMax - bounds.yMin
+  if (!(spanX > 0 && spanY > 0 && widthPx > 0 && heightPx > 0) || !Number.isFinite(spanX + spanY)) return labels.slice()
+  const perX = spanX / widthPx
+  const perY = spanY / heightPx
+  return labels.map((l) => {
+    const halfW = (l.label.length * TITLE.charPx) / 2
+    const halfH = TITLE.heightPx / 2
+    const cx = halfW * 2 >= widthPx ? widthPx / 2 : clamp((l.at.x - bounds.xMin) / perX, halfW, widthPx - halfW)
+    const cy = halfH * 2 >= heightPx ? heightPx / 2 : clamp((bounds.yMax - l.at.y) / perY, halfH, heightPx - halfH)
+    return { ...l, at: { x: bounds.xMin + cx * perX, y: bounds.yMax - cy * perY } }
+  })
+}
+
 // Textbook axis titles: x at the right end of the x axis, just above its line
 // (above the bottom edge when the axis is off-screen); y at the top end of the
 // y axis, just right of its line (inside the left edge when off-screen). A title
@@ -132,10 +156,15 @@ export function titleLayout(opts: {
   if (titles.x !== '') {
     const w = titles.x.length * TITLE.charPx
     const axisPx = ((bounds.yMax - clamp(0, bounds.yMin, bounds.yMax)) / (bounds.yMax - bounds.yMin)) * H
-    const bottom = Math.max(axisPx - m, h)
+    let bottom = Math.max(axisPx - m, h)
     let right = W - m
     const box = (): PxBox => ({ x: right - w, y: bottom - h, w, h })
     while (labels.some((l) => overlaps(box(), l)) && right - w - step >= 0) right -= step
+    if (labels.some((l) => overlaps(box(), l))) {
+      // No clear spot along the row: back to the right end and climb past the labels.
+      right = W - m
+      while (labels.some((l) => overlaps(box(), l)) && bottom - step >= h) bottom -= step
+    }
     xBox = box()
     out.push({
       axis: 'x',
@@ -150,11 +179,17 @@ export function titleLayout(opts: {
   if (titles.y !== '') {
     const w = titles.y.length * TITLE.charPx
     const axisPx = ((clamp(0, bounds.xMin, bounds.xMax) - bounds.xMin) / (bounds.xMax - bounds.xMin)) * W
-    const left = axisPx + m
+    let left = axisPx + m
     let top = m
     const box = (): PxBox => ({ x: left, y: top, w, h })
     while ((labels.some((l) => overlaps(box(), l)) || (xBox !== null && overlaps(box(), xBox))) && top + h + step <= H) {
       top += step
+    }
+    const blocked = () => labels.some((l) => overlaps(box(), l)) || (xBox !== null && overlaps(box(), xBox))
+    if (blocked()) {
+      // No clear spot down the column: back to the top and move right past the labels.
+      top = m
+      while (blocked() && left + step + w <= W) left += step
     }
     out.push({
       axis: 'y',

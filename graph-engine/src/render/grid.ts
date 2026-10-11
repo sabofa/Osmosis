@@ -4,7 +4,7 @@ import type { Bounds } from './marchingSquares'
 import { AxisLabelPool } from './axisLabelPool'
 import { frameTicks, labelAnchors, type Tick } from '../plot/frame/ticks'
 import { scaleOf, type Scale } from '../plot/frame/scale'
-import { labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
+import { keepLabelsInside, labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
 import { LABEL_MARGIN_PX, LABEL_OFFSET_PX, TITLE } from '../plot/frame/tuning'
 import { defaultSpaceConfig } from '../space/config'
 
@@ -227,6 +227,12 @@ export function gridPlan(
       labelsY.push({ ...a, at: { x: onAxis ? a.at.x - offset.x : a.at.x, y: sy.forward(a.at.y) } })
     }
   }
+  // Keep every label box inside the view: a tick at the edge slides inward instead of being cut off.
+  const inside = <T extends { label: string; at: { x: number; y: number } }>(ls: T[]) => keepLabelsInside(ls, bounds, size.widthPx, size.heightPx)
+  const shiftedX = inside(labelsX)
+  const shiftedY = inside(labelsY)
+  labelsX.splice(0, labelsX.length, ...shiftedX)
+  labelsY.splice(0, labelsY.length, ...shiftedY)
   // A title equal to its axis default ('x' / 'y') counts as not authored, so
   // plots without @titles do not change. An author who wants a title that is
   // literally "x" can write "x " or "x (m)".

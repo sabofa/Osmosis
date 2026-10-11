@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { authoredBounds, axisZoomAllowedFor } from './authored'
+import { authoredBounds, axisZoomAllowedFor, resolvePlotAspect } from './authored'
+import { boundsOf, startView } from './plotView'
 import { DEFAULT_LOG_WINDOW } from '../frame/tuning'
 
 const lin = { x: 'linear', y: 'linear' } as const
@@ -26,5 +27,31 @@ describe('axisZoomAllowedFor', () => {
     expect(axisZoomAllowedFor({ kind: 'equal' })).toBe(false)
     expect(axisZoomAllowedFor({ kind: 'auto' })).toBe(true)
     expect(axisZoomAllowedFor({ kind: 'ratioXY', x: 2, y: 1 })).toBe(true)
+  })
+})
+
+describe('resolvePlotAspect', () => {
+  const screen = { width: 1200, height: 800 }
+  const win = { uMin: -5, uMax: 5, vMin: -3, vMax: 3 }
+  const cfg = (bounds: { xMin: number; xMax: number; yMin: number; yMax: number } | null, aspect: Parameters<typeof resolvePlotAspect>[0]['space']['aspect'] = null) => ({ bounds, space: { aspect } })
+  const b = { xMin: -5, xMax: 5, yMin: -3, yMax: 3 }
+
+  it('honours a fully authored @bounds window exactly when @aspect is absent', () => {
+    const aspect = resolvePlotAspect(cfg(b))
+    expect(aspect).toEqual({ kind: 'auto' })
+    const seen = boundsOf(startView(win, aspect, screen), win, screen)
+    expect(seen.uMin).toBeCloseTo(-5, 9)
+    expect(seen.uMax).toBeCloseTo(5, 9)
+    expect(seen.vMin).toBeCloseTo(-3, 9)
+    expect(seen.vMax).toBeCloseTo(3, 9)
+  })
+  it('without @bounds the plot stays equal (circles round)', () => {
+    expect(resolvePlotAspect(cfg(null))).toBeNull()
+  })
+  it('an explicit @aspect: equal with @bounds stays equal and fits the window', () => {
+    const aspect = resolvePlotAspect(cfg(b, { kind: 'equal' }))
+    expect(aspect).toEqual({ kind: 'equal' })
+    const seen = boundsOf(startView(win, aspect, screen), win, screen)
+    expect((seen.uMax - seen.uMin) / screen.width).toBeCloseTo((seen.vMax - seen.vMin) / screen.height, 9)
   })
 })

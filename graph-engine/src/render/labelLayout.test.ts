@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampedLabelPlacement, labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
+import { clampedLabelPlacement, keepLabelsInside, labelBoxesPx, titleLayout, type TitlePlacement } from './labelLayout'
 import { gridPlan } from './grid'
 import { defaultConfig } from '../parser/config'
 import { TITLE } from '../plot/frame/tuning'
@@ -137,5 +137,44 @@ describe('titleLayout', () => {
   it('is deterministic', () => {
     const o = { bounds: B, widthPx: 800, heightPx: 600, titles: both, labelBoxesPx: [{ x: 700, y: 280, w: 60, h: 40 }] }
     expect(titleLayout(o)).toEqual(titleLayout(o))
+  })
+})
+
+describe('edge labels', () => {
+  const B = { xMin: -10, xMax: 10, yMin: -6, yMax: 6 }
+  const inView = (b: { x: number; y: number; w: number; h: number }, w: number, h: number) =>
+    b.x >= -1e-9 && b.y >= -1e-9 && b.x + b.w <= w + 1e-9 && b.y + b.h <= h + 1e-9
+
+  it('shifts a label on the right/left/bottom/top edge inward, never drops it', () => {
+    const ls = [
+      { label: '2π', at: { x: 10, y: 0 } },
+      { label: '10^-6', at: { x: -10, y: -6 } },
+      { label: '1', at: { x: 0, y: 6 } },
+    ]
+    const out = keepLabelsInside(ls, B, 800, 480)
+    expect(out).toHaveLength(3)
+    for (const b of labelBoxesPx(out, B, 800, 480)) expect(inView(b, 800, 480)).toBe(true)
+    expect(out[0].at.x).toBeLessThan(10)
+    expect(out[1].at.x).toBeGreaterThan(-10)
+  })
+  it('leaves labels already inside untouched', () => {
+    const ls = [{ label: '5', at: { x: 0, y: 0 } }]
+    expect(keepLabelsInside(ls, B, 800, 480)).toEqual(ls)
+  })
+  it('gridPlan: a tick exactly at the right edge has its label box inside the view', () => {
+    const size = { widthPx: 800, heightPx: 480 }
+    const plan = gridPlan(B, defaultConfig(), size, { x: 0.7, y: 0.4 }, { x: 0.5, y: 0.5 })
+    const edge = plan.labelsX.find((l) => l.label === '10')!
+    expect(edge).toBeDefined()
+    for (const b of labelBoxesPx([...plan.labelsX, ...plan.labelsY], B, 800, 480)) expect(inView(b, 800, 480)).toBe(true)
+  })
+  it('titleLayout: the x title is clear of every label box even when sliding left cannot clear it', () => {
+    const labels = [{ x: 0, y: 440, w: 800, h: 30 }] // a full-width row of labels along the bottom
+    const [t] = titleLayout({ bounds: B, widthPx: 800, heightPx: 480, titles: { x: 'time (s)', y: '' }, labelBoxesPx: labels })
+    const w = t.text.length * TITLE.charPx
+    const px = ((t.at.x - B.xMin) / 20) * 800
+    const py = ((B.yMax - t.at.y) / 12) * 480
+    const box = { x: px - w, y: py - TITLE.heightPx, w, h: TITLE.heightPx }
+    expect(box.x < labels[0].x + labels[0].w && labels[0].x < box.x + box.w && box.y < labels[0].y + labels[0].h && labels[0].y < box.y + box.h).toBe(false)
   })
 })
