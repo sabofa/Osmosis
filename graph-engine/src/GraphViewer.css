@@ -38,6 +38,15 @@
   min-height: 160px;
   border-radius: var(--gv-radius);
   overflow: hidden;
+  /* Always a flex container, not only when split. The panels below size
+     themselves with `flex: 1 1 0`, which does nothing at all in a block
+     container — so a single panel collapsed to zero height, taking the
+     figure (absolutely positioned against it) out of sight entirely and
+     leaving the canvas to fall back on its own attribute height, which is
+     what cut the graph off. One panel fills the column; two switch to a row
+     via .graph-viewer-split below. */
+  display: flex;
+  flex-direction: column;
 }
 
 .graph-viewer-light {
@@ -48,6 +57,67 @@
 .graph-viewer-dark {
   background: var(--gv-bg-dark);
   border: 2px solid var(--gv-border-dark);
+}
+
+/* Panels (F5). A spec containing both geometry and table statements puts up
+   both, and this is the only thing that changes for one that does not: a
+   single panel fills the frame exactly as the bare canvas used to, because
+   the panel is `position: relative; flex: 1` inside a full-size flex box.
+   Stored table-only and graph-only specs are unaffected. */
+.graph-viewer-panel {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Its own stacking context: the space overlay's and the stats' z-indices
+     below order them against each other, never against the host page. */
+  isolation: isolate;
+}
+
+.graph-viewer-split {
+  flex-direction: row;
+}
+
+/* Below this the two panels stop being readable side by side — a figure
+   squeezed into half a phone screen is not a figure — so they stack and the
+   frame scrolls instead. */
+@media (max-width: 720px) {
+  .graph-viewer-split {
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .graph-viewer-split > .graph-viewer-panel {
+    flex: 0 0 auto;
+    min-height: 240px;
+  }
+}
+
+/* The divider between the panels, on whichever edge they meet. */
+.graph-viewer-split > .graph-viewer-panel + .graph-viewer-panel {
+  border-left: 1px solid var(--line-strong, #c9c6b3);
+}
+
+@media (max-width: 720px) {
+  .graph-viewer-split > .graph-viewer-panel + .graph-viewer-panel {
+    border-left: none;
+    border-top: 1px solid var(--line-strong, #c9c6b3);
+  }
+}
+
+/* Space (3D specs) puts its text in a DOM overlay beside the canvas in this
+   panel (space/ui/SpaceView.css), which is why the panel is position:
+   relative. The panel's own overlays (stats, the context-lost notice, the
+   hover label) stack above it. */
+.graph-viewer-panel > .space-overlay {
+  z-index: 1;
+}
+
+.graph-viewer-stats,
+.graph-viewer-context-lost,
+.graph-viewer-hover-label {
+  z-index: 2;
 }
 
 .graph-viewer-canvas {

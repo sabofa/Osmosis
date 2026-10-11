@@ -59,6 +59,31 @@ through D4 writes, edits or annotates text, and every one of those operations
 is wrong in a way that is invisible until it isn't, if the offset rules are not
 pinned first.
 
+### Position in the overall build order
+
+Revised 2026-09-22. The full interleaved order lives in the graph-engine spec's
+"Build order" section; these tracks sit in it as follows:
+
+- **D1-D3 run together at step 4**, after the graph engine's Milestone A and
+  after graph theme tokens are settled at step 3 — D5 must share those tokens,
+  so they are a contract D1-D3 build against rather than something invented
+  later.
+- **D4 detaches and moves to step 8**, alongside the diagram engine and the
+  live tutor layer. That suits it: code pages want the diagram engine for
+  call-graph and data-structure rendering, and the live layer for tutor-driven
+  stepping.
+- **D5 pairs with graph track 5 at step 9**, as a single pass. A plot, a sheet
+  and a page of prose in one document have to read as one object, which two
+  passes months apart will not achieve.
+
+**One consequence to go in with eyes open:** D3 lands at step 4, but the
+multi-page container lands at step 7. The spreadsheet's defining feature is
+that other pages read from it (`scatter from Data!A2:B40`), and cross-page
+references need multi-page documents. So D3 builds the grid, formula engine,
+dependency recalculation and CSV import against a single-page document, and
+the thing it exists for cannot be exercised for three more steps — unless a
+minimal cross-page reference is pulled forward with it.
+
 ## The mode matrix
 
 `simple`/`full` is replaced by two axes rather than a flat list of modes:

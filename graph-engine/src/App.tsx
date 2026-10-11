@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import GraphViewer from './GraphViewer'
 import { parseSpec } from './parser/parseSpec'
+import { EXAMPLE_GROUPS, EXAMPLES, type ExampleGroup } from './examples'
 import type { HoverMode } from './parser/config'
 import type { ParseError } from './parser/types'
 import './App.css'
 
 const HOVER_MODES: HoverMode[] = ['all', 'points', 'none']
-const POINTS_MODES = ['none', 'intercepts', 'vertices', 'all'] as const
+const POINTS_MODES = ['none', 'roots', 'extrema', 'all'] as const
 type PointsMode = (typeof POINTS_MODES)[number]
 
 // Rewrites (or inserts) a directive line, so a visible toggle and the spec
@@ -29,12 +30,14 @@ function withPointsMode(spec: string, mode: PointsMode): string {
   return withDirective(spec, 'points', mode)
 }
 
-// The parsed config only ever carries the expanded Set — this maps it back
-// to whichever toggle button should read as active.
+// The parsed config only carries the expanded Set of concrete kinds — this
+// maps it back to whichever toggle button should read as active.
 function pointsModeFromConfig(points: Set<string>): PointsMode {
   if (points.size === 0) return 'none'
-  if (points.has('intercepts') && points.has('vertices')) return 'all'
-  return points.has('intercepts') ? 'intercepts' : 'vertices'
+  const hasRoots = points.has('x-intercept')
+  const hasExtrema = points.has('local-max')
+  if (hasRoots && hasExtrema) return 'all'
+  return hasRoots ? 'roots' : 'extrema'
 }
 
 // Shared by the Hover and Points rows below — both are "one directive value,
@@ -65,155 +68,74 @@ function ToggleGroup<T extends string>({
   )
 }
 
-const EXAMPLES: { label: string; spec: string }[] = [
-  {
-    label: '2D',
-    spec: `y = x^2 - 2x - 1
-x^2/9 + y^2/4 = 1        # ellipse
-x^2 + y^2 = 25            # circle
-A = (2, 3)
-(0,0) -- (4,4)
-(1,1) -> (3,5)
-(cos(t)*3, sin(t)*2) for t in [0, 6.283]`,
-  },
-  {
-    label: '3D',
-    spec: `z = sin(x) * cos(y)
-(3*cos(u)*sin(v), 3*sin(u)*sin(v), 3*cos(v)) for u in [0, 6.283], v in [0, 3.1416]   # sphere
-A = (2, 2, 3)
-(0,0,0) -- (3,3,0)
-(0,0,0) -> (0,0,4)
-(cos(t)*2, sin(t)*2, t*0.3) for t in [0, 18.85]   # helix`,
-  },
-  {
-    label: 'Inequality',
-    spec: `@hover: none
-y > x^2 - 4
-x^2 + y^2 <= 16`,
-  },
-  {
-    label: 'Vector',
-    spec: `vector: (0,0) -> (3,4)
-vector: (0,0) -> (-2,3) color: purple`,
-  },
-  {
-    label: 'Tangent',
-    spec: `y = x^3 - 3x
-tangent: x^3 - 3x at x = 1
-tangent: x^3 - 3x at x = -1 color: purple`,
-  },
-  {
-    label: 'Animate',
-    spec: `k(t) = cos(t) * 2
-animate: (k(t), sin(t)*2) for t in [0, 6.283]   # references k(t), a named function`,
-  },
-  {
-    label: 'Piecewise',
-    spec: `@points: vertices
-y = -x - 1 if x < 0
-y = x^2 - 1 if x >= 0`,
-  },
-  {
-    label: 'Polar',
-    spec: `r = 2 + 2*sin(3*theta)`,
-  },
-  {
-    label: 'Slope field',
-    spec: `field: dy/dx = x - y
-y = x - 1   # one solution curve through the field`,
-  },
-  {
-    label: 'Scatter',
-    spec: `scatter: (1,2.1), (2,3.9), (3,6.2), (4,7.8), (5,10.1), (6,11.9)`,
-  },
-  {
-    label: 'Table (data)',
-    spec: `@mode: table
-header: Score range | Frequency
-row: 90-100 | 4
-row: 80-89 | 9
-row: 70-79 | 13
-row: 60-69 | 5`,
-  },
-  {
-    label: 'Table (function)',
-    spec: `@mode: table
-table: y = x^2 - 1 for x in [0, 6] step 1`,
-  },
-  {
-    label: 'Table (formula)',
-    spec: `@mode: table
-@formulas: on
-table: y = x^2 - 1 for x in [0, 6] step 1`,
-  },
-  {
-    label: 'Table (multiple)',
-    spec: `@mode: table
-scores.header: Trial | Score
-scores.row: 1 | 82
-scores.row: 2 | 91
-scores.row: 3 | 76
-times.table: y = 2x + 1 for x in [0, 4] step 1`,
-  },
-  {
-    label: 'Hide/show',
-    spec: `@hide: helper
-y = x^2 name: main
-y = x + 3 color: teal name: helper`,
-  },
-  {
-    label: 'Vertices/intercepts',
-    spec: `@points: intercepts, vertices
-y = x^2 - 4`,
-  },
-  {
-    label: 'Circle',
-    spec: `circle: (0, 0), 3
-O = (0, 0)`,
-  },
-  {
-    label: 'Triangle',
-    spec: `polygon: A(0,0), B(4,0), C(2,3)
-tick: A-C
-tick: B-C
-angle: A-B-C label: x°`,
-  },
-  {
-    label: 'Right angle',
-    spec: `polygon: A(0,0), B(4,0), C(0,3)
-right-angle: B-A-C`,
-  },
-  {
-    label: 'Isosceles angles',
-    spec: `polygon: A(0,0), B(6,0), C(3,4)
-tick: A-C
-tick: B-C
-angle: B-A-C label: α
-angle: A-B-C label: α`,
-  },
-  {
-    label: 'Hexagon',
-    spec: `circle: (0, 0), 3
-polygon: A(3*cos(0), 3*sin(0)), B(3*cos(pi/3), 3*sin(pi/3)), C(3*cos(2*pi/3), 3*sin(2*pi/3)), D(3*cos(pi), 3*sin(pi)), E(3*cos(4*pi/3), 3*sin(4*pi/3)), F(3*cos(5*pi/3), 3*sin(5*pi/3))`,
-  },
-  {
-    label: 'Hyperbola',
-    spec: `x^2/4 - y^2/9 = 1`,
-  },
-  {
-    label: 'Damped oscillation',
-    spec: `y = exp(-x/4) * cos(3x)
-y = exp(-x/4) color: gray
-y = -exp(-x/4) color: gray`,
-  },
-  {
-    label: 'Functions',
-    spec: `k(x) = x^2 - 2x + 1
-a = 3
-y = a * k(x - 2) color: teal
-y = k(k(x)) - 5 color: purple`,
-  },
-]
+// The example picker. Seventy-odd buttons in one wrap had stopped being
+// navigable, so the harness shows one group at a time, with a search box that
+// cuts across every group. The chosen group is remembered per browser — a
+// convenience only, so any storage failure just falls back to the first group.
+const GROUP_KEY = 'graph-engine.review.example-group'
+
+function readStoredGroup(): ExampleGroup {
+  try {
+    const stored = window.localStorage.getItem(GROUP_KEY)
+    return (EXAMPLE_GROUPS as readonly string[]).includes(stored ?? '') ? (stored as ExampleGroup) : EXAMPLE_GROUPS[0]
+  } catch {
+    return EXAMPLE_GROUPS[0]
+  }
+}
+
+function ExamplePicker({ current, onPick }: { current: string; onPick: (spec: string) => void }) {
+  const [group, setGroup] = useState<ExampleGroup>(readStoredGroup)
+  const [query, setQuery] = useState('')
+
+  function chooseGroup(next: ExampleGroup) {
+    setGroup(next)
+    setQuery('')
+    try {
+      window.localStorage.setItem(GROUP_KEY, next)
+    } catch {
+      // Remembering the group is a nicety; the picker works without it.
+    }
+  }
+
+  const needle = query.trim().toLowerCase()
+  const shown = needle
+    ? EXAMPLES.filter((e) => e.label.toLowerCase().includes(needle) || e.group.toLowerCase().includes(needle))
+    : EXAMPLES.filter((e) => e.group === group)
+
+  return (
+    <div className="app-picker">
+      <div className="app-picker-groups" role="tablist" aria-label="Example groups">
+        {EXAMPLE_GROUPS.map((g) => {
+          const count = EXAMPLES.filter((e) => e.group === g).length
+          const active = !needle && g === group
+          return (
+            <button key={g} role="tab" aria-selected={active} className={active ? 'active' : ''} onClick={() => chooseGroup(g)}>
+              {g}
+              <span className="app-picker-count">{count}</span>
+            </button>
+          )
+        })}
+      </div>
+      <input
+        className="app-picker-search"
+        type="search"
+        placeholder={`Search all ${EXAMPLES.length} examples`}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search examples"
+      />
+      <div className="app-examples">
+        {shown.map((ex) => (
+          <button key={ex.label} className={ex.spec === current ? 'current' : ''} onClick={() => onPick(ex.spec)}>
+            {ex.label}
+            {needle && <span className="app-example-group">{ex.group}</span>}
+          </button>
+        ))}
+        {shown.length === 0 && <p className="app-picker-empty">No example matches “{query.trim()}”.</p>}
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   const [spec, setSpec] = useState(EXAMPLES[0].spec)
@@ -247,13 +169,7 @@ export default function App() {
         </p>
         <ToggleGroup label="Hover" options={HOVER_MODES} active={hoverMode} onSelect={(m) => setSpec((s) => withHoverMode(s, m))} />
         <ToggleGroup label="Points" options={POINTS_MODES} active={pointsMode} onSelect={(m) => setSpec((s) => withPointsMode(s, m))} />
-        <div className="app-examples">
-          {EXAMPLES.map((ex) => (
-            <button key={ex.label} onClick={() => setSpec(ex.spec)}>
-              {ex.label}
-            </button>
-          ))}
-        </div>
+        <ExamplePicker current={spec} onPick={setSpec} />
         <textarea
           className="app-textarea"
           value={spec}
@@ -271,7 +187,7 @@ export default function App() {
         )}
       </div>
       <div className="app-viewer">
-        <GraphViewer spec={spec} onErrors={setErrors} />
+        <GraphViewer spec={spec} onErrors={setErrors} coordinates />
       </div>
     </div>
   )

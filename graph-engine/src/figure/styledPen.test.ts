@@ -1,0 +1,404 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+import { parseSpec } from '../parser/parseSpec'
+import { DARK_PALETTE, LIGHT_PALETTE } from '../render/palette'
+import { EXAMPLES } from '../examples'
+import { estimateTextSize, LABEL_FONT_SIZE } from './labels'
+import { renderFigure } from './render'
+
+// The styled pen, end to end: a spec with a style directive renders through
+// renderFigure, deterministically, keeping every element's identity.
+
+const TRIANGLE = [
+  '@mode: figure',
+  'A = (0, 0)',
+  'B = (6, 0)',
+  'C = (1, 4)',
+  'segment: A-B',
+  'segment: B-C',
+  'segment: C-A',
+  'circle: (3, 1.5), 1',
+  'angle: B-A-C',
+  'tick: A-C',
+  'label: AB',
+].join('\n')
+
+const render = (spec: string) => {
+  const parsed = parseSpec(spec)
+  expect(parsed.errors).toEqual([])
+  return renderFigure(parsed.statements, parsed.config, LIGHT_PALETTE)
+}
+
+// Every drawn element inside one of the figure's layers, with its tag and
+// its identity attributes.
+function elements(svg: string, layers: readonly string[]): { tag: string; statement: string | null; object: string | null }[] {
+  const out: { tag: string; statement: string | null; object: string | null }[] = []
+  for (const name of layers) {
+    const open = svg.indexOf(`<g data-layer="${name}"`)
+    if (open < 0) continue
+    const start = svg.indexOf('>', open) + 1
+    if (svg[start - 2] === '/') continue
+    // Layers hold no nested groups except a label's tilt group, so the
+    // matching close is the first `</g>` at depth zero.
+    let depth = 0
+    let i = start
+    for (; i < svg.length; i++) {
+      if (svg.startsWith('<g', i) && svg[i + 2] !== 'r') depth++
+      else if (svg.startsWith('</g>', i)) {
+        if (depth === 0) break
+        depth--
+      }
+    }
+    const inner = svg.slice(start, i)
+    for (const match of inner.matchAll(/<(path|line|polyline|polygon|circle|ellipse|text|rect)\b([^>]*)>/g)) {
+      out.push({
+        tag: match[1],
+        statement: /data-statement="([^"]*)"/.exec(match[2])?.[1] ?? null,
+        object: /data-object="([^"]*)"/.exec(match[2])?.[1] ?? null,
+      })
+    }
+  }
+  return out
+}
+
+const GEOMETRY = ['regions', 'auxiliary', 'primary', 'marks', 'points']
+
+describe('a styled figure', () => {
+  for (const preset of ['ink', 'pencil', 'marker']) {
+    describe(preset, () => {
+      const spec = `@style: ${preset}\n${TRIANGLE}`
+
+      it('renders without errors, and not as clean', () => {
+        const result = render(spec)
+        expect(result.errors).toEqual([])
+        expect(result.svg).not.toBe(render(TRIANGLE).svg)
+        expect(result.svg).not.toMatch(/NaN|Infinity|undefined/)
+      })
+
+      it('is deterministic', () => {
+        expect(render(spec).svg).toBe(render(spec).svg)
+      })
+
+      it('keeps every element’s statement and object', () => {
+        const styled = elements(render(spec).svg, GEOMETRY)
+        expect(styled.length).toBeGreaterThan(0)
+        for (const element of styled) expect(element.statement, element.tag).not.toBeNull()
+        const identities = (list: typeof styled) => [...new Set(list.map((e) => `${e.statement}/${e.object}`))].sort()
+        expect(identities(styled)).toEqual(identities(elements(render(TRIANGLE).svg, GEOMETRY)))
+      })
+    })
+  }
+
+  it('changes with the seed, and only then', () => {
+    const ink = render(`@style: ink\n${TRIANGLE}`).svg
+    expect(render(`@style: ink\n@style-seed: 0\n${TRIANGLE}`).svg).toBe(ink)
+    expect(render(`@style: ink\n@style-seed: 1\n${TRIANGLE}`).svg).not.toBe(ink)
+  })
+
+  it('is clean again, byte for byte, when the style says clean', () => {
+    expect(render(`@style: clean\n${TRIANGLE}`).svg).toBe(render(TRIANGLE).svg)
+  })
+
+  // Randomness is keyed by identity, statement included: two congruent
+  // segments in different statements must not share one wobble.
+  it('gives congruent strokes of different statements different wobble', () => {
+    const svg = render(['@style: ink', '@mode: figure', 'P = (0, 0)', 'Q = (4, 0)', 'R = (0, 3)', 'S = (4, 3)', 'segment: P-Q', 'segment: R-S'].join('\n')).svg
+    const shapeOf = (statement: number) => {
+      const polygon = new RegExp(`<polygon points="([^"]*)"[^>]*data-statement="${statement}"`).exec(svg)
+      expect(polygon, `statement ${statement}`).not.toBeNull()
+      const points = polygon![1].split(' ').map((pair) => pair.split(',').map(Number))
+      const [x0, y0] = points[0]
+      // Relative to its own first point, so two strokes a translation apart
+      // compare equal when their wobble is the same.
+      return points.map(([x, y]) => `${(x - x0).toFixed(1)},${(y - y0).toFixed(1)}`).join(' ')
+    }
+    expect(shapeOf(4)).not.toBe(shapeOf(5))
+  })
+
+  it('defines its textures once, with ids from the figure’s content', () => {
+    const pencil = render(`@style: pencil\n${TRIANGLE}`).svg
+    const ids = [...pencil.matchAll(/<filter id="([^"]+)"/g)].map((m) => m[1])
+    expect(ids.length).toBeGreaterThan(0)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const id of ids) expect(pencil).toContain(`url(#${id})`)
+    // Another figure in the same style names its textures differently, so two
+    // figures on one page cannot collide.
+    const other = render(`@style: pencil\n${TRIANGLE.replace('C = (1, 4)', 'C = (2, 5)')}`).svg
+    const otherIds = [...other.matchAll(/<filter id="([^"]+)"/g)].map((m) => m[1])
+    for (const id of otherIds) expect(ids).not.toContain(id)
+  })
+})
+
+// Fills: every filled item draws its marks inside a clip of its EXACT outline
+// (the very path the clean pen fills), so hatching, stipple and scribble
+// never spill over an edge or into a hole.
+describe('a styled fill', () => {
+  const example = (label: string) => EXAMPLES.find((e) => e.label === label)!.spec
+
+  // The clip paths of a figure, by id, and the groups clipped to each.
+  const clips = (svg: string) => [...svg.matchAll(/<clipPath id="([^"]+)">(<[^>]+>)<\/clipPath>/g)].map((m) => ({ id: m[1], outline: m[2] }))
+  const clippedGroups = (svg: string, id: string) => [...svg.matchAll(new RegExp(`<g clip-path="url\\(#${id}\\)"([^>]*)>`, 'g'))].map((m) => m[1])
+  const d = (element: string) => / d="([^"]*)"/.exec(element)?.[1] ?? /points="([^"]*)"/.exec(element)?.[1]
+
+  for (const type of ['hatch', 'crosshatch', 'stipple', 'scribble', 'wash']) {
+    it(`${type} clips its marks to the region's exact outline`, () => {
+      const spec = example('Square minus its circle')
+      const clean = render(spec).svg
+      // Roughness 0: this is about the clip mechanism, not the off-register
+      // shift roughness adds on top of it (fills/wash.ts, fills/flat.ts).
+      const styled = render(`@style: ink
+@style-fill: ${type}
+@style-roughness: 0
+${spec}`).svg
+      const found = clips(styled)
+      expect(found).toHaveLength(1)
+      // The clip IS the region's exact outline: the clean fill's own path.
+      const cleanRegion = /<g data-layer="regions">(<path[^>]*>)/.exec(clean)![1]
+      expect(d(found[0].outline)).toBe(d(cleanRegion))
+      expect(found[0].outline).toContain('clip-rule="evenodd"')
+      const groups = clippedGroups(styled, found[0].id)
+      expect(groups).toHaveLength(1)
+      expect(groups[0]).toContain('data-statement=')
+    })
+  }
+
+  it('keeps the annulus’s hole out of every fill: the clip carries the hole', () => {
+    for (const type of ['hatch', 'stipple', 'scribble', 'wash', 'crosshatch']) {
+      const styled = render(`@style: pencil
+@style-fill: ${type}
+${example('Annulus')}`).svg
+      const [clip] = clips(styled)
+      expect(clip.outline, type).toContain('clip-rule="evenodd"')
+      // Two loops: the outer circle and the hole.
+      expect(d(clip.outline)!.match(/M /g), type).toHaveLength(2)
+    }
+  })
+
+  it('reaches sectors, segments and cut faces as well as shaded regions', () => {
+    for (const label of ['Circle vocabulary', 'Secant and chord', 'Cross-section (cut)']) {
+      const styled = render(`@style: ink
+@style-fill: hatch
+${example(label)}`).svg
+      expect(clips(styled).length, label).toBeGreaterThan(0)
+    }
+  })
+
+  it('draws flat and none without a clip', () => {
+    for (const type of ['flat', 'none']) {
+      // Roughness 0: at roughness > 0, flat's off-register shift needs its
+      // own clip (fills/flat.ts) — a deliberate exception, tested below.
+      expect(clips(render(`@style: ink
+@style-fill: ${type}
+@style-roughness: 0
+${example('Square minus its circle')}`).svg), type).toHaveLength(0)
+    }
+  })
+
+  it('flat gets its own clip once roughness gives it an off-register shift', () => {
+    const styled = render(`@style: ink
+@style-fill: flat
+@style-roughness: 1
+${example('Square minus its circle')}`).svg
+    expect(clips(styled)).toHaveLength(1)
+  })
+
+  // Review round 1, test gap: a shifted flat fill on a region with a hole
+  // (not just the plain square above) still clips to the exact outline,
+  // hole included.
+  it('a shifted flat fill on the annulus clips to its exact outline, hole and all', () => {
+    const styled = render(`@style: ink
+@style-fill: flat
+@style-roughness: 1
+${example('Annulus')}`).svg
+    const found = clips(styled)
+    expect(found).toHaveLength(1)
+    expect(found[0].outline).toContain('clip-rule="evenodd"')
+    // Two loops: the outer circle and the hole.
+    expect(d(found[0].outline)!.match(/M /g)).toHaveLength(2)
+  })
+
+  it('is deterministic', () => {
+    const spec = `@style: marker
+${example('Lens of two circles')}`
+    expect(render(spec).svg).toBe(render(spec).svg)
+  })
+})
+
+// Papers, lettering and colour, end to end.
+describe('a styled page', () => {
+  const texts = (svg: string) =>
+    [...svg.matchAll(/<text([^>]*)>([^<]*)<\/text>/g)].map((m) => ({
+      text: m[2],
+      x: /\bx="([^"]*)"/.exec(m[1])![1],
+      y: /\by="([^"]*)"/.exec(m[1])![1],
+      family: /font-family="([^"]*)"/.exec(m[1])?.[1],
+    }))
+  const LABELLED = EXAMPLES.find((e) => e.label === 'Measured + notation')!.spec
+
+  // A face and a tilt never move a label: at the clean size, every label is
+  // written exactly where clean writes it.
+  it('writes labels in the handwriting stack, at exactly their clean anchors', () => {
+    const clean = texts(render(LABELLED).svg)
+    const hand = texts(render(`@style: pencil\n@style-lettering-size: 1\n@style-tilt: 1\n${LABELLED}`).svg)
+    expect(hand.length).toBe(clean.length)
+    for (const label of hand) expect(label.family).toMatch(/^Caveat/)
+    expect(hand.map(({ text, x, y }) => `${text}@${x},${y}`).sort()).toEqual(clean.map(({ text, x, y }) => `${text}@${x},${y}`).sort())
+  })
+
+  // A lettering SIZE is laid out, not just drawn (review 1): labels are
+  // placed at the size they are written, so a big hand keeps its labels
+  // apart.
+  it('lays labels out at the size it letters them', () => {
+    for (const label of ['Solids on points', 'AIME: a fly on a cone', 'Cube and its net']) {
+      const spec = EXAMPLES.find((e) => e.label === label)!.spec
+      const svg = render(`@style: pencil\n@style-lettering-size: 1.6\n@style-tilt: 0\n${spec}`).svg
+      const boxes = [...svg.matchAll(/<text([^>]*)>([^<]*)<\/text>/g)]
+        .filter((m) => m[1].includes('text-anchor="middle"'))
+        .map((m) => {
+          const size = Number(/font-size="([^"]*)"/.exec(m[1])![1])
+          const x = Number(/\bx="([^"]*)"/.exec(m[1])![1])
+          const y = Number(/\by="([^"]*)"/.exec(m[1])![1])
+          const { width, height } = estimateTextSize(m[2], size)
+          return { size, x0: x - width / 2, x1: x + width / 2, y0: y - height / 2, y1: y + height / 2, text: m[2] }
+        })
+      expect(boxes.length, label).toBeGreaterThan(2)
+      for (const box of boxes) expect(box.size, label).toBeCloseTo(LABEL_FONT_SIZE * 1.6, 9)
+      for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+          const a = boxes[i]
+          const b = boxes[j]
+          const overlap = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 0.5 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 0.5
+          expect(overlap, `${label}: "${a.text}" and "${b.text}"`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('tilts each label about its own anchor, by at most four degrees', () => {
+    const svg = render(`@style: pencil\n@style-tilt: 1\n${LABELLED}`).svg
+    const rotations = [...svg.matchAll(/<g transform="rotate\(([^ ]+) ([^ ]+) ([^)]+)\)"[^>]*>(<text[^>]*>)/g)]
+    expect(rotations.length).toBeGreaterThanOrEqual(3)
+    for (const [, degrees, cx, cy, text] of rotations) {
+      expect(Math.abs(Number(degrees))).toBeLessThanOrEqual(4)
+      // A plain label is written centred on its anchor, so it turns about it.
+      if (text.includes('text-anchor="middle"')) {
+        expect(cx).toBe(/\bx="([^"]*)"/.exec(text)![1])
+        expect(cy).toBe(/\by="([^"]*)"/.exec(text)![1])
+      }
+    }
+    expect(render(`@style: pencil\n@style-tilt: 0\n${LABELLED}`).svg).not.toMatch(/rotate\(/)
+  })
+
+  it('applies saturation to ink, fills, paper and an author’s own colour', () => {
+    // Named colours: "#" starts a comment in a spec.
+    const figure = ['@mode: figure', 'polygon: A(0,0), B(4,0), C(1,3) color: red', 'fill: A-B-C color: blue', 'segment: A-C']
+    const spec = ['@style: ink', '@style-fill: flat', '@style-saturation: 0', ...figure].join('\n')
+    const svg = render(spec).svg
+    const colours = [...svg.matchAll(/(?:fill|stroke)="(#[0-9a-f]{6})"/g)].map((m) => m[1])
+    expect(colours.length).toBeGreaterThan(3)
+    for (const hex of colours) {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+      expect(Math.max(r, g, b) - Math.min(r, g, b), hex).toBeLessThanOrEqual(1)
+    }
+    // At 1 the author's colours stand exactly as the clean figure draws them.
+    const vivid = render(spec.replace('@style-saturation: 0', '@style-saturation: 1')).svg
+    const clean = render(figure.join('\n')).svg
+    const polygon = /<line[^>]*stroke="(#[0-9a-f]{6})"[^>]*data-statement="0"/.exec(clean)![1]
+    const region = /<path[^>]*fill="(#[0-9a-f]{6})"[^>]*data-statement="1"/.exec(clean)![1]
+    // Ink draws every line as a filled outline, so the polygon's colour is a fill.
+    expect(vivid).toMatch(new RegExp(`<polygon[^>]*fill="${polygon}"[^>]*data-statement="0"`))
+    expect(vivid).toContain(`fill="${region}"`)
+  })
+
+  it('lays the paper under everything, generously', () => {
+    const svg = render(`@style: ink\n@style-paper: graph\n${TRIANGLE}`).svg
+    const paper = svg.indexOf('data-layer="paper"')
+    expect(paper).toBeGreaterThan(0)
+    expect(paper).toBeLessThan(svg.indexOf('data-layer="regions"'))
+    expect(svg).toMatch(/<pattern id="[^"]+graph"/)
+  })
+
+  it('lays no paper at all for none', () => {
+    const svg = render(`@style: ink\n@style-paper: none\n${TRIANGLE}`).svg
+    expect(svg).not.toMatch(/data-layer="paper"/)
+  })
+})
+
+// Review 1: an author can ask for the finest spacing over the whole figure.
+// Each region has a mark budget (style/fills/region.ts), so the reviewer's
+// worst cases — which were 3 to 4.5 MB — stay under a megabyte.
+describe('the mark budget', () => {
+  const SQUARE = '@mode: figure\npolygon: A(0,0), B(4,0), C(4,4), D(0,4)\nfill: A-B-C-D'
+  const DISK = '@mode: figure\nM = (0, 0)\nO = circle M, 2\nfill: circle O'
+  const CASES: [string, string][] = [
+    ['chalk crosshatch on a square', `@style: pencil\n@style-line: chalk\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['chalk crosshatch on a disk', `@style: pencil\n@style-line: chalk\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${DISK}`],
+    ['ink stipple on a square', `@style: ink\n@style-fill: stipple\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['pencil, three passes, crosshatch', `@style: pencil\n@style-passes: 3\n@style-fill: crosshatch\n@style-fill-spacing: 3\n${SQUARE}`],
+    ['ink scribble on a square', `@style: ink\n@style-fill: scribble\n@style-fill-spacing: 3\n${SQUARE}`],
+  ]
+
+  for (const [name, spec] of CASES) {
+    it(`keeps ${name} at spacing 3 under a megabyte`, () => {
+      const result = render(spec)
+      expect(result.errors).toEqual([])
+      expect(result.svg.length, name).toBeLessThan(1024 * 1024)
+    })
+  }
+})
+
+// Review 1: technical is clean's line. Clean with one other setting changed
+// keeps clean's line ends and its native dashes, element for element.
+describe('clean with one setting changed', () => {
+  const ends = (svg: string) =>
+    elements(svg, ['auxiliary', 'primary', 'marks']).length > 0
+      ? [...svg.slice(svg.indexOf('data-layer="regions"')).matchAll(/<(line|path|polyline|circle)\b([^>]*)>/g)]
+          .filter((m) => /\bstroke="#/.test(m[2]))
+          .map((m) => `${/stroke-linecap="([^"]*)"/.exec(m[2])?.[1] ?? '-'} ${/stroke-dasharray="([^"]*)"/.exec(m[2])?.[1] ?? '-'}`)
+          .sort()
+      : []
+
+  for (const label of ['Constructions', 'Cylinder and cone', 'Solved triangle']) {
+    it(`keeps every line end and dash of ${label}`, () => {
+      const spec = EXAMPLES.find((e) => e.label === label)!.spec
+      const clean = ends(render(spec).svg)
+      const graph = ends(render(`@style-paper: graph\n${spec}`).svg)
+      expect(clean.length).toBeGreaterThan(3)
+      expect(graph).toEqual(clean)
+      expect(clean.some((e) => e.endsWith('9 7'))).toBe(true)
+    })
+  }
+})
+
+// Review 1, rulings 8 and 10.
+describe('a styled figure in its host', () => {
+  // Read from disk: vitest hands a stylesheet import back empty.
+  const CSS = readFileSync(new URL('../FigureView.css', import.meta.url), 'utf8') as string
+
+  it('marks its root so the view scales every stroke with the zoom; clean is unmarked', () => {
+    expect(render(`@style: pencil\n${TRIANGLE}`).svg).toMatch(/^<svg [^>]*data-style="pencil"/)
+    expect(render(TRIANGLE).svg).not.toMatch(/data-style/)
+    // The non-scaling rule is scoped to unmarked (clean) figures.
+    expect(CSS).toMatch(/svg:not\(\[data-style\]\) \[data-layer\] \*\s*\{\s*vector-effect: non-scaling-stroke;/)
+    expect(CSS).not.toMatch(/\.figure-view-surface svg \[data-layer\] \*/)
+  })
+
+  const figure = (head: string, palette: typeof LIGHT_PALETTE) => {
+    const parsed = parseSpec(`${head}\n@mode: figure\npolygon: A(0,0), B(4,0), C(1,3) color: black\nfill: A-B-C color: blue\nsegment: A-C`)
+    return renderFigure(parsed.statements, parsed.config, palette).svg
+  }
+
+  it('resolves colours against its own light paper in a dark theme', () => {
+    // The ink preset lays off-white paper in either theme, so it draws the
+    // same figure in either: a dark-theme black is not drawn mid-grey on it.
+    for (const preset of ['ink', 'pencil', 'marker']) {
+      expect(figure(`@style: ${preset}`, DARK_PALETTE), preset).toBe(figure(`@style: ${preset}`, LIGHT_PALETTE))
+    }
+  })
+
+  it('follows the host theme when its paper does', () => {
+    for (const paper of ['@style-paper: none', '@style-tint: theme']) {
+      expect(figure(`@style: ink\n${paper}`, DARK_PALETTE), paper).not.toBe(figure(`@style: ink\n${paper}`, LIGHT_PALETTE))
+    }
+  })
+})

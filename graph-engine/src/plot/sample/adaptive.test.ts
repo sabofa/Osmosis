@@ -1,0 +1,742 @@
+import { describe, expect, it } from 'vitest'
+import { UNKNOWN } from '../../math/interval'
+import { chainPoints } from '../../scene/chains'
+import { sampleRange } from './adaptive'
+import { BandSink } from './band'
+import { ChainSink } from './sink'
+import { fnsOf, run, runView, scopeOf, trueY, view } from './testkit'
+import { COARSE, CORE, FULL, type Tuning } from './tuning'
+import type { CurveFns, End, EvalCounter } from './types'
+
+// every vertex within ½ px of the true curve, and every segment's midpoint within 1 px (no aliasing)
+function onCurve(text: string, chains: ReturnType<typeof run>['chains']) {
+  const f = trueY(text, scopeOf())
+  for (const c of chains) {
+    const p = chainPoints(c)
+    for (let i = 0; i < p.length; i++) {
+      if (Math.abs(p[i].y) < 14.99) expect(Math.abs(f(p[i].x) - p[i].y) * 40, `${text} vertex at ${p[i].x}`).toBeLessThanOrEqual(0.5)
+      if (i > 0) {
+        const mx = (p[i - 1].x + p[i].x) / 2
+        const my = (p[i - 1].y + p[i].y) / 2
+        if (Math.abs(my) < 10) expect(Math.abs(f(mx) - my) * 40, `${text} segment at ${mx}`).toBeLessThanOrEqual(1)
+      }
+    }
+  }
+}
+
+describe('sampleRange', () => {
+  it('draws x^2 as one chain, on the curve, segments at most 8 px', () => {
+    const r = run('x^2')
+    expect(r.chains).toHaveLength(1)
+    onCurve('x^2', r.chains)
+  })
+  it('steepness never breaks a curve: y = 1000x crosses the view as one chain', () => {
+    const r = run('1000x')
+    expect(r.chains).toHaveLength(1)
+    expect(chainPoints(r.chains[0]).some((p) => Math.abs(p.y) < 1)).toBe(true)
+  })
+  it('does not alias sin(50x)', () => onCurve('sin(50x)', run('sin(50x)').chains))
+  it('without help from the structure walk, still never bridges the pole of 1/(x - 1)', () => {
+    const r = run('1/(x - 1)')
+    for (const c of r.chains) {
+      const xs = chainPoints(c).map((p) => p.x)
+      expect(xs.some((x) => x < 1) && xs.some((x) => x > 1)).toBe(false)
+    }
+  })
+  it('reaches the sqrt edge to machine precision', () => {
+    const r = run('sqrt(x)')
+    expect(Math.min(...chainPoints(r.chains[0]).map((p) => p.x))).toBeLessThan(1e-12)
+    expect(r.breaks.some((b) => b.kind === 'edge' && Math.abs(b.at) < 1e-12)).toBe(true)
+  })
+  it('lets ln x dive off the bottom of the overscan box', () => {
+    const p = run('ln(x)').chains.flatMap(chainPoints)
+    expect(Math.min(...p.map((q) => q.y))).toBeCloseTo(-15, 9)
+    expect(p.every((q) => q.x > 0)).toBe(true)
+  })
+  // This one is met at 0.1234 and not at every offset: the peak is 0.04 px wide, under the
+  // 1/16 px floor, so only a sample that happens to land within 1e-4 of it reaches 0.99.
+  // The sweep over a peak 10 times wider, further down, is the test that holds anywhere.
+  it('finds a narrow spike the midpoint test alone would miss', () => {
+    const p = run('1/(1 + 10^6 (x - 0.1234)^2)').chains.flatMap(chainPoints)
+    expect(Math.max(...p.map((q) => q.y))).toBeGreaterThan(0.99)
+  })
+  it('connects a continuous seam the twin cannot certify, and breaks a real jump', () => {
+    expect(run('{x < 1: x, 1}').chains).toHaveLength(1)
+    const j = run('{x < 1: x, 2}')
+    expect(j.chains).toHaveLength(2)
+    expect(j.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - 1) < 1e-3)).toBe(true)
+  })
+  it('culls a curve entirely off screen cheaply', () => {
+    const r = run('x + 100')
+    expect(r.chains).toHaveLength(0)
+    expect(r.counter.intervals).toBeLessThan(200)
+  })
+  it('at the budget it coarsens, says so, and still never bridges a pole', () => {
+    const r = run('1/(x - 1) + sin(30x)', { ...FULL, budget: { points: 300, intervals: 150 } })
+    expect(r.capped).toBe(true)
+    expect(r.chains.length).toBeGreaterThan(0)
+    for (const c of r.chains) {
+      const xs = chainPoints(c).map((p) => p.x)
+      expect(xs.some((x) => x < 1) && xs.some((x) => x > 1)).toBe(false)
+    }
+  })
+  it('is deterministic', () => {
+    expect(JSON.stringify(run('tan(x) + x^3'))).toBe(JSON.stringify(run('tan(x) + x^3')))
+  })
+})
+
+// The ends of a range: how Task 5 hands the core the pieces between trouble spots.
+describe('sampleRange — ends', () => {
+  const free: End = { kind: 'free' }
+  // a CurveFns that records every parameter its point function is asked about
+  function spied(text: string): { fns: CurveFns; seen: number[] } {
+    const fns = fnsOf(text, scopeOf())
+    const seen: number[] = []
+    return {
+      seen,
+      fns: {
+        ...fns,
+        point(t, out) {
+          seen.push(t)
+          fns.point(t, out)
+        },
+      },
+    }
+  }
+  const go = (fns: CurveFns, t0: number, t1: number, left: End, right: End, sink = new ChainSink(view.clip), counter: EvalCounter = { points: 0, intervals: 0 }) => ({
+    sink,
+    counter,
+    ...sampleRange(fns, t0, t1, { left, right }, view, FULL, counter, sink),
+  })
+
+  // (calc P2 final review, I3: the start grid still starts a floor inside a singular end, and the last stretch from there to the
+  // pole is walked in certified pieces, so the curve is no longer stopped a floor short: the first of these tests said the
+  // nearest evaluation was a floor inside, which was the defect)
+  it('never evaluates at a singular end; its start grid starts a floor (1/16 px) inside it, and the curve is walked on to the box', () => {
+    const { fns, seen } = spied('1/x')
+    const r = go(fns, 0, 5, { kind: 'singular' }, free)
+    expect(seen).not.toContain(0)
+    // the first point the start grid takes is a floor inside; the walk comes nearer, and never to the pole
+    expect(seen[0]).toBeCloseTo(1 / 16 / 40, 12)
+    expect(Math.min(...seen)).toBeGreaterThan(0)
+    expect(Math.min(...seen)).toBeLessThan(seen[0])
+    // the curve runs from the clip box (1/x is 15 at 1/15) down the pole's side to the other end, as one chain
+    expect(r.sink.chains()).toHaveLength(1)
+    const p = chainPoints(r.sink.chains()[0])
+    expect(Math.min(...p.map((q) => q.x))).toBeGreaterThan(0)
+    expect(p[0].y).toBe(15)
+  })
+  it('never evaluates at a singular right end either, and walks to the box there too', () => {
+    const { fns, seen } = spied('1/x')
+    const r = go(fns, -5, 0, free, { kind: 'singular' })
+    expect(seen).not.toContain(0)
+    expect(Math.max(...seen)).toBeGreaterThan(-1 / 16 / 40)
+    expect(Math.max(...seen)).toBeLessThan(0)
+    const p = chainPoints(r.sink.chains()[0])
+    expect(p[p.length - 1].y).toBe(-15)
+  })
+  it('walks a singular end in pieces the twin certifies: a second pole inside the stretch ends the walk before it, with nothing drawn across', () => {
+    // 1/x + 1/(x - 0.0011): the walk toward the pole at 0 starts at 0.0016 and halves: the piece [0.0008, 0.0016] holds 0.0011
+    const { fns } = spied('1/x + 1/(x - 0.0011)')
+    const r = go(fns, 0, 5, { kind: 'singular' }, free)
+    for (const c of r.sink.chains()) {
+      const xs = chainPoints(c).map((q) => q.x)
+      expect(xs.some((x) => x < 0.0011 - 1e-9) && xs.some((x) => x > 0.0011 + 1e-9), 'a chain crosses the pole at 0.0011').toBe(false)
+    }
+  })
+  it('an end that is singular because the curve is undefined beside it has nothing to walk', () => {
+    // sqrt(x) on [-5, 0], right end singular: the nudged start is not a number
+    const { fns } = spied('sqrt(x)')
+    const r = go(fns, -5, 0, free, { kind: 'singular' })
+    expect(r.sink.chains()).toHaveLength(0)
+    expect(r.counter.points).toBeLessThan(400)
+  })
+  it('an anchor end is used instead of evaluating there', () => {
+    const { fns, seen } = spied('x^2')
+    go(fns, 0, 3, { kind: 'anchor', at: { x: 0, y: 0 } }, { kind: 'anchor', at: { x: 3, y: 9 } })
+    expect(seen).not.toContain(0)
+    expect(seen).not.toContain(3)
+  })
+  it('two ranges anchored at the same point share one chain (how a hole is bridged)', () => {
+    const fns = fnsOf('x^2', scopeOf())
+    const sink = new ChainSink(view.clip)
+    const counter = { points: 0, intervals: 0 }
+    sampleRange(fns, -3, 0, { left: free, right: { kind: 'anchor', at: { x: 0, y: 0 } } }, view, FULL, counter, sink)
+    sampleRange(fns, 0, 3, { left: { kind: 'anchor', at: { x: 0, y: 0 } }, right: free }, view, FULL, counter, sink)
+    expect(sink.chains()).toHaveLength(1)
+    const ps = chainPoints(sink.chains()[0])
+    expect(ps.filter((p) => p.x === 0)).toHaveLength(1)
+  })
+  // An interval that ends at an anchor is drawn at the floor, though the twin cannot vouch for
+  // it: next to a removable hole the enclosure of (x^2 - 1)/(x - 1) is unbounded, and at the tip
+  // of an arc it dips under the domain. Without that the chain stops a floor short of its anchor
+  // with a jump break, which is not what an anchor is for.
+  it('two ranges anchored at a hole of an unbounded enclosure share one chain, with no break', () => {
+    const fns = fnsOf('(x^2 - 1)/(x - 1)', scopeOf())
+    const sink = new ChainSink(view.clip)
+    const counter = { points: 0, intervals: 0 }
+    const at = { x: 1, y: 2 }
+    sampleRange(fns, -3, 1, { left: free, right: { kind: 'anchor', at } }, view, FULL, counter, sink)
+    sampleRange(fns, 1, 3, { left: { kind: 'anchor', at }, right: free }, view, FULL, counter, sink)
+    expect(sink.breaks()).toEqual([])
+    expect(sink.chains()).toHaveLength(1)
+    const chain = sink.chains()[0]
+    const ps = chainPoints(chain)
+    expect(ps.filter((p) => p.x === 1 && p.y === 2)).toHaveLength(1)
+    expect(chain.param[ps.findIndex((p) => p.x === 1)]).toBe(1)
+  })
+  it('a chain anchored at the tip of an arc reaches it, with no break', () => {
+    const fns = fnsOf('sqrt(1 - x^2)', scopeOf(), 400)
+    const sink = new ChainSink({ xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 })
+    const screen = { px: { x: 400, y: 400 }, view: { xMin: -1, xMax: 1, yMin: -1, yMax: 1 }, clip: { xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 } }
+    sampleRange(fns, 0, 1, { left: free, right: { kind: 'anchor', at: { x: 1, y: 0 } } }, screen, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks()).toEqual([])
+    const ps = chainPoints(sink.chains()[0])
+    expect(ps[ps.length - 1]).toEqual({ x: 1, y: 0 })
+  })
+  // The anchor says where the curve arrives, not that nothing is in the way: a pole the walk did
+  // not find (a built-in with no rule, a zero classified unknown) in the last floor interval opens
+  // the gap, and the stretch is lifted with its jump break, not drawn as a stroke through it.
+  it('does not draw the stretch to an anchor when its gap does not close', () => {
+    // 1/x + 5 has a pole at 0, and the anchor claims the curve arrives at (0, 5)
+    const fns = fnsOf('1/x + 5', scopeOf())
+    const sink = new ChainSink(view.clip)
+    sampleRange(fns, -3, 0, { left: free, right: { kind: 'anchor', at: { x: 0, y: 5 } } }, view, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks().some((b) => b.kind === 'jump')).toBe(true)
+    for (const c of sink.chains()) expect(chainPoints(c).some((p) => p.x === 0)).toBe(false)
+  })
+  it('a jump is still a jump where no anchor says the curve arrives', () => {
+    // a tip too steep for the core to take on its own, with no anchor: the core lifts and records it. This was the
+    // semicircle's (1 - x^2)^(1/2); its gaps close by 0.71 a halving, which the floor test (calc P2 task 7, fix round 1)
+    // takes as a continuous curve and joins, so the quartic root's tip stands in: 0.84 a halving, which it does not
+    const fns = fnsOf('(1 - x^2)^0.25', scopeOf(), 400)
+    const sink = new ChainSink({ xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 })
+    const screen = { px: { x: 400, y: 400 }, view: { xMin: -1, xMax: 1, yMin: -1, yMax: 1 }, clip: { xMin: -1.25, xMax: 1.25, yMin: -1.25, yMax: 1.25 } }
+    sampleRange(fns, 0, 1, { left: free, right: free }, screen, FULL, { points: 0, intervals: 0 }, sink)
+    expect(sink.breaks().length).toBeGreaterThan(0)
+  })
+  it('a range with no width draws nothing', () => {
+    const fns = fnsOf('x', scopeOf())
+    const r = go(fns, 2, 2, free, free)
+    expect(r.sink.chains()).toHaveLength(0)
+    expect(r.capped).toBe(false)
+  })
+})
+
+describe('sampleRange — edges and the coarse preset', () => {
+  it('a curve that starts at an edge is one chain, in increasing parameter', () => {
+    for (const text of ['ln(x)', 'sqrt(x)']) {
+      const r = run(text)
+      expect(r.chains, text).toHaveLength(1)
+      const t = Array.from(r.chains[0].param)
+      expect(t.every((v, i) => i === 0 || v >= t[i - 1]), `${text} parameters increase`).toBe(true)
+    }
+  })
+  it('the coarse preset draws the same curve with fewer evaluations', () => {
+    const full = run('x^2 + sin(3x)')
+    const coarse = run('x^2 + sin(3x)', COARSE)
+    expect(coarse.chains).toHaveLength(1)
+    expect(coarse.counter.points).toBeLessThan(full.counter.points)
+  })
+  it('the coarse preset is not dearer than the full one on a curve the twin encloses loosely', () => {
+    // a cancelling quotient and a quartic: loose enclosures that a strict spike test keeps refining
+    for (const text of ['(x^3 - 3x^2 + 3x - 1)/(x^2 - 2x + 1)', 'x^4 - 10x^2 + 9']) {
+      const full = run(text)
+      const coarse = run(text, COARSE)
+      expect(coarse.capped, `${text} caps under coarse`).toBe(false)
+      expect(coarse.counter.intervals, text).toBeLessThan(full.counter.intervals)
+      // (at spikeFactor 2 the quotient capped the coarse budget, at 7552 of 7500)
+      expect(coarse.counter.intervals, `${text} spends the coarse budget`).toBeLessThan(COARSE.budget.intervals * 0.75)
+    }
+  })
+})
+
+describe('sampleRange — the budget', () => {
+  it('always evaluates the whole start grid, however small the interval budget', () => {
+    const r = run('x^2', { ...FULL, budget: { points: 400, intervals: 1 } })
+    expect(r.capped).toBe(true)
+    // grid of 300 intervals: connected where the twin certified, so the parabola is still one chain
+    expect(r.counter.intervals).toBeGreaterThanOrEqual(300)
+    expect(r.chains).toHaveLength(1)
+  })
+  it('does not say capped when the budget was never reached', () => {
+    expect(run('x^2').capped).toBe(false)
+  })
+  it('never lets the start grid itself outgrow the point budget', () => {
+    // 4000 px per unit over 30 units would be a grid of 30000 intervals
+    const sink = new ChainSink(view.clip)
+    const counter = { points: 0, intervals: 0 }
+    const fns = fnsOf('x^2', scopeOf(), 4000)
+    sampleRange(fns, -15, 15, { left: { kind: 'free' }, right: { kind: 'free' } }, view, { ...FULL, budget: { points: 1000, intervals: 1e9 } }, counter, sink)
+    expect(counter.points).toBeLessThanOrEqual(1001)
+  })
+})
+
+// Two steps the rule prescribes draw a stretch no one has certified, unless they ask the twin
+// first: the edge refine, and the jump test.
+const offsets = (n: number, from = 0.3, step = 0.0123457) => Array.from({ length: n }, (_, k) => from + k * step)
+const verts = (chains: ReturnType<typeof run>['chains']) => chains.map(chainPoints)
+// segments between consecutive vertices of a chain, with their length on screen
+function segmentsOf(chains: ReturnType<typeof run>['chains'], px = 40) {
+  const out: { a: { x: number; y: number }; b: { x: number; y: number }; len: number; rise: number }[] = []
+  for (const p of verts(chains)) {
+    for (let i = 1; i < p.length; i++) out.push({ a: p[i - 1], b: p[i], len: Math.hypot((p[i].x - p[i - 1].x) * px, (p[i].y - p[i - 1].y) * px), rise: Math.abs(p[i].y - p[i - 1].y) * px })
+  }
+  return out
+}
+
+describe('sampleRange — the stretch to an edge is certified before it is drawn', () => {
+  // The poles of tan(1/x) are at 1/x = pi/2 + k pi, a million of them in a view; a stroke down one of them from the
+  // stretch to the edge, certified whole by an enclosure that does not see them, was the defect. A long stroke is not: since
+  // calc P2 task 8 (fix round 2) an interval the twin leaves unbounded is bisected below the floor and what it certifies is
+  // drawn, and between two poles the curve is a steep run of the whole of tan, 50 to 500 px of it in a hundredth of a px of x.
+  // So no stroke is asked to be short, and none is allowed to cross a pole.
+  it('tan(1/x) draws no stroke across a pole near the accumulation point', () => {
+    const r = run('tan(1/x)')
+    const near = segmentsOf(r.chains).filter((s) => Math.abs(s.a.x) < 0.01 && Math.abs(s.b.x) < 0.01)
+    expect(near.length).toBeGreaterThan(100)
+    const across = near.filter((s) => {
+      const u = [1 / s.a.x, 1 / s.b.x]
+      const lo = Math.min(...u)
+      const hi = Math.max(...u)
+      // a pole at pi/2 + k pi strictly inside (lo, hi): the first one above lo
+      const first = Math.PI / 2 + Math.floor((lo - Math.PI / 2) / Math.PI + 1) * Math.PI
+      return first > lo && first < hi
+    })
+    expect(across).toEqual([])
+  })
+  it('a closed floor step has no riser at its edge, at any offset', () => {
+    for (const c of offsets(20)) {
+      const r = run(`{x <= ${c}: floor(x - ${c} + 1)}`)
+      const risers = segmentsOf(r.chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 4)
+      expect(risers, `riser at ${c}`).toEqual([])
+      expect(r.breaks.some((b) => b.kind === 'edge' && Math.abs(b.at - c) < 0.002), `edge break at ${c}`).toBe(true)
+    }
+  })
+  it('an open-ended ceiling step has none either', () => {
+    for (const c of offsets(20)) {
+      const risers = segmentsOf(run(`{x >= ${c}: ceil(x - ${c})}`).chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 4)
+      expect(risers, `riser at ${c}`).toEqual([])
+    }
+  })
+  // A sqrt-type edge makes the twin say PARTIAL over the last stretch, which must not hide a step in it.
+  it.each([
+    ['floor(x - c + 1) + sqrt(c - x)', (c: number) => `floor(x - ${c} + 1) + sqrt(${c} - x)`],
+    ['ceil(x - c) + sqrt(x - c)', (c: number) => `ceil(x - ${c}) + sqrt(x - ${c})`],
+    ['{x <= c: floor(x - c + 1)} + sqrt(c - x) * 0', (c: number) => `{x <= ${c}: floor(x - ${c} + 1)} + sqrt(${c} - x) * 0`],
+  ])('a step that coincides with a sqrt-type edge has no riser: %s', (_name, text) => {
+    for (const c of offsets(30)) {
+      const risers = segmentsOf(run(text(c)).chains).filter((s) => Math.abs(s.a.x - c) < 0.002 && Math.abs(s.b.x - c) < 0.002 && s.rise > 8)
+      expect(risers, `riser at ${c}`).toEqual([])
+    }
+  })
+  it('does not draw across a pole inside the last floor width of an edge', () => {
+    for (const e of offsets(20)) {
+      const p = e + 0.0008
+      const across = segmentsOf(run(`sqrt(x - ${e})/(x - ${p})`).chains).filter((s) => Math.min(s.a.x, s.b.x) <= p && Math.max(s.a.x, s.b.x) >= p && s.len > 4)
+      expect(across, `pole at ${p}`).toEqual([])
+    }
+  })
+  // calc P2 task 8, fix round 2: the twin's enclosure of the argument of a log is loose next to its zero, so the stretch from
+  // the floor interval to the edge was refused whole and the curve stopped a floor's width short of it, 142 px (ln(1 - x^2))
+  // to 197 px (ln(4 - x^2)) above the bottom of [-10, 10]. It is walked in certified pieces now (walkEdge), to the clip box,
+  // and an interval the twin leaves unbounded is bisected below the floor, so x^2 - 4x + 3 (which mentions x twice, and whose
+  // enclosure is unbounded for every stretch that halves the distance to its zero) has no break a floor from its edge at 3.
+  // Under the core alone, with free ends, as the structure walk gives a diverging edge.
+  it.each([
+    ['ln(1 - x^2)', (x: number) => Math.abs(x) < 1],
+    ['ln(4 - x^2)', (x: number) => Math.abs(x) < 2],
+    ['ln(x^2 - 1)', (x: number) => Math.abs(x) > 1],
+    ['ln(x^2 - 4x + 3)', (x: number) => x < 1 || x > 3],
+  ])('%s dives to the bottom of the clip box at each edge, and draws nothing where it is undefined', (text, defined) => {
+    const r = run(text)
+    const pts = r.chains.flatMap(chainPoints)
+    expect(pts.every((p) => defined(p.x)), 'a vertex where the curve is undefined').toBe(true)
+    // each of the two edges is the end of a chain, cut at the bottom of the clip box (y = -15)
+    const diveEnds = r.chains.flatMap((ch) => {
+      const p = chainPoints(ch)
+      return [p[0], p[p.length - 1]].filter((q) => q.y === -15)
+    })
+    expect(diveEnds, text).toHaveLength(2)
+    expect(r.breaks.filter((b) => b.kind === 'jump'), text).toEqual([])
+    expect(r.capped).toBe(false)
+    // and what the walk costs is counted with the rest, a few dozen evaluations an edge
+    expect(r.counter.intervals, text).toBeLessThan(2000)
+  })
+  it('still reaches a closed semicircle tip, and ln, sqrt remain one chain', () => {
+    const r = 2.3456
+    const xs = run(`sqrt(${r * r} - x^2)`).chains.flatMap(chainPoints).map((p) => p.x)
+    // the tips are within a pixel of the circle's ends
+    expect(Math.min(...xs)).toBeLessThan(-r + 1 / 40)
+    expect(Math.max(...xs)).toBeGreaterThan(r - 1 / 40)
+    expect(run('ln(x)').chains).toHaveLength(1)
+    expect(run('sqrt(x)').chains).toHaveLength(1)
+  })
+})
+
+describe('sampleRange — the jump test respects what the twin reported', () => {
+  it('does not bridge the pole of 1/(x - c) in a view of +-1e5, at any offset', () => {
+    for (const k of Array.from({ length: 20 }, (_, i) => i)) {
+      const c = 1e5 * (0.0123 + k * 0.0371)
+      const r = runView(`1/(x - ${c})`, 1e5)
+      for (const p of verts(r.chains)) expect(p.some((q) => q.x < c) && p.some((q) => q.x > c), `a chain spans ${c}`).toBe(false)
+      // a break within the floor width (1/16 px is 16 units here)
+      expect(r.breaks.some((b) => Math.abs(b.at - c) <= 16), `no break at ${c}`).toBe(true)
+    }
+  })
+  it('nor the double pole of 1/(x - c)^2 in a view of +-1e4', () => {
+    for (const k of Array.from({ length: 20 }, (_, i) => i)) {
+      const c = 1e4 * (0.0123 + k * 0.0371)
+      const r = runView(`1/(x - ${c})^2`, 1e4)
+      for (const p of verts(r.chains)) expect(p.some((q) => q.x < c) && p.some((q) => q.x > c), `a chain spans ${c}`).toBe(false)
+    }
+  })
+  it('still joins a curve the twin could not bound at all (an integral)', () => {
+    expect(run('integral(t = 0 to x, cos(t))').chains).toHaveLength(1)
+  })
+})
+
+// calc P2 task 7, fix round 1 (S1). A twin that says nothing (UNKNOWN: an integral's) certifies no interval, so every one is
+// bisected to the floor and decided there by the jump test. That test asked for a gap under a pixel, which a smooth curve
+// steeper than 16:1 on screen never has at a 1/16 px interval: it broke at every floor interval, however smooth it was.
+// At the floor the test no longer asks for the gap to be small, only to close: bisected below the floor, down to
+// CORE.subFloorPx wherever the floor is, until each leaf's gap is under a pixel and closing. A real jump does not shrink; a
+// smooth curve's gaps halve.
+describe('sampleRange — a smooth curve the twin cannot certify is not broken at every floor interval', () => {
+  // a twin that says nothing at all: no bounds, the verdict UNKNOWN
+  const unknown = (f: (x: number) => number): CurveFns => ({
+    point(t, out) {
+      out[0] = t
+      out[1] = f(t)
+    },
+    enclose(lo, hi, out) {
+      out.xLo = lo
+      out.xHi = hi
+      out.yLo = Number.NEGATIVE_INFINITY
+      out.yHi = Number.POSITIVE_INFINITY
+      return UNKNOWN
+    },
+    pxPerT: 40,
+    oscillationAxis: 'y',
+  })
+  // [-1.5, 1.5] in the view of 40 px per unit: 120 px, in a box of +-15
+  const go = (f: (x: number) => number, tuning = FULL, from = -1.5, to = 1.5) => {
+    const sink = new ChainSink(view.clip)
+    const counter: EvalCounter = { points: 0, intervals: 0 }
+    const { capped, steepInView } = sampleRange(unknown(f), from, to, { left: { kind: 'free' }, right: { kind: 'free' } }, view, tuning, counter, sink)
+    return { chains: sink.chains(), breaks: sink.breaks(), capped, steepInView, counter }
+  }
+
+  // fix round 3. The depth below the floor was a COUNT of halvings (6), and COARSE's floor is 0.5 px against FULL's 1/16, so
+  // its deepest leaf was 1/128 px against 1/1024: a smooth curve steeper than 128:1 was broken at every floor interval at COARSE,
+  // silently (y = integral(t = 0 to x, 200): 0 chains, 14 jump breaks; integral(1000): none). The depth is a TARGET WIDTH,
+  // FULL's floorPx / 64 (1/1024 px), at both qualities, so COARSE bisects about 9 levels, to the same leaves.
+  it.each([['200x', (x: number) => 200 * x], ['1000x', (x: number) => 1000 * x]])('%s is one chain with no jump break, at COARSE as at FULL', (_name, f) => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go(f, tuning)
+      expect(r.capped).toBe(false)
+      expect(r.breaks.filter((b) => b.kind === 'jump')).toEqual([])
+      expect(r.chains).toHaveLength(1)
+      expect(r.steepInView).toBe(false)
+      for (const p of chainPoints(r.chains[0])) expect(Math.abs(f(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+    }
+  })
+  // past 1024:1 a leaf of 1/1024 px is still over a pixel: the interval is lifted, and the core says that it was the steepness (its
+  // gaps were still halving at the last level) if it is in view, as it does not for a jump, whose gap does not shrink
+  it('a smooth curve steeper than the leaves can resolve is lifted, and steepInView says so; a jump is not steepness', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const steep = go((x) => 2000 * x, tuning)
+      expect(steep.chains, 'a chain of 2000x').toEqual([])
+      expect(steep.breaks.some((b) => b.kind === 'jump')).toBe(true)
+      // (y = 2000x is in the view of +-10 for |x| < 0.005)
+      expect(steep.steepInView).toBe(true)
+      // a jump of a pixel and more, on a gentle slope and on a steep one: a break, and no steepInView. (On a slope of 2000 the curve
+      // is steep on both sides of the jump and says so there, so only the break is asked for.)
+      for (const [slope, px] of [[20, 1], [200, 2], [2000, 40]]) {
+        const c = 15 / slope / 2
+        const jump = go((x) => slope * x - (px / 40) * (x >= c ? 1 : 0), tuning)
+        expect(jump.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) <= 2 * (tuning.uncertifiedFloorPx / 40)), `a jump of ${px} px on ${slope}`).toBe(true)
+        if (slope < 1024) expect(jump.steepInView, `a jump of ${px} px on ${slope}`).toBe(false)
+      }
+    }
+  })
+  // The visible view, not the clip box: a steep stretch in the overscan only is not announced. 12 + 2000 max(0, x - 1) climbs from
+  // y = 12 to 15 (the top of the box) over 0.0015 of x, in the overscan of the view (+-10) and in none of the view.
+  it('a smooth steep stretch only in the overscan is not steepInView', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go((x) => 12 + 2000 * Math.max(0, x - 1), tuning)
+      expect(r.breaks.some((b) => b.kind === 'jump' && b.at >= 1 - 1e-9), `it is broken there at ${tuning.startPx}`).toBe(true)
+      expect(r.steepInView).toBe(false)
+    }
+  })
+  // ... and one in the overscan of x: 3000 (x - 11) climbs through the view's y (+-10) over x in [11, 11.0067], which is right of the view
+  it('a steep stretch where the view is not (the overscan of x) is not steepInView', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go((x) => 3000 * Math.max(0, x - 11), tuning, -15, 15)
+      expect(r.breaks.some((b) => b.kind === 'jump' && b.at >= 11 - 1e-9), `it is broken there at ${tuning.startPx}`).toBe(true)
+      expect(r.steepInView).toBe(false)
+    }
+  })
+  // fix round 4. The core kept the first 64 places a steep curve was lifted at, and the caller looked for one in view afterwards: 60 sin(50x)
+  // (slope 3000) has a steep crossing of the box every 0.06 of x, six floor intervals each, so the 64 were spent in the first 0.6 of the
+  // left overscan (x from -15 to -10) and the curve, broken at 5466 places in view, was not announced. Now whether a place is in view is
+  // decided where it is recorded.
+  it('a curve steep all over, the overscan first, is steepInView: 60 sin(50x) over the whole box', () => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go((x) => 60 * Math.sin(50 * x), tuning, -15, 15)
+      expect(r.chains, 'nothing certified').toEqual([])
+      expect(r.breaks.filter((b) => b.kind === 'jump').length).toBeGreaterThan(64)
+      expect(r.steepInView).toBe(true)
+    }
+  })
+  // fix round 4 (rule 2, a false note). A jump that RIDES a slope halves its gap too, if less: J px on a slope that climbs a px in the
+  // 1/1024 px leaf leaves (J + a) / (J + 2a) of the parent's gap, which is 0.75 or under for any J up to 2a, so 1 to 2 px jumps on slopes
+  // of 512 to 1024 were called "too steep" (halvingShrink 0.75 was the test). A smooth curve's gap halves to within rounding at that
+  // leaf, so the test is steepShrink, 0.55. The jump is a jump: broken there, rule 1, at 20 offsets each.
+  it.each([
+    ['slope 600, a jump of 1.1 px', 600, 1.1],
+    ['slope 800, a jump of 1.2 px', 800, 1.2],
+    ['slope 1000, a jump of 1.5 px', 1000, 1.5],
+    ['slope 1000, a jump of 1.1 px', 1000, 1.1],
+  ])('a jump that rides the slope is a jump and not steepness, at both qualities: %s', (_name, slope, px) => {
+    const inBox = 15 / slope
+    for (const tuning of [FULL, COARSE]) {
+      const floorWidth = tuning.uncertifiedFloorPx / 40
+      for (let k = 0; k < 20; k++) {
+        const c = inBox * (0.05 + (0.8 * k) / 20) + 1e-7 * k
+        const r = go((x) => slope * x + (px / 40) * (x >= c ? 1 : 0), tuning)
+        expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) <= 2 * floorWidth), `no jump break at ${c}`).toBe(true)
+        for (const ch of r.chains) {
+          const xs = chainPoints(ch).map((p) => p.x)
+          expect(xs.some((x) => x < c) && xs.some((x) => x >= c), `a chain bridges the jump at ${c}`).toBe(false)
+        }
+        expect(r.steepInView, `a jump of ${px} px riding ${slope}, at ${c}`).toBe(false)
+      }
+    }
+  })
+  it('steepShrink is tighter than halvingShrink and over the 0.5 a smooth curve halves its gap by', () => {
+    for (const tuning of [FULL, COARSE]) {
+      expect(tuning.steepShrink).toBeLessThan(tuning.halvingShrink)
+      expect(tuning.steepShrink).toBeGreaterThan(0.5)
+    }
+  })
+
+  it.each([['20x', (x: number) => 20 * x], ['40 sin(x)', (x: number) => 40 * Math.sin(x)], ['100x', (x: number) => 100 * x]])('%s (slope past 16:1) is one chain with no jump break, at FULL and COARSE', (_name, f) => {
+    for (const tuning of [FULL, COARSE]) {
+      const r = go(f, tuning)
+      expect(r.capped).toBe(false)
+      expect(r.breaks.filter((b) => b.kind === 'jump')).toEqual([])
+      expect(r.chains).toHaveLength(1)
+      // and it is the curve: every vertex on it
+      for (const p of chainPoints(r.chains[0])) expect(Math.abs(f(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+    }
+  })
+  it('a jump is still a jump on a steep curve: 1 unit, 1 px, on a slope of 20', () => {
+    const c = 0.1234
+    for (const size of [1, 1 / 40]) {
+      const r = go((x) => 20 * x + (x < c ? 0 : size))
+      expect(r.breaks.filter((b) => b.kind === 'jump' && Math.abs(b.at - c) < 0.01), `a jump of ${size} unit`).toHaveLength(1)
+      for (const ch of r.chains) {
+        const xs = chainPoints(ch).map((p) => p.x)
+        expect(xs.some((x) => x < c - 1e-9) && xs.some((x) => x > c + 1e-9), `a chain bridges a jump of ${size} unit`).toBe(false)
+      }
+    }
+  })
+  // fix round 2 (rule 1). The floor test first followed only the half of the interval with the larger gap, halving after
+  // halving. A jump set AGAINST the slope makes the gap of its own half the smaller, so that half was dropped at the first
+  // halving and never looked at, and the interval was bridged: at 40 of 40 offsets of a slope of 200 with a 2 px jump
+  // (FULL), of a slope of 20 with 1 px, and of 2000 with 40 px (COARSE). Now every sub-interval whose gap is still a pixel is
+  // bisected, and each leaf (a gap under a pixel) must pass the old test.
+  it.each([
+    ['FULL, slope 200, a jump of 2 px', FULL, 200, 2],
+    ['COARSE, slope 20, a jump of 1 px', COARSE, 20, 1],
+    ['COARSE, slope 2000, a jump of 40 px', COARSE, 2000, 40],
+    ['FULL, slope 20, a jump of 1 px', FULL, 20, 1],
+  ])('a jump set against the slope is a jump, at 40 offsets: %s', (_name, tuning, slope, px) => {
+    // |y| < 15 is the box: the curve is in it for |x| < 15 / slope
+    const inBox = 15 / slope
+    const floorWidth = tuning.uncertifiedFloorPx / 40
+    for (let k = 0; k < 40; k++) {
+      const c = inBox * (0.05 + (0.8 * k) / 40) + 1e-7 * k
+      const r = go((x) => slope * x - (px / 40) * (x >= c ? 1 : 0), tuning)
+      expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) <= 2 * floorWidth), `no jump break at ${c}`).toBe(true)
+      for (const ch of r.chains) {
+        const xs = chainPoints(ch).map((p) => p.x)
+        expect(xs.some((x) => x < c) && xs.some((x) => x >= c), `a chain bridges the jump at ${c}`).toBe(false)
+      }
+    }
+  })
+  it('a pole inside a floor interval, the twin saying nothing, is not bridged', () => {
+    const c = 0.1234
+    const r = go((x) => 1 / (x - c))
+    for (const ch of r.chains) {
+      const xs = chainPoints(ch).map((p) => p.x)
+      expect(xs.some((x) => x < c) && xs.some((x) => x > c)).toBe(false)
+    }
+    expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - c) < 0.01)).toBe(true)
+  })
+  it('the floor test needs a bounded enclosure: a twin that reports a pole is still believed', () => {
+    // 1/(x - c) with its real twin: unbounded enclosure over the interval holding c, so no connection however the gaps look
+    for (const c of offsets(10)) {
+      const r = run(`1/(x - ${c})`)
+      for (const ch of r.chains) {
+        const xs = chainPoints(ch).map((p) => p.x)
+        expect(xs.some((x) => x < c) && xs.some((x) => x > c), `a chain bridges the pole at ${c}`).toBe(false)
+      }
+    }
+  })
+  // What lets a steep curve whose twin says nothing fit its budget at all: most of an integral is off screen (40 sin(x) is in a view
+  // of +-10 for a sixth of its range, and steep over most of the rest), and with no enclosure to cull it by every interval of it was
+  // bisected to the floor and tested there (135000 points for the whole of a slope of 20, against a budget of 60000).
+  it('an interval the twin says nothing about, with both ends and the midpoint beyond the same side of the box, is culled, not refined', () => {
+    const r = go((x) => 1000 + 20 * x)
+    expect(r.chains).toEqual([])
+    expect(r.breaks).toEqual([])
+    // a start grid (31 intervals) and a midpoint for each: no refinement
+    expect(r.counter.points).toBeLessThan(100)
+    expect(r.capped).toBe(false)
+  })
+  it('but not one that crosses into the box: an end inside, or the ends on opposite sides', () => {
+    const r = go((x) => 20 * x)
+    expect(chainPoints(r.chains[0]).some((p) => Math.abs(p.y) < 1)).toBe(true)
+    expect(r.counter.points).toBeGreaterThan(100)
+  })
+  it('only for a twin that says nothing: where it has an enclosure it culls by it, and where it has a pole it is not fooled', () => {
+    // 1/(x - c): the enclosure of the box around the pole is unbounded (PARTIAL, not UNKNOWN), so it is refined to the floor and broken there
+    const r = run('1/(x - 0.1234)')
+    expect(r.breaks.some((b) => b.kind === 'jump' && Math.abs(b.at - 0.1234) < 0.01)).toBe(true)
+  })
+  it('a drag stops refining what the twin cannot certify at uncertifiedFloorPx, a coarser floor, and draws the same curve', () => {
+    expect(FULL.uncertifiedFloorPx).toBe(FULL.floorPx)
+    expect(COARSE.uncertifiedFloorPx).toBe(0.5)
+    // (not cheaper for a steep curve since fix round 2: the leaves are set by the curve's vertical travel, a gap of under a pixel
+    // each, and not by where the bisecting stops)
+    const full = go((x) => 20 * x)
+    const coarse = go((x) => 20 * x, COARSE)
+    expect(full.chains).toHaveLength(1)
+    expect(coarse.chains).toHaveLength(1)
+  })
+
+  // calc P2 final review, I5. What an integral costs is its integrand's evaluations, which the budget did not count: one point of
+  // y = integral(t = 0 to x, 5000 cos(100t)) is a quadrature of 23000, and the settled view took 533 s. A point that made inner
+  // evaluations (CurveFns.work) is charged what they come to in points (CORE.innerPerPoint), and the columns of a twin that says
+  // nothing are not all tried as bands: 14 of the 22 evaluations a pixel of integral(sin) were those.
+  describe('what an integral costs', () => {
+    const free: End = { kind: 'free' }
+    const goWith = (fns: CurveFns, tuning: Tuning = FULL, from = -1.5, to = 1.5, bands?: BandSink) => {
+      const sink = new ChainSink(view.clip)
+      const counter: EvalCounter = { points: 0, intervals: 0 }
+      const { capped } = sampleRange(fns, from, to, { left: free, right: free }, view, tuning, counter, sink, bands)
+      return { chains: sink.chains(), counter, capped }
+    }
+    // the same fns, each point of which also makes `perPoint` inner evaluations, and counts its evaluations
+    const costly = (fns: CurveFns, perPoint: number): CurveFns & { calls: () => number } => {
+      let inner = 0
+      let calls = 0
+      return {
+        ...fns,
+        point(t, out) {
+          inner += perPoint
+          calls++
+          fns.point(t, out)
+        },
+        work: () => inner,
+        calls: () => calls,
+      }
+    }
+
+    it('charges a point for the inner evaluations it made: perPoint / innerPerPoint of them, rounded, and never less than one', () => {
+      const cheap = goWith(unknown(Math.sin))
+      expect(cheap.capped).toBe(false)
+      for (const [perPoint, charge] of [[0, 1], [40, 1], [140, 1], [250, 3], [1000, 10]] as const) {
+        const dear = goWith(costly(unknown(Math.sin), perPoint))
+        // (the same curve is drawn, the budget being far off, and every evaluation of it is charged the same)
+        expect(dear.capped, `${perPoint}`).toBe(false)
+        expect(dear.counter.points, `${perPoint} inner evaluations a point`).toBe(cheap.counter.points * charge)
+        expect(dear.chains, `${perPoint}`).toHaveLength(cheap.chains.length)
+      }
+      expect(CORE.innerPerPoint).toBe(100)
+    })
+    it('a curve of dear points is capped by what it costs: the evaluations stop where the inner evaluations reach the budget', () => {
+      const dear = costly(unknown(Math.sin), 10_000)
+      const r = goWith(dear)
+      expect(r.capped).toBe(true)
+      // 60000 points at 100 inner evaluations a point: 6 million inner evaluations, which is 600 evaluations at 10000 each (and the
+      // start grid, which is drawn whatever the budget, is 30 of them)
+      expect(dear.calls() * 10_000).toBeLessThanOrEqual(FULL.budget.points * CORE.innerPerPoint * 1.05)
+      expect(dear.calls()).toBeGreaterThan(300)
+    })
+    it('a curve with no inner evaluations is not charged for any, whatever the twin says', () => {
+      const plain = goWith(unknown(Math.sin))
+      const withWork = goWith({ ...unknown(Math.sin), work: () => 0 })
+      expect(withWork.counter.points).toBe(plain.counter.points)
+    })
+
+    const bandsOf = (f: (x: number) => number, tuning: Tuning = FULL, from = -1.5, to = 1.5) => {
+      const bandSink = new BandSink('y', view.clip)
+      const r = goWith(unknown(f), tuning, from, to, bandSink)
+      return { ...r, bands: bandSink.bands() }
+    }
+    it('a smooth curve is not tried as a band on faith: sin(x) over 120 px costs under 11 evaluations a pixel (it was 22), one chain, on the curve', () => {
+      for (const tuning of [FULL, COARSE]) {
+        const r = bandsOf(Math.sin, tuning)
+        expect(r.bands).toHaveLength(0)
+        expect(r.chains).toHaveLength(1)
+        expect(r.counter.points / 120).toBeLessThan(11)
+        for (const p of chainPoints(r.chains[0])) expect(Math.abs(Math.sin(p.x) - p.y) * 40).toBeLessThanOrEqual(0.5)
+      }
+    })
+    it('a band is still one band: an oscillation of two periods a pixel, of a curve the twin says nothing of, is not cut where a column\'s midpoint is in order', () => {
+      // (the screen alone cut integral(0) + sin(500 x) into 185 bands at twice the cost; a column that starts where a band ended is tried)
+      const r = bandsOf((x) => Math.sin(500 * x))
+      expect(r.bands).toHaveLength(1)
+      expect(r.chains).toHaveLength(0)
+      expect(r.counter.points).toBeLessThan(3000)
+      expect(bandsOf((x) => Math.sin(500 * x), COARSE).bands.length).toBeLessThanOrEqual(3)
+    })
+    it('and a jump the samples straddle is not drawn across, however the column was found: a step of a half pixel, flat or on a slope', () => {
+      const steps: [(x: number) => number, number][] = [
+        [(x) => (x < 0.1234 ? 0 : 0.5 / 40), 0.1234],
+        [(x) => 3 * x + (x < 0.1234 ? 0 : 0.4 / 40), 0.1234],
+        [(x) => 0.3 * Math.sin(x) + (x < -0.5678 ? 0 : 0.6 / 40), -0.5678],
+      ]
+      for (const [f, at] of steps) {
+        for (const tuning of [FULL, COARSE]) {
+          const r = bandsOf(f, tuning)
+          expect(r.chains.length, `${at}`).toBeGreaterThan(1)
+          for (const c of r.chains) {
+            const xs = chainPoints(c).map((p) => p.x)
+            expect(xs.some((x) => x < at - 1e-9) && xs.some((x) => x > at + 1e-9), `a chain crosses the step at ${at}`).toBe(false)
+          }
+        }
+      }
+    })
+  })
+})
+
+describe('sampleRange — the spike test', () => {
+  it('draws the peak of a spike 1 px wide to within 1 px of its height, wherever it falls', () => {
+    // (at spikeFactor 8, one of these offsets draws the peak 32.6 px short)
+    for (const c of offsets(50)) {
+      const m = Math.max(...run(`1/(1 + 10^4 (x - ${c})^2)`).chains.flatMap(chainPoints).map((p) => p.y))
+      expect((1 - m) * 40, `peak at ${c}`).toBeLessThanOrEqual(1)
+    }
+  })
+
+  // calc P2 task 8: the test is asked only spikeDepth halvings below the start grid. A cancelling form's enclosure
+  // never passes it (e^(x^2) is 1e43 at 10, and it is subtracted from itself), so it was refined to the floor, to the
+  // cap: 39036 points and 30133 intervals, drawn coarsely, where the curve is the line y = x.
+  it('does not refine a loose enclosure to the cap: exp(x^2) - exp(x^2) + x is one chain within its budget', () => {
+    const r = run('exp(x^2) - exp(x^2) + x')
+    expect(r.capped).toBe(false)
+    expect(r.counter.intervals).toBeLessThan(FULL.budget.intervals / 2)
+    expect(r.counter.points).toBeLessThan(FULL.budget.points / 2)
+    expect(r.chains).toHaveLength(1)
+    // the line y = x: every vertex on it
+    for (const p of chainPoints(r.chains[0])) expect(p.y).toBeCloseTo(p.x, 9)
+  })
+  it('is the bound that does it: asked at every level down to the floor (the old behaviour), the same curve caps its budget', () => {
+    const asked = run('exp(x^2) - exp(x^2) + x', { ...FULL, spikeDepth: 10 })
+    expect(asked.capped).toBe(true)
+  })
+})
