@@ -1,6 +1,6 @@
 // CodeMirror 6 extension set for the Markdown source editor. Every colour,
 // font and size is a var(--de-*) reference; the host owns the sheet.
-import { EditorState, type Extension } from '@codemirror/state'
+import { EditorState, type Compartment, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap, drawSelection, rectangularSelection, crosshairCursor, type KeyBinding,
 } from '@codemirror/view'
@@ -16,6 +16,8 @@ import { tags as t } from '@lezer/highlight'
 
 export interface EditorExtensionOptions {
   readOnly?: boolean
+  // When given, the read-only facets live in it so the host can flip them later.
+  readOnlyCompartment?: Compartment
   // Extra bindings, listed before every built-in one so they win.
   extraKeymap?: KeyBinding[]
 }
@@ -104,7 +106,7 @@ export const editorTheme = EditorView.theme({
     color: 'var(--de-text)',
     backgroundColor: 'var(--de-code-bg)',
     border: '1px solid var(--de-rule)',
-    borderRadius: 'var(--de-chrome-radius, 0.25em)',
+    borderRadius: 'var(--de-radius-sm)',
     padding: '0.15em 0.4em',
     margin: '0.1em',
   },
@@ -113,6 +115,11 @@ export const editorTheme = EditorView.theme({
   '.cm-searchMatch': { backgroundColor: 'var(--de-selection)' },
   '.cm-searchMatch-selected': { outline: '1px solid var(--de-accent)' },
 })
+
+/** The facets that make the editor read-only (empty when editable). */
+export function readOnlyExtension(readOnly: boolean | undefined): Extension {
+  return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
+}
 
 export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[] {
   const exts: Extension[] = [
@@ -140,6 +147,7 @@ export function editorExtensions(opts: EditorExtensionOptions = {}): Extension[]
       ...defaultKeymap,
     ]),
   ]
-  if (opts.readOnly) exts.push(EditorState.readOnly.of(true), EditorView.editable.of(false))
+  const ro = readOnlyExtension(opts.readOnly)
+  exts.push(opts.readOnlyCompartment ? opts.readOnlyCompartment.of(ro) : ro)
   return exts
 }

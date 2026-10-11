@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cycleHeading, makeLink, toggleLinePrefix, toggleWrap, type EditResult, type MarkdownEdit } from './markdownEdit'
+import { cycleHeading, fencedLineStarts, makeLink, toggleLinePrefix, toggleWrap, type EditResult, type MarkdownEdit } from './markdownEdit'
 
 // Apply a result to a doc the way an editor would (simultaneous changes).
 function apply(doc: string, r: EditResult | null): { doc: string; sel: string } {
@@ -88,8 +88,25 @@ describe('toggleWrap', () => {
   it('only considers the caret line', () => {
     expect(run(bold, '**a\nb|**').doc).toBe('**a\nb******')
   })
-  it('multi-line selection wraps once', () => {
-    expect(run(bold, '[a\nb]').doc).toBe('**a\nb**')
+  it('multi-line selection wraps each non-blank line, never across a break', () => {
+    expect(run(bold, '[a\nb]').doc).toBe('**a**\n**b**')
+    expect(run(bold, '[one\n\ntwo]').doc).toBe('**one**\n\n**two**')
+    expect(run(bold, '[  a  \n  b  ]').doc).toBe('  **a**  \n  **b**  ')
+  })
+  it('multi-line: unwraps when every line is wrapped, skips already-wrapped lines otherwise', () => {
+    expect(run(bold, '[**a**\n**b**]').doc).toBe('a\nb')
+    expect(run(bold, '[**a**\nb]').doc).toBe('**a**\n**b**')
+  })
+  it('pairs only real openers and closers on the line', () => {
+    expect(run(italic, 'a * b *c|*').doc).toBe('a * b c')
+    expect(run(italic, 'a * b *c* d|').doc).toBe('a * b *c* d**')
+    expect(run(italic, '2 * 3 * |4').doc).toBe('2 * 3 * **4')
+  })
+  it('a reversed selection stays reversed', () => {
+    const r = bold('a word b', { from: 2, to: 6, reversed: true })!
+    expect(r.selection.anchor).toBeGreaterThan(r.selection.head)
+    const l = toggleLinePrefix('- ')('one\ntwo', { from: 0, to: 7, reversed: true })!
+    expect(l.selection.anchor).toBeGreaterThan(l.selection.head)
   })
   it('all-whitespace selection acts like an empty one', () => {
     expect(run(bold, 'a[ ]b').doc).toBe('a**** b')
@@ -224,5 +241,42 @@ describe('makeLink', () => {
   })
   it('spans multiple lines', () => {
     expect(run(makeLink(), '[a\nb]').doc).toBe('[a\nb](url)')
+  })
+  it('escapes brackets in the link text', () => {
+    expect(run(makeLink('u'), '[a [x] b]').doc).toBe('[a \\[x\\] b](u)')
+    // already-escaped brackets are not escaped twice
+    expect(run(makeLink('u'), '[a \\[x\\]]').doc).toBe('[a \\[x\\]](u)')
+  })
+  it('does not re-wrap a selection that is already a link', () => {
+    const doc = 'see [a](b) now'
+    const r = makeLink()(doc, { from: 4, to: 10 })!
+    expect(r.changes).toEqual([])
+    expect(doc.slice(r.selection.anchor, r.selection.head)).toBe('b')
+  })
+})
+
+describe('fenced code is left alone', () => {
+  const doc = 'para\n```\ncode line\n- not a list\n```\nafter'
+  const at = (needle: string) => doc.indexOf(needle) + 1
+  it('fencedLineStarts covers delimiters and content only', () => {
+    expect([...fencedLineStarts(doc)].sort((a, b) => a - b)).toEqual([5, 9, 19, 32])
+  })
+  it('tilde fences, longer closers, unterminated fences', () => {
+    expect(fencedLineStarts('~~~\na\n~~~\nb').size).toBe(3)
+    expect(fencedLineStarts('````\n```\nx\n````\ny').size).toBe(4)
+    expect(fencedLineStarts('```\nx\ny').size).toBe(3)
+    // a backtick fence whose info string has a backtick is not a fence
+    expect(fencedLineStarts('``` a`b\nx').size).toBe(0)
+  })
+  it('cycleHeading does nothing in a fence, works outside', () => {
+    expect(cycleHeading(1)(doc, { from: at('code line'), to: at('code line') })).toBeNull()
+    expect(cycleHeading(1)(doc, { from: at('```'), to: at('```') })).toBeNull()
+    expect(run(cycleHeading(1), 'pa|ra').doc).toBe('# para')
+  })
+  it('toggleLinePrefix does nothing inside a fence and skips fenced lines in a range', () => {
+    expect(toggleLinePrefix('- ')(doc, { from: at('code line'), to: at('code line') })).toBeNull()
+    const r = toggleLinePrefix('> ')(doc, { from: 0, to: doc.length })!
+    const out = apply(doc, r).doc
+    expect(out).toBe('> para\n```\ncode line\n- not a list\n```\n> after')
   })
 })

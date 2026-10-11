@@ -2,11 +2,11 @@
 // catalogue (ids, labels, groups, icons, shortcuts); buildEditorCommands()
 // binds it to a live EditorView; editorKeymap() registers the same shortcuts
 // inside the editor so the keyboard works without any toolbar.
-import { EditorSelection } from '@codemirror/state'
+import { EditorSelection, type EditorState } from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
 import { undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
-import { syntaxTree } from '@codemirror/language'
+import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import type { ToolbarCommand } from 'engine-host'
 import { toggleWrap, toggleLinePrefix, cycleHeading, makeLink, type MarkdownEdit } from './markdownEdit'
 
@@ -61,57 +61,57 @@ export interface ActiveMarks {
 
 const NONE: ActiveMarks = { bold: false, italic: false, strike: false, code: false, heading: false, bullet: false, numbered: false, task: false, quote: false }
 
-// Start offsets of runs of `c` that are exactly `len` long.
-function exactRuns(line: string, c: string, len: number): number[] {
-  const out: number[] = []
-  let i = 0
-  while (i < line.length) {
-    if (line[i] !== c) { i++; continue }
-    let j = i
-    while (j < line.length && line[j] === c) j++
-    if (j - i === len) out.push(i)
-    i = j
-  }
-  return out
+const INLINE_NODES: Record<string, keyof ActiveMarks> = {
+  StrongEmphasis: 'bold',
+  Emphasis: 'italic',
+  Strikethrough: 'strike',
+  InlineCode: 'code',
 }
 
-// True when column `col` of `line` sits between a pair of `marker` runs (the
-// markers themselves count as inside). Runs pair up left to right.
-function insidePair(line: string, marker: string, col: number, runLen = marker.length): boolean {
-  const runs = exactRuns(line, marker[0], runLen)
-  for (let k = 0; k + 1 < runs.length; k += 2) {
-    if (col >= runs[k] && col <= runs[k + 1] + runLen) return true
-  }
-  return false
+/** True when `pos` sits inside a fenced or indented code block (fence lines count). */
+function inCodeBlock(state: EditorState, pos: number): boolean {
+  let hit = false
+  syntaxTree(state).iterate({
+    from: pos,
+    to: pos,
+    enter: (n) => {
+      if (n.name === 'FencedCode' || n.name === 'CodeBlock') hit = true
+      return !hit
+    },
+  })
+  return hit
 }
 
-/** Which inline marks and block prefixes surround offset `pos` of `doc`. */
-export function activeMarks(doc: string, pos: number): ActiveMarks {
-  const p = Math.max(0, Math.min(pos, doc.length))
-  const start = p === 0 ? 0 : doc.lastIndexOf('\n', p - 1) + 1
-  const nl = doc.indexOf('\n', p)
-  const line = doc.slice(start, nl < 0 ? doc.length : nl)
-  const col = p - start
+/**
+ * Which inline marks and block prefixes surround offset `pos`. Inline marks
+ * come from the Markdown syntax tree (so a bullet star or snake_case is not
+ * emphasis); block prefixes are read off the line. Nothing is active in code.
+ */
+export function activeMarks(state: EditorState, pos: number = state.selection.main.head): ActiveMarks {
+  const p = Math.max(0, Math.min(pos, state.doc.length))
+  // Make sure the tree reaches the caret (it may be parsed lazily on long documents).
+  ensureSyntaxTree(state, Math.min(state.doc.length, p + 1), 25)
+  if (inCodeBlock(state, p)) return NONE
+  const out = { ...NONE }
+  syntaxTree(state).iterate({
+    from: p,
+    to: p,
+    enter: (n) => {
+      const key = INLINE_NODES[n.name]
+      // strictly inside: a caret just outside the closing marker is not in the span
+      if (key && n.from < p && p < n.to) out[key] = true
+    },
+  })
+  const line = state.doc.lineAt(p).text
   const task = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s/.test(line)
   return {
-    ...NONE,
-    bold: insidePair(line, '**', col) || insidePair(line, '__', col),
-    italic: insidePair(line, '*', col) || insidePair(line, '_', col),
-    strike: insidePair(line, '~~', col),
-    code: insidePair(line, '`', col),
+    ...out,
     heading: /^ {0,3}#{1,6}(\s|$)/.test(line),
     task,
     bullet: !task && /^\s*[-*+]\s/.test(line),
     numbered: /^\s*\d+[.)]\s/.test(line),
     quote: /^\s*>/.test(line),
   }
-}
-
-function inCodeBlock(view: EditorView, pos: number): boolean {
-  for (let n: ReturnType<ReturnType<typeof syntaxTree>['resolveInner']> | null = syntaxTree(view.state).resolveInner(pos, -1); n; n = n.parent) {
-    if (n.name === 'FencedCode' || n.name === 'CodeBlock') return true
-  }
-  return false
 }
 
 // -------------------------------------------------------------- running
@@ -140,10 +140,12 @@ export function runEditorCommand(view: EditorView, id: EditorCommandId, ctx: Edi
     return true
   }
   if (ctx.readOnly || view.state.readOnly) return false
+  // An IME composition owns the text right now; a toolbar edit would corrupt it.
+  if (view.composing) return false
   const make = EDITS[id]
   if (make) {
     const sel = view.state.selection.main
-    const res = make()(view.state.doc.toString(), { from: sel.from, to: sel.to })
+    const res = make()(view.state.doc.toString(), { from: sel.from, to: sel.to, reversed: sel.anchor > sel.head })
     if (!res) return false
     view.dispatch({
       changes: res.changes,
@@ -197,7 +199,7 @@ export function buildEditorCommands(view: EditorView | null, ctx: EditorCommandC
     undoN = undoDepth(view.state)
     redoN = redoDepth(view.state)
     const head = view.state.selection.main.head
-    marks = inCodeBlock(view, head) ? NONE : activeMarks(view.state.doc.toString(), head)
+    marks = activeMarks(view.state, head)
   }
   return editorCommandSpecs().map((s) => {
     const flags = commandFlags(s.id, { hasView: !!view, readOnly, undoDepth: undoN, redoDepth: redoN, marks })

@@ -3,7 +3,8 @@
 // in ORIGINAL document coordinates, ordered, non-overlapping) and selection.
 import { mapOffset, type TextChange } from './anchorRemap'
 
-export interface EditSel { from: number; to: number }
+// `reversed`: the user's anchor is after the head; results keep that direction.
+export interface EditSel { from: number; to: number; reversed?: boolean }
 export interface EditChange { from: number; to: number; insert: string }
 export interface EditResult {
   changes: EditChange[]
@@ -23,10 +24,43 @@ const lineEndOf = (doc: string, pos: number): number => {
 function mapSel(sel: EditSel, changes: EditChange[]): { anchor: number; head: number } {
   const cs: TextChange[] = changes.map(c => ({ from: c.from, to: c.to, insertLen: c.insert.length }))
   const empty = sel.from === sel.to
-  return {
-    anchor: mapOffset(sel.from, cs, empty ? 1 : -1),
-    head: mapOffset(sel.to, cs, 1),
+  const lo = mapOffset(sel.from, cs, empty ? 1 : -1)
+  const hi = mapOffset(sel.to, cs, 1)
+  return sel.reversed ? { anchor: hi, head: lo } : { anchor: lo, head: hi }
+}
+
+/** Point `result` the way the user's selection pointed. */
+function orient(sel: EditSel, res: EditResult | null): EditResult | null {
+  if (!res || !sel.reversed) return res
+  const { anchor, head } = res.selection
+  return anchor < head ? { ...res, selection: { anchor: head, head: anchor } } : res
+}
+
+// -------------------------------------------------------------- fenced code
+
+/** For each line start offset: whether that line is a fence delimiter or inside a fenced block. */
+export function fencedLineStarts(doc: string): Set<number> {
+  const out = new Set<number>()
+  let open: { ch: string; len: number } | null = null
+  let at = 0
+  for (;;) {
+    const end = lineEndOf(doc, at)
+    const text = doc.slice(at, end)
+    if (open) {
+      out.add(at)
+      const c = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(text)
+      if (c && c[1][0] === open.ch && c[1].length >= open.len) open = null
+    } else {
+      const o = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text)
+      if (o && !(o[1][0] === '`' && o[2].includes('`'))) {
+        open = { ch: o[1][0], len: o[1].length }
+        out.add(at)
+      }
+    }
+    if (end >= doc.length) break
+    at = end + 1
   }
+  return out
 }
 
 // ---------------------------------------------------------------- inline wrap
@@ -46,52 +80,103 @@ function exactRuns(line: string, marker: string): number[] {
   return out
 }
 
+/**
+ * Marker runs on a line whose run length is exactly the marker length, paired
+ * the way emphasis pairs: an opener needs a non-space after it, a closer a
+ * non-space before it, so a stray `a * b` star is skipped. Returns [open, close] starts.
+ */
+function pairedRuns(line: string, marker: string): [number, number][] {
+  const m = marker.length
+  const out: [number, number][] = []
+  let open = -1
+  for (const at of exactRuns(line, marker)) {
+    const canClose = at > 0 && !/\s/.test(line[at - 1])
+    const canOpen = at + m < line.length && !/\s/.test(line[at + m])
+    if (open >= 0 && canClose) {
+      out.push([open, at])
+      open = -1
+    } else if (canOpen) {
+      open = at
+    }
+  }
+  return out
+}
+
 export function toggleWrap(marker: string): MarkdownEdit {
   const m = marker.length
   const c = marker[0]
-  return (doc, sel) => {
+
+  // One trimmed, non-empty single-line piece [from, to): how to unwrap it, or null.
+  const unwrapChanges = (doc: string, from: number, to: number): { changes: EditChange[]; head: number } | null => {
+    const text = doc.slice(from, to)
+    // the piece itself carries the markers
+    if (
+      text.length >= 2 * m + 1 &&
+      text.startsWith(marker) && text.endsWith(marker) &&
+      text[m] !== c && text[text.length - m - 1] !== c
+    ) {
+      return { changes: [{ from, to, insert: text.slice(m, text.length - m) }], head: to - 2 * m }
+    }
+    // markers sit just outside the piece
+    if (
+      from >= m && doc.startsWith(marker, from - m) && doc.startsWith(marker, to) &&
+      doc[from - m - 1] !== c && doc[to + m] !== c
+    ) {
+      return { changes: [{ from: from - m, to: from, insert: '' }, { from: to, to: to + m, insert: '' }], head: to - m }
+    }
+    return null
+  }
+
+  return (doc, sel) => orient(sel, run(doc, sel))
+
+  function run(doc: string, sel: EditSel): EditResult | null {
     let { from, to } = sel
     // trim whitespace inside the selection: emphasis cannot hug spaces
     while (from < to && /\s/.test(doc[from])) from++
     while (to > from && /\s/.test(doc[to - 1])) to--
 
     if (from < to) {
-      const text = doc.slice(from, to)
-      // selection itself carries the markers
-      if (
-        text.length >= 2 * m + 1 &&
-        text.startsWith(marker) && text.endsWith(marker) &&
-        text[m] !== c && text[text.length - m - 1] !== c
-      ) {
-        return {
-          changes: [{ from, to, insert: text.slice(m, text.length - m) }],
-          selection: { anchor: from, head: to - 2 * m },
+      // one trimmed piece per non-blank line: a marker never spans a line break
+      const pieces: [number, number][] = []
+      let at = from
+      for (;;) {
+        const end = Math.min(lineEndOf(doc, at), to)
+        let a = at
+        let b = end
+        while (a < b && /\s/.test(doc[a])) a++
+        while (b > a && /\s/.test(doc[b - 1])) b--
+        if (a < b) pieces.push([a, b])
+        if (end >= to) break
+        at = end + 1
+      }
+      const un = pieces.map(([a, b]) => unwrapChanges(doc, a, b))
+      if (un.every((u) => u)) {
+        const changes = un.flatMap((u) => u!.changes)
+        if (pieces.length === 1) {
+          const u = un[0]!
+          const start = u.changes.length === 1 ? from : from - m
+          return { changes, selection: { anchor: start, head: u.head } }
         }
+        return { changes, selection: mapSel({ from, to }, changes) }
       }
-      // markers sit just outside the selection
-      if (
-        from >= m && doc.startsWith(marker, from - m) && doc.startsWith(marker, to) &&
-        doc[from - m - 1] !== c && doc[to + m] !== c
-      ) {
-        return {
-          changes: [{ from: from - m, to: from, insert: '' }, { from: to, to: to + m, insert: '' }],
-          selection: { anchor: from - m, head: to - m },
-        }
+      const changes: EditChange[] = []
+      pieces.forEach(([a, b], i) => {
+        if (un[i]) return // already wrapped: leave it
+        changes.push({ from: a, to: a, insert: marker }, { from: b, to: b, insert: marker })
+      })
+      if (pieces.length === 1) {
+        return { changes, selection: { anchor: from + m, head: to + m } }
       }
-      return {
-        changes: [{ from, to: from, insert: marker }, { from: to, to, insert: marker }],
-        selection: { anchor: from + m, head: to + m },
-      }
+      return { changes, selection: mapSel({ from, to }, changes) }
     }
 
     // caret: inside an existing pair on this line?
     const p = sel.from
     const ls = lineStartOf(doc, p)
     const line = doc.slice(ls, lineEndOf(doc, p))
-    const runs = exactRuns(line, marker)
-    for (let i = 0; i + 1 < runs.length; i += 2) {
-      const open = ls + runs[i]
-      const close = ls + runs[i + 1]
+    for (const [o, cl] of pairedRuns(line, marker)) {
+      const open = ls + o
+      const close = ls + cl
       if (open + m <= p && p <= close) {
         return {
           changes: [{ from: open, to: open + m, insert: '' }, { from: close, to: close + m, insert: '' }],
@@ -127,8 +212,9 @@ export function toggleLinePrefix(prefix: LinePrefix): MarkdownEdit {
     const lastPos = sel.to > sel.from && doc[sel.to - 1] === '\n' ? sel.to - 1 : sel.to
     const first = lineStartOf(doc, sel.from)
     const lastEnd = lineEndOf(doc, lastPos)
+    const fenced = fencedLineStarts(doc)
 
-    interface L { start: number; indent: number; oldLen: number; oldKind: PrefixKind | null; blank: boolean }
+    interface L { start: number; indent: number; oldLen: number; oldKind: PrefixKind | null; blank: boolean; fenced: boolean }
     const lines: L[] = []
     let at = first
     for (;;) {
@@ -141,13 +227,17 @@ export function toggleLinePrefix(prefix: LinePrefix): MarkdownEdit {
         oldLen: mt ? mt[2].length : 0,
         oldKind: mt ? kindOfMatch(mt[2]) : null,
         blank: text.trim() === '',
+        fenced: fenced.has(at),
       })
       if (end >= lastEnd) break
       at = end + 1
     }
 
-    const nonBlank = lines.filter(l => !l.blank)
-    const targets = nonBlank.length ? nonBlank : lines
+    // code inside a fence is literal text: never prefix it
+    const open = lines.filter(l => !l.fenced)
+    if (!open.length) return null
+    const nonBlank = open.filter(l => !l.blank)
+    const targets = nonBlank.length ? nonBlank : open
     const removing = targets.every(l => l.oldKind === kind)
 
     const changes: EditChange[] = []
@@ -174,6 +264,7 @@ export function toggleLinePrefix(prefix: LinePrefix): MarkdownEdit {
 export function cycleHeading(delta: 1 | -1): MarkdownEdit {
   return (doc, sel) => {
     const ls = lineStartOf(doc, sel.from)
+    if (fencedLineStarts(doc).has(ls)) return null
     const line = doc.slice(ls, lineEndOf(doc, sel.from))
     const mt = /^( {0,3})(#{1,6})([ \t]+|$)/.exec(line)
     const level = mt ? mt[2].length : 0
@@ -188,6 +279,8 @@ export function cycleHeading(delta: 1 | -1): MarkdownEdit {
 
 // ------------------------------------------------------------------------ link
 
+// [text](url) as one whole piece: text may hold escaped brackets only.
+const LINK_RE = /^\[((?:\\.|[^\\[\]])*)\]\(([^()\s]*)\)$/
 const URL_RE = /^(?:https?:\/\/|mailto:|www\.)\S+$/i
 
 export function makeLink(url?: string): MarkdownEdit {
@@ -207,10 +300,17 @@ export function makeLink(url?: string): MarkdownEdit {
         selection: { anchor: from + 1, head: from + 1 },
       }
     }
+    // already a link: do not wrap it again, just select its url
+    const existing = LINK_RE.exec(text)
+    if (existing) {
+      const start = from + existing[1].length + 3
+      return { changes: [], selection: { anchor: start, head: start + existing[2].length } }
+    }
     const u = url ?? 'url'
-    const urlStart = from + 1 + text.length + 2
+    const label = text.replace(/\\?([[\]])/g, '\\$1') // brackets would end the link text early
+    const urlStart = from + 1 + label.length + 2
     return {
-      changes: [{ from, to, insert: `[${text}](${u})` }],
+      changes: [{ from, to, insert: `[${label}](${u})` }],
       selection: url === undefined
         ? { anchor: urlStart, head: urlStart + u.length }
         : { anchor: urlStart + u.length + 1, head: urlStart + u.length + 1 },

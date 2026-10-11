@@ -64,6 +64,28 @@ describe('editor files colour/font literal guard', () => {
       expect(src).not.toMatch(/['"`](?:red|blue|green|black|white|gray|grey|orange|yellow|purple|pink|brown|cyan|magenta|silver|gold|navy|teal)['"`]/i)
       expect(src).not.toMatch(/(?:color|backgroundColor|borderLeftColor)\s*:\s*['"](?!var\(|transparent|inherit)/)
       expect(src).not.toMatch(/fontFamily\s*:\s*['"](?!var\(|inherit)/)
+      // var(--x, 0.25em) hides a size the host's sheet never defined
+      expect(src).not.toMatch(/var\(\s*--[\w-]+\s*,\s*[-+]?(?:\d+\.?\d*|\.\d+)[a-z%]*\s*\)/i)
     })
   }
+  it('the numeric var() fallback pattern catches what it should', () => {
+    const re = /var\(\s*--[\w-]+\s*,\s*[-+]?(?:\d+\.?\d*|\.\d+)[a-z%]*\s*\)/i
+    for (const bad of ['var(--x, 0.25em)', 'var(--x,2px)', 'var(--x, .5rem)', 'var(--x, 100%)', 'var(--x, 0)']) expect(re.test(bad)).toBe(true)
+    for (const ok of ['var(--de-radius-sm)', 'var(--x, var(--y))']) expect(re.test(ok)).toBe(false)
+  })
+})
+
+describe('readOnly compartment', () => {
+  it('reconfigures a state without rebuilding it', async () => {
+    const { Compartment } = await import('@codemirror/state')
+    const { readOnlyExtension } = await import('./extensions')
+    const comp = new Compartment()
+    let s = EditorState.create({ doc: 'x', extensions: editorExtensions({ readOnlyCompartment: comp }) })
+    expect(s.readOnly).toBe(false)
+    s = s.update({ effects: comp.reconfigure(readOnlyExtension(true)) }).state
+    expect(s.readOnly).toBe(true)
+    s = s.update({ effects: comp.reconfigure(readOnlyExtension(false)) }).state
+    expect(s.readOnly).toBe(false)
+    expect(s.doc.toString()).toBe('x')
+  })
 })

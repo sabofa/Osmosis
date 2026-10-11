@@ -25,6 +25,13 @@ function mkView(doc: string, anchor = doc.length, head = anchor, readOnly = fals
   }
   return fake as unknown as EditorView
 }
+const stateOf = (doc: string): EditorState => {
+  const st = EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] })
+  ensureSyntaxTree(st, st.doc.length, 5000)
+  return st
+}
+// activeMarks over a real EditorState + markdown() parse (no DOM needed).
+const am = (doc: string, pos: number) => activeMarks(stateOf(doc), pos)
 const byId = (cmds: ReturnType<typeof buildEditorCommands>, id: string) => cmds.find((c) => c.id === id)!
 
 describe('editorCommandSpecs', () => {
@@ -55,30 +62,60 @@ describe('editorCommandSpecs', () => {
 describe('activeMarks', () => {
   it('detects inline marks around the caret', () => {
     const doc = 'a **bold** b *it* ~~gone~~ `code`'
-    expect(activeMarks(doc, doc.indexOf('bold') + 1)).toMatchObject({ bold: true, italic: false })
-    expect(activeMarks(doc, doc.indexOf('it') + 1)).toMatchObject({ italic: true, bold: false })
-    expect(activeMarks(doc, doc.indexOf('gone') + 1).strike).toBe(true)
-    expect(activeMarks(doc, doc.indexOf('code') + 1).code).toBe(true)
-    expect(activeMarks(doc, 0)).toMatchObject({ bold: false, italic: false, strike: false, code: false })
-    expect(activeMarks(doc, doc.indexOf(' b ') + 1).bold).toBe(false)
+    expect(am(doc, doc.indexOf('bold') + 1)).toMatchObject({ bold: true, italic: false })
+    expect(am(doc, doc.indexOf('it') + 1)).toMatchObject({ italic: true, bold: false })
+    expect(am(doc, doc.indexOf('gone') + 1).strike).toBe(true)
+    expect(am(doc, doc.indexOf('code') + 1).code).toBe(true)
+    expect(am(doc, 0)).toMatchObject({ bold: false, italic: false, strike: false, code: false })
+    expect(am(doc, doc.indexOf(' b ') + 1).bold).toBe(false)
   })
   it('detects block prefixes of the caret line only', () => {
-    expect(activeMarks('# Title', 3).heading).toBe(true)
-    expect(activeMarks('text\n## Sub', 2).heading).toBe(false)
-    expect(activeMarks('- a', 3).bullet).toBe(true)
-    expect(activeMarks('1. a', 3).numbered).toBe(true)
-    expect(activeMarks('- [ ] a', 6)).toMatchObject({ task: true, bullet: false })
-    expect(activeMarks('> q', 3).quote).toBe(true)
-    expect(activeMarks('plain', 2)).toMatchObject({ heading: false, bullet: false, numbered: false, task: false, quote: false })
+    expect(am('# Title', 3).heading).toBe(true)
+    expect(am('text\n## Sub', 2).heading).toBe(false)
+    expect(am('- a', 3).bullet).toBe(true)
+    expect(am('1. a', 3).numbered).toBe(true)
+    expect(am('- [ ] a', 6)).toMatchObject({ task: true, bullet: false })
+    expect(am('> q', 3).quote).toBe(true)
+    expect(am('plain', 2)).toMatchObject({ heading: false, bullet: false, numbered: false, task: false, quote: false })
   })
   it('clamps out-of-range positions', () => {
-    expect(() => activeMarks('x', 99)).not.toThrow()
-    expect(() => activeMarks('', -3)).not.toThrow()
+    expect(() => am('x', 99)).not.toThrow()
+    expect(() => am('', -3)).not.toThrow()
+  })
+  it('a bullet star is not italic', () => {
+    const doc = '* item with *em* here'
+    expect(am(doc, doc.indexOf('item') + 1)).toMatchObject({ italic: false, bullet: true })
+    expect(am(doc, doc.indexOf('*em*') + 2).italic).toBe(true)
+    expect(am(doc, doc.indexOf('here') + 1).italic).toBe(false)
+  })
+  it('snake_case, spaced stars and underscored urls are plain', () => {
+    expect(am('snake_case_name', 7).italic).toBe(false)
+    expect(am('2 * 3 * 4', 5)).toMatchObject({ italic: false, bold: false })
+    const url = 'see https://example.com/a_b_c now'
+    expect(am(url, url.indexOf('b_c'))).toMatchObject({ italic: false, bold: false })
+  })
+  it('double-backtick code is code and shields marks', () => {
+    const doc = 'x ``a `b` **c**`` y'
+    expect(am(doc, doc.indexOf('a ') + 1)).toMatchObject({ code: true, bold: false })
+    expect(am(doc, doc.indexOf('c**') )).toMatchObject({ code: true, bold: false })
+    expect(am(doc, doc.length - 1).code).toBe(false)
+  })
+  it('nested marks and the edges of a span', () => {
+    const doc = '**b *i* b**'
+    expect(am(doc, doc.indexOf('i') )).toMatchObject({ bold: true, italic: true })
+    expect(am(doc, doc.length).bold).toBe(false) // just past the closing marker
+    expect(am('~~x~~', 3).strike).toBe(true)
+  })
+  it('nothing is active inside a fence, even block prefixes', () => {
+    const doc = '```\n# x **y**\n- z\n```'
+    for (const pos of [doc.indexOf('x'), doc.indexOf('y'), doc.indexOf('z')]) {
+      expect(Object.values(am(doc, pos)).some(Boolean)).toBe(false)
+    }
   })
 })
 
 describe('commandFlags matrix', () => {
-  const marks = activeMarks('**x**', 2)
+  const marks = am('**x**', 2)
   const f = (id: Parameters<typeof commandFlags>[0], over = {}) =>
     commandFlags(id, { hasView: true, readOnly: false, undoDepth: 0, redoDepth: 0, marks, ...over })
   it('everything is off without a view', () => {
@@ -149,6 +186,31 @@ describe('buildEditorCommands with a view', () => {
   it('ctx.readOnly disables without a read-only state', () => {
     const v = mkView('abc', 0, 3)
     expect(byId(buildEditorCommands(v, { readOnly: true }), 'bold').enabled).toBe(false)
+    v.destroy()
+  })
+  it('commands no-op while an IME composition is live', () => {
+    const v = mkView('hello world', 0, 5)
+    ;(v as unknown as { composing: boolean }).composing = true
+    expect(runEditorCommand(v, 'bold')).toBe(false)
+    expect(runEditorCommand(v, 'undo')).toBe(false)
+    expect(v.state.doc.toString()).toBe('hello world')
+    ;(v as unknown as { composing: boolean }).composing = false
+    expect(runEditorCommand(v, 'bold')).toBe(true)
+    v.destroy()
+  })
+  it('a reversed selection stays reversed after a command', () => {
+    const v = mkView('hello world', 5, 0)
+    runEditorCommand(v, 'bold')
+    expect(v.state.doc.toString()).toBe('**hello** world')
+    const sel = v.state.selection.main
+    expect(sel.anchor).toBeGreaterThan(sel.head)
+    v.destroy()
+  })
+  it('block commands leave a fenced line alone', () => {
+    const v = mkView('```\ncode\n```', 6)
+    expect(runEditorCommand(v, 'quote')).toBe(false)
+    expect(runEditorCommand(v, 'heading-cycle')).toBe(false)
+    expect(v.state.doc.toString()).toBe('```\ncode\n```')
     v.destroy()
   })
   it('every command carries its spec shortcut where it has one', () => {
